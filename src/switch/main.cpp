@@ -48,6 +48,101 @@ std::string data_path(const char* leaf) {
     return std::string(kDataDir) + "/" + leaf;
 }
 
+// ---- Accounts -------------------------------------------------------------
+// More than one person can use the same console, so each signed-in account
+// owns a directory under users/ holding its tokens and its cached library:
+//   sdmc:/switch/green-nx/users/<id>/{tokens,games,consoles,favorites,history}.json
+// Device-wide state (settings, box art, logs) stays at the root, so switching
+// accounts keeps the console's own preferences and never re-downloads covers.
+// users.json is the registry: the known accounts plus which one is active.
+struct Account {
+    std::string id;        // directory name ("u1", "u2", ...)
+    std::string gamertag;  // label for the picker; filled in after sign-in
+};
+
+std::vector<Account> g_accounts;
+std::string g_active_account = "u1";
+
+std::string account_dir(const std::string& id) {
+    return std::string(kDataDir) + "/users/" + id;
+}
+
+// Path to a file owned by the active account (vs. data_path = device-wide).
+std::string user_path(const char* leaf) {
+    return account_dir(g_active_account) + "/" + leaf;
+}
+
+// Files that belong to an account rather than to the console.
+const char* const kAccountFiles[] = {"tokens.json", "games.json",
+                                     "consoles.json", "favorites.json",
+                                     "history.json"};
+
+void make_account_dir(const std::string& id) {
+    mkdir((std::string(kDataDir) + "/users").c_str(), 0755);
+    mkdir(account_dir(id).c_str(), 0755);
+}
+
+void save_accounts() {
+    json users = json::array();
+    for (const Account& account : g_accounts)
+        users.push_back({{"id", account.id}, {"gamertag", account.gamertag}});
+    std::ofstream out(data_path("users.json"), std::ios::trunc);
+    out << json{{"active", g_active_account}, {"users", users}}.dump(2);
+}
+
+std::string next_account_id() {
+    for (int n = 1;; ++n) {
+        std::string id = "u" + std::to_string(n);
+        bool taken = false;
+        for (const Account& account : g_accounts)
+            taken = taken || account.id == id;
+        if (!taken) return id;
+    }
+}
+
+// Load the registry. On an install from before accounts existed, adopt the
+// root-level files as the first account, so an existing user keeps their
+// sign-in, library and favorites without noticing the change.
+void load_accounts() {
+    std::ifstream in(data_path("users.json"));
+    json data = json::parse(in, nullptr, false);
+    if (!data.is_discarded() && data.contains("users")) {
+        for (const json& entry : data["users"]) {
+            Account account;
+            account.id = entry.value("id", "");
+            account.gamertag = entry.value("gamertag", "");
+            if (!account.id.empty()) g_accounts.push_back(std::move(account));
+        }
+        g_active_account = data.value("active", "");
+    }
+    if (g_accounts.empty()) {
+        g_accounts.push_back({"u1", ""});
+        g_active_account = "u1";
+        make_account_dir("u1");
+        for (const char* leaf : kAccountFiles)
+            std::rename(data_path(leaf).c_str(),
+                        (account_dir("u1") + "/" + leaf).c_str());
+        save_accounts();
+    }
+    // A registry pointing at a removed account would leave nothing loadable.
+    bool active_exists = false;
+    for (const Account& account : g_accounts)
+        active_exists = active_exists || account.id == g_active_account;
+    if (!active_exists) g_active_account = g_accounts.front().id;
+    make_account_dir(g_active_account);
+}
+
+// Remember the gamertag so the picker can label accounts by name.
+void remember_gamertag(const std::string& gamertag) {
+    if (gamertag.empty()) return;
+    for (Account& account : g_accounts) {
+        if (account.id == g_active_account && account.gamertag != gamertag) {
+            account.gamertag = gamertag;
+            save_accounts();
+        }
+    }
+}
+
 // ---- Switch joystick button indices (libnx SDL2 port) ---------------------
 enum JoyButton {
     kBtnA = 0, kBtnB = 1, kBtnX = 2, kBtnY = 3,
@@ -58,7 +153,7 @@ enum JoyButton {
 
 enum class Scene {
     Splash, SignIn, LoadingLibrary, Library, Detail, SourcePicker, Settings,
-    Stream, Fatal
+    Accounts, Stream, Fatal
 };
 
 enum class LibraryTab { All, Favorites, History, Consoles };
@@ -238,6 +333,7 @@ struct App {
     Game launch_game;
     Settings settings;
     int settings_cursor = 0;
+    int accounts_cursor = 0;  // Scene::Accounts: row in the account picker
     Scene settings_return = Scene::Library;  // scene to go back to from Settings
     bool signout_armed = false;  // Settings sign-out row: first A arms, second confirms
     int detail_index = -1;   // games[] index shown in Scene::Detail
@@ -341,13 +437,13 @@ void save_games_cache(const std::vector<Game>& games) {
                         {"productId", game.product_id},
                         {"name", game.name},
                         {"boxArt", game.box_art_url}});
-    std::ofstream out(data_path("games.json"), std::ios::trunc);
+    std::ofstream out(user_path("games.json"), std::ios::trunc);
     out << json{{"version", kGamesCacheVersion}, {"games", list}}.dump();
 }
 
 std::vector<Game> load_games_cache() {
     std::vector<Game> games;
-    std::ifstream in(data_path("games.json"));
+    std::ifstream in(user_path("games.json"));
     if (!in) return games;
     json data = json::parse(in, nullptr, false);
     if (data.is_discarded() || !data.is_object() ||
@@ -373,13 +469,13 @@ void save_consoles_cache(const std::vector<HomeConsole>& consoles) {
                         {"name", console.name},
                         {"consoleType", console.console_type},
                         {"powerState", console.power_state}});
-    std::ofstream out(data_path("consoles.json"), std::ios::trunc);
+    std::ofstream out(user_path("consoles.json"), std::ios::trunc);
     out << json{{"consoles", list}}.dump();
 }
 
 std::vector<HomeConsole> load_consoles_cache() {
     std::vector<HomeConsole> consoles;
-    std::ifstream in(data_path("consoles.json"));
+    std::ifstream in(user_path("consoles.json"));
     if (!in) return consoles;
     json data = json::parse(in, nullptr, false);
     if (data.is_discarded() || !data.is_object()) return consoles;
@@ -397,7 +493,7 @@ std::vector<HomeConsole> load_consoles_cache() {
 // Favorites and history are stored as plain title-id lists (JSON arrays).
 std::vector<std::string> load_id_list(const char* leaf) {
     std::vector<std::string> ids;
-    std::ifstream in(data_path(leaf));
+    std::ifstream in(user_path(leaf));
     if (!in) return ids;
     json data = json::parse(in, nullptr, false);
     if (!data.is_array()) return ids;
@@ -407,7 +503,7 @@ std::vector<std::string> load_id_list(const char* leaf) {
 }
 
 void save_id_list(const char* leaf, const std::vector<std::string>& ids) {
-    std::ofstream out(data_path(leaf), std::ios::trunc);
+    std::ofstream out(user_path(leaf), std::ios::trunc);
     out << json(ids).dump();
 }
 
@@ -556,6 +652,43 @@ int find_game(const App& app, const std::string& id) {
 
 // Rebuild `visible` for the active tab, honouring the search query. All /
 // Favorites keep the library's alphabetical order; History keeps recency order.
+// Hand the app over to another account: repoint the token store, drop the
+// previous account's library from memory, and either load the new account's
+// library or ask it to sign in. Box art is shared, so switching is cheap.
+void switch_account(App& app, const std::string& id) {
+    if (app.worker.joinable()) {  // a sign-in poll may still be running
+        app.signin_state = 4;     // cancel
+        app.abort_http = true;    // unblock an in-flight request
+        join_worker(app);
+        app.abort_http = false;   // ... and re-arm HTTP for the new account
+    }
+    g_active_account = id;
+    make_account_dir(id);
+    save_accounts();
+    app.auth->set_token_store(user_path("tokens.json"));
+    app.games.clear();
+    app.visible.clear();
+    app.consoles.clear();
+    app.favorites = load_id_list("favorites.json");
+    app.history = load_id_list("history.json");
+    app.gamertag.clear();
+    app.cursor = app.console_cursor = 0;
+    app.tab = LibraryTab::All;
+    app.query.clear();
+    if (app.auth->has_saved_login()) {
+        app.scene = Scene::LoadingLibrary;
+        start_library_load(app, false);
+    } else {
+        app.scene = Scene::SignIn;
+        start_signin(app);
+    }
+}
+
+void add_account(App& app) {
+    g_accounts.push_back({next_account_id(), ""});
+    switch_account(app, g_accounts.back().id);
+}
+
 void apply_filter(App& app) {
     app.visible.clear();
     std::string needle = lowercase(app.query);
@@ -1223,6 +1356,52 @@ void draw_source_picker(App& app) {
     draw_hints(app, {{"A", "Play", true}, {"B", "Back"}});
 }
 
+// Account picker: the known accounts plus an "Add account" row. Reached from
+// Settings; A switches to the highlighted account, B goes back.
+void draw_accounts(App& app) {
+    app.gfx.text("Accounts", kMargin, 48, gfx::FontSize::Title, gfx::kText);
+
+    int add_row = static_cast<int>(g_accounts.size());
+    int count = add_row + 1;
+    int pitch = count <= 6 ? 108 : 92;
+    for (int i = 0; i < count; ++i) {
+        SDL_Rect row = {120, 170 + i * pitch, gfx::kWidth - 240, 96};
+        bool focused = i == app.accounts_cursor;
+        app.gfx.fill(row, focused ? gfx::kSurfaceHi : gfx::kSurface);
+        if (focused) {
+            app.gfx.fill({row.x, row.y, 10, row.h}, gfx::kFocus);
+            app.gfx.frame(row, gfx::kFocus, 4);
+        }
+        std::string title;
+        std::string value;
+        if (i == add_row) {
+            title = "Add account";
+            value = "Sign in with another account";
+        } else {
+            const Account& account = g_accounts[i];
+            title = account.gamertag.empty()
+                        ? "Account " + std::to_string(i + 1)
+                        : account.gamertag;
+            if (account.id == g_active_account) {
+                value = "Active";
+            } else {
+                std::ifstream token(account_dir(account.id) + "/tokens.json");
+                value = token ? "Signed in" : "Not signed in";
+            }
+        }
+        app.gfx.text(title, row.x + 68, row.y + 26, gfx::FontSize::Body,
+                     gfx::kText);
+        int vw = app.gfx.text_width(value, gfx::FontSize::Body);
+        app.gfx.text(value, row.x + row.w - 44 - vw, row.y + 26,
+                     gfx::FontSize::Body,
+                     i < add_row && g_accounts[i].id == g_active_account
+                         ? gfx::kAccent
+                         : gfx::kTextDim);
+    }
+    draw_hints(app, {{"A", app.accounts_cursor == add_row ? "Add" : "Switch"},
+                     {"B", "Back"}});
+}
+
 void draw_settings(App& app) {
     app.gfx.text("Settings", kMargin, 48, gfx::FontSize::Title, gfx::kText);
 
@@ -1246,6 +1425,10 @@ void draw_settings(App& app) {
                         app.settings.source == 2   ? console_label(app)
                         : app.settings.source == 1 ? "xCloud"
                                                    : "Ask every time"});
+    int accounts_row = static_cast<int>(rows.size());
+    rows.push_back({"Accounts",
+                    std::to_string(g_accounts.size()) +
+                        (g_accounts.size() == 1 ? " account" : " accounts")});
     // Sign out lives here rather than on a library shoulder button so a stray
     // press can never log the account out; it also takes a second A to confirm.
     int signout_row = static_cast<int>(rows.size());
@@ -1287,13 +1470,14 @@ void draw_settings(App& app) {
         app.gfx.text(rows[i].title, row.x + 68, row.y + 26,
                      gfx::FontSize::Body, gfx::kText);
         int vw = app.gfx.text_width(rows[i].value, gfx::FontSize::Body);
-        if (i == signout_row) {
-            // Action row: no ‹ › carets, and the armed state reads as danger.
+        if (i == signout_row || i == accounts_row) {
+            // Action rows: no ‹ › carets (A opens/confirms them), and the
+            // armed sign-out reads as danger.
             app.gfx.text(rows[i].value, row.x + row.w - 44 - vw, row.y + 26,
                          gfx::FontSize::Body,
-                         app.signout_armed ? gfx::kError
-                         : focused         ? gfx::kText
-                                           : gfx::kTextDim);
+                         i == signout_row && app.signout_armed ? gfx::kError
+                         : focused                            ? gfx::kText
+                                                              : gfx::kTextDim);
         } else if (focused) {
             int vx = row.x + row.w - 44 - vw;
             app.gfx.text("‹", vx - 56, row.y + 26, gfx::FontSize::Body,
@@ -1316,6 +1500,9 @@ void draw_settings(App& app) {
     if (app.settings_cursor == signout_row) {
         line1 = "Signs this Switch out of your Microsoft account and clears";
         line2 = "the saved sign-in. Cloud saves and games are not affected.";
+    } else if (app.settings_cursor == accounts_row) {
+        line1 = "Share the console: each account keeps its own sign-in,";
+        line2 = "library and favorites. Press A to switch or add one.";
     } else switch (app.settings_cursor) {
         case 5:
             line1 = "Output volume for streamed audio — raise it if the stream";
@@ -1834,7 +2021,8 @@ int main(int argc, char** argv) {
     app.ui_sound.init();  // menu navigation ticks (best-effort; ignored on fail)
     SDL_Joystick* joystick = SDL_JoystickOpen(0);
     app.covers = std::make_unique<Covers>(app.gfx, data_path("covers"));
-    app.auth = std::make_unique<XboxAuth>(data_path("tokens.json"));
+    load_accounts();  // registry + migration; sets the active account
+    app.auth = std::make_unique<XboxAuth>(user_path("tokens.json"));
     app.auth->set_abort_flag(&app.abort_http);
     app.settings = load_settings();
     app.favorites = load_id_list("favorites.json");
@@ -1942,6 +2130,7 @@ int main(int argc, char** argv) {
                     app.scene = Scene::Library;
                     try {
                         app.gamertag = app.auth->fetch_profile().gamertag;
+                        remember_gamertag(app.gamertag);
                     } catch (const std::exception&) {}
                 } else if (app.load_state == 2) {
                     join_worker(app);
@@ -2139,8 +2328,9 @@ int main(int argc, char** argv) {
             case Scene::Settings: {
                 // Row order: quality, mapping, vibration, region, language,
                 // volume, pacing, sharpness, [source when a console is
-                // linked], sign out.
-                int signout_row = app.consoles.empty() ? 8 : 9;
+                // linked], accounts, sign out.
+                int signout_row = app.consoles.empty() ? 9 : 10;
+                int accounts_row = signout_row - 1;
                 if (input.up)
                     app.settings_cursor = std::max(0, app.settings_cursor - 1);
                 if (input.down)
@@ -2148,19 +2338,34 @@ int main(int argc, char** argv) {
                         std::min(signout_row, app.settings_cursor + 1);
                 // Leaving the row (or the screen, below) always disarms.
                 if (input.up || input.down) app.signout_armed = false;
+                if (input.a && app.settings_cursor == accounts_row) {
+                    app.accounts_cursor = 0;
+                    app.scene = Scene::Accounts;
+                    break;
+                }
                 if (input.a && app.settings_cursor == signout_row) {
                     if (!app.signout_armed) {
                         app.signout_armed = true;
                     } else {
                         app.signout_armed = false;
-                        app.auth->logout();
-                        std::remove(data_path("games.json").c_str());
-                        std::remove(data_path("consoles.json").c_str());
-                        app.games.clear();
-                        app.visible.clear();
-                        app.consoles.clear();
-                        app.scene = Scene::SignIn;
-                        start_signin(app);
+                        app.auth->logout();  // drops this account's tokens
+                        for (const char* leaf : kAccountFiles)
+                            std::remove(user_path(leaf).c_str());
+                        // Signing out takes the account off the console. If
+                        // others remain, hand over to the first of them;
+                        // otherwise start fresh with a single empty account,
+                        // which is what a single-account install expects.
+                        std::string gone = g_active_account;
+                        g_accounts.erase(
+                            std::remove_if(
+                                g_accounts.begin(), g_accounts.end(),
+                                [&gone](const Account& account) {
+                                    return account.id == gone;
+                                }),
+                            g_accounts.end());
+                        if (g_accounts.empty())
+                            g_accounts.push_back({next_account_id(), ""});
+                        switch_account(app, g_accounts.front().id);
                         break;
                     }
                 }
@@ -2193,7 +2398,7 @@ int main(int argc, char** argv) {
                     else if (app.settings_cursor == 7)
                         app.settings.sharpness =
                             (app.settings.sharpness + direction + 4) % 4;
-                    else
+                    else if (!app.consoles.empty() && app.settings_cursor == 8)
                         app.settings.source =
                             (app.settings.source + direction + 3) % 3;
                     save_settings(app.settings);
@@ -2202,6 +2407,27 @@ int main(int argc, char** argv) {
                     app.signout_armed = false;
                     app.scene = app.settings_return;
                 }
+                break;
+            }
+
+            case Scene::Accounts: {
+                int add_row = static_cast<int>(g_accounts.size());
+                if (input.up)
+                    app.accounts_cursor = std::max(0, app.accounts_cursor - 1);
+                if (input.down)
+                    app.accounts_cursor =
+                        std::min(add_row, app.accounts_cursor + 1);
+                if (input.a) {
+                    if (app.accounts_cursor == add_row)
+                        add_account(app);  // lands on the sign-in screen
+                    else if (g_accounts[app.accounts_cursor].id !=
+                             g_active_account)
+                        switch_account(app, g_accounts[app.accounts_cursor].id);
+                    else
+                        app.scene = Scene::Settings;  // already the active one
+                    break;
+                }
+                if (input.b) app.scene = Scene::Settings;
                 break;
             }
 
@@ -2327,6 +2553,7 @@ int main(int argc, char** argv) {
             case Scene::Detail: draw_detail(app); break;
             case Scene::SourcePicker: draw_source_picker(app); break;
             case Scene::Settings: draw_settings(app); break;
+            case Scene::Accounts: draw_accounts(app); break;
             case Scene::Stream:
 #ifdef GNX_NATIVE_STREAM
                 draw_stream(app, joystick);

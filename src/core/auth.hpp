@@ -44,6 +44,11 @@ public:
     bool has_saved_login() const { return !refresh_token_.empty(); }
     void logout();
 
+    // Point at a different token store and reload from it -- used to switch
+    // between accounts without recreating the object (the streaming engine
+    // holds a reference to it).
+    void set_token_store(std::string path);
+
     DeviceCode request_device_code();
     PollResult poll_device_code(const DeviceCode& code);
 

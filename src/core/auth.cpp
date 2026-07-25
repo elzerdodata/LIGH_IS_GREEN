@@ -53,6 +53,12 @@ void XboxAuth::logout() {
     std::remove(store_path_.c_str());
 }
 
+void XboxAuth::set_token_store(std::string path) {
+    store_path_ = std::move(path);
+    refresh_token_.clear();
+    load_refresh_token();
+}
+
 void XboxAuth::save_refresh_token(const std::string& token) {
     refresh_token_ = token;
     std::ofstream out(store_path_, std::ios::trunc);
