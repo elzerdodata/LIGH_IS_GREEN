@@ -25,6 +25,11 @@ struct EndpointCredentials {
 
 struct StreamingCredentials {
     EndpointCredentials home;
+    // Why the xhome (remote play) login failed, if it did. An account with no
+    // console attached is a normal case, so this is not an error by itself --
+    // but starting a home stream without it never works, and the caller should
+    // say so rather than build a request against an empty host.
+    std::string home_error;
     EndpointCredentials cloud;
     std::optional<EndpointCredentials> cloud_f2p;
 };

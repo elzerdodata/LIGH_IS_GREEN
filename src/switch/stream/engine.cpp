@@ -610,6 +610,18 @@ void Engine::worker() {
         log("fetching streaming credentials");
         StreamingCredentials creds = auth_.fetch_streaming_credentials();
         cloud_ = home ? creds.home : creds.cloud;
+        // Without a host every request goes out as a bare path, which curl
+        // rejects as a malformed URL -- a useless error for the one thing that
+        // actually went wrong: the remote-play login did not come back.
+        if (cloud_.host.empty()) {
+            if (!creds.home_error.empty())
+                log("xhome login failed: " + creds.home_error);
+            fail(home ? "Your account has no console available for remote "
+                        "play right now. Check the console is on and signed "
+                        "in, then try again."
+                      : "xCloud is not available for this account");
+            return;
+        }
 
         set_status("Cleaning up old sessions...");
         GssvSession::cleanup_stale_sessions(http_, cloud_,
@@ -623,13 +635,18 @@ void Engine::worker() {
         // Cloud gets one retry too: a session can come up with a dead media
         // path (ICE connects, DTLS never answers) -- a fresh session
         // re-rolls that server-side fault.
-        int attempts = home ? 4 : 2;
+        // Registration can take well over a minute on a console that just
+        // came back up, so home gets more tries than a wake-up alone needs.
+        int attempts = home ? 6 : 2;
+        bool registering = false;  // last failure was "still registering"
         for (int attempt = 0; attempt < attempts && !quit_; ++attempt) {
             if (attempt > 0) {
-                set_status(home ? "Waking your console... (attempt " +
-                                      std::to_string(attempt + 1) + " of " +
-                                      std::to_string(attempts) + ")"
-                                : "Retrying the connection...");
+                std::string of = " (attempt " + std::to_string(attempt + 1) +
+                                 " of " + std::to_string(attempts) + ")";
+                set_status(registering
+                               ? "Your console is still registering..." + of
+                           : home ? "Waking your console..." + of
+                                  : "Retrying the connection...");
                 // Home consoles need ~5 s to boot streaming. Cloud needs the
                 // dead session's teardown to release the account's slot, or
                 // the fresh request queues in "waiting for resources".
@@ -708,7 +725,18 @@ void Engine::worker() {
                 state_ = EngineState::StartingSession;  // back to connect UI
                 continue;
             }
-            bool agent_error =
+            // Both of these mean "the console is not ready yet, ask again":
+            // AgentCommandError while it boots its streaming service, and
+            // WaitingForServerToRegister while that service registers with
+            // Microsoft (an awake console that was just rebooted, or one whose
+            // remote features were re-enabled, sits there for a while). The
+            // second one used to fall through to a hard failure on the very
+            // first attempt, so remote play looked broken when it only needed
+            // another try.
+            registering = session_error.find("WaitingForServerToRegister") !=
+                          std::string::npos;
+            bool console_not_ready =
+                registering ||
                 session_error.find("AgentCommandError") != std::string::npos;
             if (session_error.empty()) {
                 fail("Timed out waiting for a session");
@@ -716,11 +744,14 @@ void Engine::worker() {
             }
             log("session attempt " + std::to_string(attempt + 1) +
                 " failed: " + session_error);
-            if (!agent_error || attempt == attempts - 1) {
-                fail("Session failed: " + session_error);
+            if (!console_not_ready || attempt == attempts - 1) {
+                fail(console_not_ready
+                         ? "Your console never finished registering for remote "
+                           "play. Turn Remote Features off and on, or restart "
+                           "the console, then try again."
+                         : "Session failed: " + session_error);
                 return;
             }
-            // AgentCommandError on home: console still waking -> retry.
         }
     } catch (const std::exception& error) {
         fail(error.what());

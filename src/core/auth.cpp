@@ -209,8 +209,11 @@ StreamingCredentials XboxAuth::fetch_streaming_credentials() {
     StreamingCredentials credentials;
     try {
         credentials.home = streaming_login(gssv_token, "xhome");
-    } catch (const std::exception&) {
-        // No console attached to the account — cloud-only is fine.
+    } catch (const std::exception& error) {
+        // No console attached to the account — cloud-only is fine. Keep the
+        // reason: it is the only explanation available if the user then tries
+        // to stream from a console anyway.
+        credentials.home_error = error.what();
     }
     credentials.cloud = streaming_login(gssv_token, "xgpuweb");
     try {
