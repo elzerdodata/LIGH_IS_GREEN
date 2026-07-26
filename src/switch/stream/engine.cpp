@@ -179,6 +179,9 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
     last_media_ticks_ = 0;
     peer_state_ = PEER_CONNECTION_NEW;  // previous session left it CLOSED
     pli_sent_ = 0;
+    // Cumulative, and the HUD's bitrate window starts from zero in run_peer:
+    // carrying the previous stream's total over shows one absurd first sample.
+    video_bytes_ = 0;
     install_av_log_capture();
     jitter_.reset();
     next_present_counter_ = 0;  // first frame presents immediately, then paced

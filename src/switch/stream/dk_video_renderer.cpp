@@ -252,6 +252,8 @@ bool DkVideoRenderer::init() {
     hud_text_cache_.clear();
     fps_tick_ = 0;
     fps_frames_ = 0;
+    fps_last_data_ = nullptr;
+    net_valid_ = false;  // don't show the previous stream's numbers
     {
         uint32_t stride = kHudTexW * 4;
         dk::ImageLayout hud_layout;
