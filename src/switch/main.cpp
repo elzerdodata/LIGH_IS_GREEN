@@ -10,6 +10,7 @@
 #endif
 
 #include <sys/stat.h>
+#include <unistd.h>  // rmdir: removing an account's directory
 
 #include <algorithm>
 #include <atomic>
@@ -62,6 +63,10 @@ struct Account {
 
 std::vector<Account> g_accounts;
 std::string g_active_account = "u1";
+// Non-empty while the sign-in screen is showing because we switched to an
+// account that has no saved login: the account to fall back to if the user
+// backs out. Empty means sign-in is the app's own entry point.
+std::string g_signin_return_account;
 
 std::string account_dir(const std::string& id) {
     return std::string(kDataDir) + "/users/" + id;
@@ -80,6 +85,18 @@ const char* const kAccountFiles[] = {"tokens.json", "games.json",
 void make_account_dir(const std::string& id) {
     mkdir((std::string(kDataDir) + "/users").c_str(), 0755);
     mkdir(account_dir(id).c_str(), 0755);
+}
+
+// Has this account ever completed a sign-in (i.e. is there a token store)?
+bool account_has_login(const std::string& id) {
+    std::ifstream token(account_dir(id) + "/tokens.json");
+    return static_cast<bool>(token);
+}
+
+bool account_exists(const std::string& id) {
+    for (const Account& account : g_accounts)
+        if (account.id == id) return true;
+    return false;
 }
 
 void save_accounts() {
@@ -129,7 +146,33 @@ void load_accounts() {
     for (const Account& account : g_accounts)
         active_exists = active_exists || account.id == g_active_account;
     if (!active_exists) g_active_account = g_accounts.front().id;
+    // An account added but never signed into has nothing to load, and landing
+    // on the sign-in screen at startup hides the accounts that do work (the
+    // picker is two menus deep from there). Start on a signed-in account if
+    // the console has one.
+    if (!account_has_login(g_active_account)) {
+        for (const Account& account : g_accounts) {
+            if (account_has_login(account.id)) {
+                g_active_account = account.id;
+                break;
+            }
+        }
+    }
     make_account_dir(g_active_account);
+}
+
+// Drop an account from the console: its files, its directory and its registry
+// entry. The caller decides which account becomes active afterwards.
+void remove_account(const std::string& id) {
+    for (const char* leaf : kAccountFiles)
+        std::remove((account_dir(id) + "/" + leaf).c_str());
+    rmdir(account_dir(id).c_str());  // empty now; fails harmlessly if not
+    g_accounts.erase(std::remove_if(g_accounts.begin(), g_accounts.end(),
+                                    [&id](const Account& account) {
+                                        return account.id == id;
+                                    }),
+                     g_accounts.end());
+    save_accounts();
 }
 
 // Remember the gamertag so the picker can label accounts by name.
@@ -335,6 +378,7 @@ struct App {
     Settings settings;
     int settings_cursor = 0;
     int accounts_cursor = 0;  // Scene::Accounts: row in the account picker
+    bool remove_armed = false;  // account picker: first X arms, second removes
     Scene settings_return = Scene::Library;  // scene to go back to from Settings
     bool signout_armed = false;  // Settings sign-out row: first A arms, second confirms
     int detail_index = -1;   // games[] index shown in Scene::Detail
@@ -659,6 +703,7 @@ int find_game(const App& app, const std::string& id) {
 // previous account's library from memory, and either load the new account's
 // library or ask it to sign in. Box art is shared, so switching is cheap.
 void switch_account(App& app, const std::string& id) {
+    std::string previous = g_active_account;
     if (app.worker.joinable()) {  // a sign-in poll may still be running
         app.signin_state = 4;     // cancel
         app.abort_http = true;    // unblock an in-flight request
@@ -679,9 +724,19 @@ void switch_account(App& app, const std::string& id) {
     app.tab = LibraryTab::All;
     app.query.clear();
     if (app.auth->has_saved_login()) {
+        g_signin_return_account.clear();
         app.scene = Scene::LoadingLibrary;
         start_library_load(app, false);
     } else {
+        // Signing in for an account we switched to: B on the sign-in screen
+        // must come back here, not quit the app (which is what it means when
+        // sign-in is the first screen of a fresh install). Only worth offering
+        // if there is actually something to go back to.
+        if (previous != id && account_exists(previous) &&
+            account_has_login(previous))
+            g_signin_return_account = previous;
+        else
+            g_signin_return_account.clear();
         app.scene = Scene::SignIn;
         start_signin(app);
     }
@@ -1388,9 +1443,11 @@ void draw_accounts(App& app) {
                         : account.gamertag;
             if (account.id == g_active_account) {
                 value = "Active";
+            } else if (focused && app.remove_armed) {
+                value = "Press X again to remove";
             } else {
-                std::ifstream token(account_dir(account.id) + "/tokens.json");
-                value = token ? "Signed in" : "Not signed in";
+                value = account_has_login(account.id) ? "Signed in"
+                                                      : "Not signed in";
             }
         }
         app.gfx.text(title, row.x + 68, row.y + 26, gfx::FontSize::Body,
@@ -1398,12 +1455,21 @@ void draw_accounts(App& app) {
         int vw = app.gfx.text_width(value, gfx::FontSize::Body);
         app.gfx.text(value, row.x + row.w - 44 - vw, row.y + 26,
                      gfx::FontSize::Body,
-                     i < add_row && g_accounts[i].id == g_active_account
+                     focused && app.remove_armed && i < add_row ? gfx::kError
+                     : i < add_row && g_accounts[i].id == g_active_account
                          ? gfx::kAccent
                          : gfx::kTextDim);
     }
-    draw_hints(app, {{"A", app.accounts_cursor == add_row ? "Add" : "Switch"},
-                     {"B", "Back"}});
+    // X only applies to the accounts you are not currently using; the active
+    // one leaves through Settings -> Sign out.
+    bool can_remove = app.accounts_cursor < add_row &&
+                      g_accounts[app.accounts_cursor].id != g_active_account;
+    std::vector<Hint> hints = {
+        {"A", app.accounts_cursor == add_row ? "Add" : "Switch"}};
+    if (can_remove)
+        hints.push_back({"X", app.remove_armed ? "Confirm remove" : "Remove"});
+    hints.push_back({"B", "Back"});
+    draw_hints(app, hints);
 }
 
 void draw_settings(App& app) {
@@ -2102,6 +2168,18 @@ int main(int argc, char** argv) {
 
             case Scene::SignIn:
                 if (input.b || input.plus) {
+                    // Reached from the account picker: go back to the account
+                    // we came from, and drop the one we were signing into if
+                    // it never got that far (an empty account is just clutter
+                    // in the picker, and it used to be unremovable).
+                    if (!g_signin_return_account.empty()) {
+                        std::string back = g_signin_return_account;
+                        g_signin_return_account.clear();
+                        if (!app.auth->has_saved_login())
+                            remove_account(g_active_account);
+                        switch_account(app, back);
+                        break;
+                    }
                     app.signin_state = 4;  // cancel
                     app.abort_http = true;  // unblock an in-flight poll
                     join_worker(app);
@@ -2349,6 +2427,7 @@ int main(int argc, char** argv) {
                 if (input.up || input.down) app.signout_armed = false;
                 if (input.a && app.settings_cursor == accounts_row) {
                     app.accounts_cursor = 0;
+                    app.remove_armed = false;
                     app.scene = Scene::Accounts;
                     break;
                 }
@@ -2431,7 +2510,26 @@ int main(int argc, char** argv) {
                 if (input.down)
                     app.accounts_cursor =
                         std::min(add_row, app.accounts_cursor + 1);
+                if (input.up || input.down) app.remove_armed = false;
+                // X removes another account from this console: its sign-in and
+                // cached library go, the console keeps everything else. Two
+                // presses, like Sign out. The active account leaves through
+                // Sign out instead, which has a token to drop as well.
+                if (input.x && app.accounts_cursor < add_row &&
+                    g_accounts[app.accounts_cursor].id != g_active_account) {
+                    if (!app.remove_armed) {
+                        app.remove_armed = true;
+                    } else {
+                        app.remove_armed = false;
+                        remove_account(g_accounts[app.accounts_cursor].id);
+                        app.accounts_cursor =
+                            std::min(app.accounts_cursor,
+                                     static_cast<int>(g_accounts.size()));
+                    }
+                    break;
+                }
                 if (input.a) {
+                    app.remove_armed = false;
                     if (app.accounts_cursor == add_row)
                         add_account(app);  // lands on the sign-in screen
                     else if (g_accounts[app.accounts_cursor].id !=
@@ -2441,7 +2539,10 @@ int main(int argc, char** argv) {
                         app.scene = Scene::Settings;  // already the active one
                     break;
                 }
-                if (input.b) app.scene = Scene::Settings;
+                if (input.b) {
+                    app.remove_armed = false;
+                    app.scene = Scene::Settings;
+                }
                 break;
             }
 
