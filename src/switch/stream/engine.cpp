@@ -39,6 +39,10 @@ void av_log_capture(void* avcl, int level, const char* fmt, va_list vl) {
 }
 
 void install_av_log_capture() { av_log_set_callback(&av_log_capture); }
+
+// libsrtp + usrsctp are process-wide: initialized with the first Engine and
+// released once, by Engine::global_shutdown, on the way out of the app.
+bool g_peer_initialized = false;
 }
 
 namespace gnx::stream {
@@ -92,11 +96,22 @@ Engine::Engine(XboxAuth& auth, SDL_Renderer* renderer)
     // fails (no inbound SRTP -> no decryptable video) and usrsctp never
     // associates (data channels never open). Idempotent guard: Engine is a
     // singleton, but be safe.
-    static bool peer_initialized = false;
-    if (!peer_initialized) {
+    if (!g_peer_initialized) {
         peer_init();
-        peer_initialized = true;
+        g_peer_initialized = true;
     }
+}
+
+// usrsctp's two service threads ("SCTP timer", "SCTP iterator") run until
+// usrsctp_finish(). Nothing used to call it, so they were still running when
+// main() returned -- and the moment hbloader unmapped the NRO underneath
+// them, they faulted on their next instruction (Instruction Abort, crash
+// report with the NRO already gone from the module list). Call this once,
+// after the last Engine is destroyed and before the app exits.
+void Engine::global_shutdown() {
+    if (!g_peer_initialized) return;
+    g_peer_initialized = false;
+    peer_deinit();
 }
 
 Engine::~Engine() { stop(); }

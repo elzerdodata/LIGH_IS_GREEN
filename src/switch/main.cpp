@@ -2358,6 +2358,11 @@ int main(int argc, char** argv) {
 #ifdef GNX_NATIVE_STREAM
     app.engine.reset();
     breadcrumb("engine stopped");
+    // Stops usrsctp's service threads. They are not ours to join, and if they
+    // are still alive when hbloader unmaps the NRO the process crashes on the
+    // way back to the menu.
+    stream::Engine::global_shutdown();
+    breadcrumb("webrtc shut down");
 #endif
     app.covers.reset();
     breadcrumb("covers stopped");

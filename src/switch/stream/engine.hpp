@@ -53,6 +53,11 @@ public:
     Engine(XboxAuth& auth, SDL_Renderer* renderer);
     ~Engine();
 
+    // Releases the process-wide WebRTC state (libsrtp, usrsctp and its two
+    // service threads) that the first Engine brings up. Call once at app
+    // exit, after every Engine is gone; no Engine may be created afterwards.
+    static void global_shutdown();
+
     void start(const std::string& title_id, QualityTier tier,
                const std::string& locale = "en-US");
     // Remote play from your own console (xhome offering): the target is the

@@ -814,6 +814,38 @@ index 0a3136a..9239e67 100644
    // even if there is no callback set, assume everything is ok for caller and do not return an error
    return (int)size;
  }
+diff --git a/src/sctp.c b/src/sctp.c
+index 644f8d8..a67c2ed 100644
+--- a/src/sctp.c
++++ b/src/sctp.c
+@@ -1,5 +1,6 @@
+ #include <stdlib.h>
+ #include <string.h>
++#include <unistd.h>
+ 
+ #include "dtls_srtp.h"
+ #include "sctp.h"
+@@ -498,7 +499,19 @@ void sctp_usrsctp_init() {
+ 
+ void sctp_usrsctp_deinit() {
+ #if CONFIG_USE_USRSCTP
+-  usrsctp_finish();
++  /* usrsctp_init() starts two service threads ("SCTP timer" and "SCTP
++   * iterator") that only stop inside usrsctp_finish(). It refuses with -1
++   * while an endpoint is still on the list -- a just-closed association
++   * lingers briefly -- so keep asking for up to a second. Leaving the threads
++   * running is not an option on Switch: they outlive main() and fault the
++   * instant hbloader unmaps the NRO. */
++  int attempt;
++  for (attempt = 0; attempt < 50; attempt++) {
++    if (usrsctp_finish() == 0)
++      return;
++    usleep(20 * 1000);
++  }
++  LOGW("usrsctp_finish() never completed; its threads are still running");
+ #endif
+ }
+ 
 diff --git a/src/sctp.h b/src/sctp.h
 index 1116996..4bf9b02 100644
 --- a/src/sctp.h
