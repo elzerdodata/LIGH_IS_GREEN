@@ -2364,9 +2364,14 @@ int main(int argc, char** argv) {
     app.gfx.shutdown();
     breadcrumb("gfx shut down");
 #ifdef __SWITCH__
+    // One breadcrumb per service: a black screen on exit hangs somewhere in
+    // here, and "gfx shut down" alone doesn't say which call never returned.
     romfsExit();
+    breadcrumb("romfs exit");
     plExit();
+    breadcrumb("pl exit");
     socketExit();
+    breadcrumb("socket exit");
 #endif
     breadcrumb("done");
     return 0;
