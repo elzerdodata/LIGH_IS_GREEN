@@ -43,6 +43,8 @@ Http::~Http() {
     if (curl_) curl_easy_cleanup(static_cast<CURL*>(curl_));
 }
 
+void Http::global_cleanup() { curl_global_cleanup(); }
+
 std::string Http::urlencode(const std::string& value) {
     char* escaped = curl_escape(value.c_str(), static_cast<int>(value.size()));
     std::string result = escaped ? escaped : "";

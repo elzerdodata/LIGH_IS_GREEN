@@ -30,6 +30,12 @@ public:
 
     static std::string urlencode(const std::string& value);
 
+    // Release libcurl's process-wide state. Call once, after the last Http
+    // object is gone and before the platform's socket service is torn down --
+    // on the Switch, closing bsd:u with sockets still open unmaps the socket
+    // transfer memory underneath them.
+    static void global_cleanup();
+
     // Path to a CA bundle (cacert.pem) for TLS verification on platforms
     // without a system store (the Switch). Empty = use libcurl defaults.
     static void set_ca_bundle(std::string path);

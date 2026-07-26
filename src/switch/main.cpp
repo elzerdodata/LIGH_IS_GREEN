@@ -2361,6 +2361,15 @@ int main(int argc, char** argv) {
 #endif
     app.covers.reset();
     breadcrumb("covers stopped");
+    // Every libcurl handle has to be gone before socketExit(). A handle keeps
+    // its TLS connections open in its own cache, and socketExit() closes bsd:u
+    // and unmaps the socket transfer memory those live sockets are still using
+    // -- that is the black screen on the way out. The engine and the cover
+    // downloader own handles too, hence the order here; auth's handle survived
+    // until App's destructor, which runs after the services are already gone.
+    app.auth.reset();
+    Http::global_cleanup();
+    breadcrumb("network released");
     app.gfx.shutdown();
     breadcrumb("gfx shut down");
 #ifdef __SWITCH__
