@@ -1,6 +1,7 @@
 #include "engine.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdarg>
 #include <sstream>
@@ -159,6 +160,9 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
     got_frame_ = false;
     channels_open_ = false;
     handshake_done_ = false;
+    server_ended_ = false;
+    last_media_ticks_ = 0;
+    peer_state_ = PEER_CONNECTION_NEW;  // previous session left it CLOSED
     pli_sent_ = 0;
     install_av_log_capture();
     jitter_.reset();
@@ -251,6 +255,18 @@ void Engine::set_status(const std::string& status) {
     status_ = status;
 }
 
+// Orderly end of a session that the server closed on us. Not a failure: the
+// UI treats Stopped as "go back to the library", so the user lands in the menu
+// the way they would after ending the stream themselves.
+void Engine::end_session() {
+    {
+        std::lock_guard<std::mutex> lock(log_mutex_);
+        if (log_file_) std::fflush(log_file_);
+    }
+    set_status("Session ended");
+    state_ = EngineState::Stopped;
+}
+
 void Engine::fail(const std::string& error) {
     log("FAIL: " + error);
     {
@@ -274,6 +290,7 @@ void Engine::on_video(uint8_t* data, size_t size, void* user) {
     // held). `data` is a raw RTP packet; the jitter buffer reorders/assembles
     // complete access units and only emits clean, keyframe-anchored frames.
     auto* self = static_cast<Engine*>(user);
+    self->last_media_ticks_.store(SDL_GetTicks64(), std::memory_order_relaxed);
     bool want_keyframe = false;
     self->jitter_.receive(
         data, size, SDL_GetTicks64(),
@@ -301,6 +318,7 @@ void Engine::on_audio(uint8_t* data, size_t size, void* user) {
     // hand it straight to the audio thread -- decode happens there, not here, so
     // audio never waits behind video/RTCP work on this thread.
     auto* self = static_cast<Engine*>(user);
+    self->last_media_ticks_.store(SDL_GetTicks64(), std::memory_order_relaxed);
     if (size < 12) return;
     uint8_t csrc_count = data[0] & 0x0F;
     bool has_extension = (data[0] & 0x10) != 0;
@@ -430,6 +448,38 @@ void Engine::handle_channel_message(uint16_t sid, const char* data,
             preview);
     }
     if (!label) return;
+
+    // End-of-session notice from the server, e.g.
+    //   target=/streaming/sessionLifetimeManagement/serverInitiatedDisconnect
+    //   content={"reason":"KickForStopCommand"}
+    // sent when the stream is stopped on the console or the console shuts
+    // down. run_peer picks the flag up and ends the stream.
+    if (std::strcmp(label, "message") == 0) {
+        std::string payload(data, size);
+        if (payload.find("serverInitiatedDisconnect") != std::string::npos) {
+            // The reason sits in the escaped inner JSON ("content"), so skip
+            // over whatever quoting separates the key from its value.
+            std::string reason;
+            size_t at = payload.find("reason");
+            if (at != std::string::npos) {
+                at += 6;
+                while (at < payload.size() &&
+                       (payload[at] == '\\' || payload[at] == '"' ||
+                        payload[at] == ':' || payload[at] == ' '))
+                    ++at;
+                size_t end = at;
+                while (end < payload.size() &&
+                       (std::isalnum(static_cast<unsigned char>(payload[end])) ||
+                        payload[end] == '_' || payload[end] == '-'))
+                    ++end;
+                reason = payload.substr(at, end - at);
+            }
+            log("server ended the session" +
+                (reason.empty() ? std::string() : " (" + reason + ")"));
+            server_ended_ = true;
+            return;
+        }
+    }
 
     if (std::strcmp(label, "message") == 0 && !handshake_done_) {
         if (xcloud::is_handshake_ack(std::string(data, size))) {
@@ -874,6 +924,7 @@ bool Engine::run_peer(GssvSession& session) {
     Uint64 idr_wait_start = 0;
     Uint64 last_idr_wait_log = 0;
     Uint64 negotiation_started = SDL_GetTicks64();
+    Uint64 last_loop_tick = SDL_GetTicks64();  // detects a suspended app
     bool opened_channels = false;
     bool sent_handshake = false;
     PeerConnectionState last_logged_state = PEER_CONNECTION_NEW;
@@ -921,6 +972,15 @@ bool Engine::run_peer(GssvSession& session) {
             fail("WebRTC connection failed");
             return true;
         }
+        // The server announced the end of the session (stream stopped on the
+        // console, console powered off, another client took over). Without
+        // this the loop kept running against a dead peer: the last decoded
+        // frame stayed on screen forever and the app never left the stream.
+        if (server_ended_) {
+            log("session ended by the server -- returning to the library");
+            end_session();
+            return true;
+        }
         // Dead media path: ICE is up (the front-door placeholder answers
         // STUN) but DTLS/SCTP never completes -- the handshake starves on
         // CONN_EOF because nothing behind the front door talks back. Healthy
@@ -939,6 +999,33 @@ bool Engine::run_peer(GssvSession& session) {
             SDL_GetTicks64() - negotiation_started > 45000) {
             fail("Connection timed out");
             return true;
+        }
+        // Peer gone after it was up: libpeer's consent check timed out (the
+        // console dropped off the network or was switched off without telling
+        // us). Only meaningful once ICE connected -- CLOSED is also the enum's
+        // zero value, so an unconnected peer must not trip this.
+        if (ice_connected_at && (current == PEER_CONNECTION_CLOSED ||
+                                 current == PEER_CONNECTION_DISCONNECTED)) {
+            fail("Connection to the console was lost");
+            return true;
+        }
+        // The app can be suspended mid-stream (HOME menu, console sleep):
+        // every thread freezes while the wall clock keeps running, so the
+        // gap is not a stall. Restart the window from the moment we resume.
+        if (now - last_loop_tick > 2000)
+            last_media_ticks_.store(now, std::memory_order_relaxed);
+        last_loop_tick = now;
+        // Media-stall watchdog. RTP stops the moment a session really ends,
+        // but libpeer needs ~20 s of failed consent checks to notice, and a
+        // half-open path may never close at all. Ten seconds without a single
+        // video or audio packet is dead either way; end the stream instead of
+        // holding a frozen frame.
+        if (got_frame_) {
+            Uint64 last_media = last_media_ticks_.load(std::memory_order_relaxed);
+            if (last_media && now - last_media > 10000) {
+                fail("Stream stalled: no video or audio for 10s");
+                return true;
+            }
         }
 
         // Until the first frame decodes, keep asking for a keyframe. xCloud may
@@ -1256,6 +1343,13 @@ void Engine::end_deko_output() {
 
 void Engine::send_gamepad(const xcloud::GamepadFrame& frame) {
     if (!handshake_done_) return;
+    // Once the peer is gone every send fails inside libpeer and logs an error;
+    // at 125 Hz that filled the SD log with "sctp not connected" until the app
+    // was killed. Nothing to send input to anyway.
+    PeerConnectionState peer_state = peer_state_;
+    if (peer_state != PEER_CONNECTION_CONNECTED &&
+        peer_state != PEER_CONNECTION_COMPLETED)
+        return;
     std::vector<uint8_t> packet;
     {
         std::lock_guard<std::mutex> lock(input_mutex_);

@@ -115,6 +115,7 @@ private:
     // ordinary failures, returns true.
     bool run_peer(GssvSession& session);
     void set_status(const std::string& status);
+    void end_session();  // server closed the session: stop, not fail
     void fail(const std::string& error);
     void handle_channel_message(uint16_t sid, const char* data, size_t size);
     void handle_input_report(const uint8_t* data, size_t size);  // rumble, etc.
@@ -165,6 +166,12 @@ private:
     std::atomic<bool> channels_open_{false};
     std::atomic<bool> handshake_done_{false};
     std::atomic<bool> quit_{false};
+    // Set when the server sends serverInitiatedDisconnect (stream stopped on
+    // the console, console powering off, another client took over).
+    std::atomic<bool> server_ended_{false};
+    // Last RTP arrival, video or audio (peer thread). run_peer's stall
+    // watchdog uses it to end a stream whose media path died silently.
+    std::atomic<Uint64> last_media_ticks_{0};
 
     VideoDecoder video_;  // width()/height() are render-thread reads only
 #ifdef __SWITCH__

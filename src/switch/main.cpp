@@ -2221,6 +2221,12 @@ int main(int argc, char** argv) {
                         app.engine->stop();
                         app.scene = Scene::Library;
                     }
+                } else if (stream_state == stream::EngineState::Stopped) {
+                    // The server ended the session (stream stopped on the
+                    // console, console switched off). Nothing to retry and
+                    // nothing to show: go straight back to the library.
+                    app.engine->stop();
+                    app.scene = Scene::Library;
                 } else if (stream_state == stream::EngineState::Failed) {
                     if (input.b) {
                         app.engine->stop();
