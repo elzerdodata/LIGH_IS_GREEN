@@ -1,0 +1,42 @@
+name: Publish release binary
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  switch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Build WebRTC dependencies
+        run: bash deps/build-switch.sh
+
+      - name: Build Nintendo Switch application
+        run: docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
+
+      - name: Attach NRO and checksum to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          nro="$(find . -maxdepth 1 -type f -name '*.nro' -print -quit)"
+          test -n "$nro"
+
+          if [[ "$RELEASE_TAG" == v0.1.* ]]; then
+            asset="green-nx-ZD-$RELEASE_TAG.nro"
+          else
+            asset="Light_is_Green-$RELEASE_TAG.nro"
+          fi
+
+          cp "$nro" "$asset"
+          sha256sum "$asset" > "$asset.sha256"
+          gh release upload "$RELEASE_TAG" "$asset" "$asset.sha256" --clobber
