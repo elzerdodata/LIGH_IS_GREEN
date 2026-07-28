@@ -1,6 +1,6 @@
 # Light_is_Green
 
-> **Preliminary v0.2.0-pre.** Light_is_Green is a community fork of
+> **Preliminary v0.3.0-pre.** Light_is_Green is a community fork of
 > [green-nx](https://github.com/rmrf404/green-nx), originally created by
 > **rmrf404**. The original author and GPL-3.0 license remain credited.
 
@@ -22,6 +22,8 @@ involved.
   being allocated
 - **Touchscreen Xbox Home/Guide button** in the top-right corner while
   streaming, with **L3 + R3** retained as the physical-controller alternative
+- Touch **two-dot quick menu** during streaming for the performance HUD and
+  live brightness, contrast, saturation and sharpening controls
 - **Native WebRTC streaming**: ICE (Teredo), DTLS-SRTP, SCTP data channels,
   RTP video/audio, NACK/PLI recovery — implemented on-console
 - **Hardware H.264 decoding** (NVDEC via FFmpeg's NVTEGRA hwaccel) with
@@ -51,7 +53,7 @@ involved.
 | --- | --- |
 | Library | Left stick / d-pad move · **A** play · **Y** search · **X** refresh · **ZL** settings · **-** sign out · **+** exit |
 | Settings | Stream quality (720p / 1080p / 1080p HQ) · button layout (positional / labels) |
-| In stream | Xbox controls mapped from the Switch pad · tap **HOME** at top-right or press **L3 + R3** for the Xbox guide · hold **-** + **+** to quit |
+| In stream | Xbox controls mapped from the Switch pad · tap **••** for performance/image controls · tap **HOME** or press **L3 + R3** for the Xbox guide · hold **-** + **+** to quit |
 
 ## Build
 
@@ -119,4 +121,4 @@ implements a client for a service you already pay for.
 
 - Original project and core implementation: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Light_is_Green fork and v0.2 additions: **elzerdodata**
+- Light_is_Green fork and v0.2/v0.3 additions: **elzerdodata**
