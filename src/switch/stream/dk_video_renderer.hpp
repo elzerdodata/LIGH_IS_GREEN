@@ -53,6 +53,9 @@ public:
     // Enable/disable the debug HUD overlay pass (drawn on top of the video).
     void set_hud_enabled(bool e) { hud_enabled_ = e; }
 
+    // Highlight the always-visible touchscreen Xbox Guide/Home button.
+    void set_guide_pressed(bool pressed) { guide_pressed_ = pressed; }
+
     // Live network stats for the HUD, fed once per second from the streaming
     // worker thread (stored atomically; read on the render thread).
     void set_net_stats(float mbps, float loss_pct, int buffer_ms) {
@@ -113,6 +116,8 @@ private:
     void update_hud(AVFrame* frame);   // recompute stats, re-rasterize on change
     void rasterize_hud();              // compose panel bg + text into hud_cpu_
     void blit_text(const char* s, int x, int y);  // white text onto hud_pixels_
+    void rasterize_guide();            // compose Guide/Home touch button
+    void blit_guide_text(const char* s, int x, int y);
 
     LogFn log_;
     bool initialized_ = false;
@@ -181,6 +186,18 @@ private:
     std::atomic<float> net_loss_{0.0f};
     std::atomic<int> net_buffer_ms_{0};
     std::atomic<bool> net_valid_{false};
+
+    // Always-on top-right Xbox Guide/Home touch overlay. It has its own RGBA
+    // texture so the optional debug HUD can remain independently disabled.
+    static constexpr uint32_t kGuideTexW = 192;  // RGBA pitch = 768, aligned
+    static constexpr uint32_t kGuideTexH = 112;
+    dk::UniqueMemBlock guide_memblock_;
+    dk::Image guide_image_;
+    dk::ImageDescriptor guide_desc_;
+    void* guide_cpu_ = nullptr;
+    std::vector<uint32_t> guide_pixels_;
+    bool guide_pressed_ = false;
+    bool guide_rasterized_pressed_ = false;
 };
 
 }  // namespace gnx::stream

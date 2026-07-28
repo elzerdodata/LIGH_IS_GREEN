@@ -168,7 +168,7 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
     const char* tier_name = tier == QualityTier::P720      ? "720p/android"
                             : tier == QualityTier::P1080   ? "1080p/windows"
                                                            : "1080pHQ/tizen";
-    log("green-nx v" GNX_VERSION " | stream start: " + title_id + " | tier " +
+    log("Light_is_Green v" GNX_VERSION " | stream start: " + title_id + " | tier " +
         tier_name +
         (pacing_ == VideoPacing::Smooth ? " | pacing smooth" : ""));
     quit_ = false;
@@ -1456,6 +1456,14 @@ void Engine::end_deko_output() {
 #ifdef __SWITCH__
     dk_video_.shutdown();
     log("deko3d output stopped");
+#endif
+}
+
+void Engine::set_guide_button_pressed(bool pressed) {
+#ifdef __SWITCH__
+    dk_video_.set_guide_pressed(pressed);
+#else
+    (void)pressed;
 #endif
 }
 

@@ -98,6 +98,10 @@ public:
     bool begin_deko_output();
     void end_deko_output();
 
+    // Visual feedback for the touch-only Xbox Guide/Home overlay. The actual
+    // Nexus packet is still sent through send_gamepad().
+    void set_guide_button_pressed(bool pressed);
+
     void send_gamepad(const xcloud::GamepadFrame& frame);
     void request_keyframe();
 

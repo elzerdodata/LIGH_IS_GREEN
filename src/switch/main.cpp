@@ -1,4 +1,4 @@
-// green-nx: Xbox Cloud Gaming for the Nintendo Switch.
+// Light_is_Green: community fork of green-nx by rmrf404.
 //
 // SDL2 frontend: splash -> device-code sign-in -> game library grid with box
 // art and search -> native WebRTC streaming (see src/switch/stream/).
@@ -394,6 +394,7 @@ struct App {
 #ifdef GNX_NATIVE_STREAM
     std::unique_ptr<stream::Engine> engine;
     Uint32 stream_hint_until = 0;
+    Uint32 xbox_home_until = 0;  // touchscreen Guide/Nexus press window
     bool deko_active = false;  // deko3d owns the display (SDL suspended)
     Uint32 last_input_ms = 0;  // input pacing during deko3d streaming
 #ifdef __SWITCH__
@@ -796,6 +797,35 @@ std::string keyboard_input(const std::string& initial) {
 constexpr int kMargin = 60;    // TV-safe margin on all edges
 constexpr int kFooterH = 84;
 constexpr int kFooterY = gfx::kHeight - kFooterH;
+#ifdef GNX_NATIVE_STREAM
+// Touch target and deko3d overlay share this 1920x1080 design-space rectangle.
+// At the Switch's 1280x720 handheld output it remains a comfortable 131x77 px.
+constexpr SDL_Rect kXboxHomeRect = {1692, 32, 196, 116};
+
+bool point_in_rect(int x, int y, const SDL_Rect& rect) {
+    return x >= rect.x && x < rect.x + rect.w && y >= rect.y &&
+           y < rect.y + rect.h;
+}
+
+bool xbox_home_active(const App& app) {
+    return SDL_GetTicks() < app.xbox_home_until;
+}
+
+void draw_xbox_home_button(App& app) {
+    const bool pressed = xbox_home_active(app);
+    app.gfx.fill(kXboxHomeRect,
+                 pressed ? gfx::Color{16, 124, 16, 235}
+                         : gfx::Color{10, 13, 18, 190});
+    app.gfx.frame(kXboxHomeRect, pressed ? gfx::kText : gfx::kFocus, 4);
+    SDL_Rect icon = {kXboxHomeRect.x + 18, kXboxHomeRect.y + 22, 70, 70};
+    app.gfx.fill(icon, pressed ? gfx::kText : gfx::kAccent);
+    app.gfx.text_centered("X", icon.x + icon.w / 2, icon.y + 13,
+                          gfx::FontSize::Body,
+                          pressed ? gfx::kAccent : gfx::kText);
+    app.gfx.text("HOME", kXboxHomeRect.x + 105, kXboxHomeRect.y + 39,
+                 gfx::FontSize::Small, gfx::kText);
+}
+#endif
 
 // One footer hint: a button chip plus its label. The screen's primary action
 // gets the solid-accent chip.
@@ -858,7 +888,8 @@ void draw_header(App& app) {
     app.gfx.fill(logo, gfx::kAccent);
     app.gfx.text_centered("nx", logo.x + 22, logo.y + 6, gfx::FontSize::Small,
                           gfx::kText);
-    app.gfx.text("green-nx", logo.x + 64, logo.y + 4, gfx::FontSize::Note,
+    app.gfx.text("Light_is_Green", logo.x + 64, logo.y + 4,
+                 gfx::FontSize::Note,
                  gfx::kText);
 }
 
@@ -899,21 +930,24 @@ void draw_cover_fallback(App& app, const Game& game, const SDL_Rect& rect,
 void draw_splash(App& app) {
     Uint32 elapsed = SDL_GetTicks() - app.scene_started;
     int logo_w = static_cast<int>(120 * std::min(elapsed / 300.0f, 1.0f));
-    int word_w = app.gfx.text_width("green-nx", gfx::FontSize::Huge);
+    int word_w = app.gfx.text_width("Light_is_Green", gfx::FontSize::Huge);
     int row_w = 120 + 36 + word_w;
     int x0 = (gfx::kWidth - row_w) / 2;
     if (logo_w > 0) {
         app.gfx.fill({x0, 400, logo_w, 120}, gfx::kAccent);
         if (logo_w == 120)
-            app.gfx.text_centered("nx", x0 + 60, 428, gfx::FontSize::Title,
+            app.gfx.text_centered("LiG", x0 + 60, 428, gfx::FontSize::Title,
                                   gfx::kText);
     }
     if (elapsed > 300) {
-        app.gfx.text("green-nx", x0 + 156, 408, gfx::FontSize::Huge,
+        app.gfx.text("Light_is_Green", x0 + 156, 408, gfx::FontSize::Huge,
                      gfx::kText);
         app.gfx.text_centered("Xbox Cloud Gaming for Nintendo Switch",
                               gfx::kWidth / 2, 548, gfx::FontSize::Note,
                               gfx::kTextDim);
+        app.gfx.text_centered("Community fork of green-nx by rmrf404",
+                              gfx::kWidth / 2, 594, gfx::FontSize::Small,
+                              gfx::kFaint);
     }
     // The bar IS the boot indicator: no spinner (card 1b).
     SDL_Rect track = {gfx::kWidth / 2 - 180, 648, 360, 6};
@@ -1643,7 +1677,8 @@ void draw_settings(App& app) {
 #ifdef GNX_NATIVE_STREAM
 // mapping 0: positional (Switch east button -> Xbox east button).
 // mapping 1: match labels (Switch A -> Xbox A).
-xcloud::GamepadFrame read_gamepad(SDL_Joystick* joystick, int mapping) {
+xcloud::GamepadFrame read_gamepad(SDL_Joystick* joystick, int mapping,
+                                  bool force_nexus = false) {
     xcloud::GamepadFrame frame;
     auto button = [&](int index) {
         return SDL_JoystickGetButton(joystick, index) != 0;
@@ -1683,6 +1718,7 @@ xcloud::GamepadFrame read_gamepad(SDL_Joystick* joystick, int mapping) {
     frame.left_y = axis(1);
     frame.right_x = axis(2);
     frame.right_y = axis(3);
+    if (force_nexus) frame.nexus = true;
     return frame;
 }
 
@@ -1867,8 +1903,8 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
             destination.y = (gfx::kHeight - destination.h) / 2;
         }
         app.gfx.draw_texture(frame, destination);
-        app.engine->send_gamepad(
-            read_gamepad(joystick, app.settings.mapping));
+        app.engine->send_gamepad(read_gamepad(
+            joystick, app.settings.mapping, xbox_home_active(app)));
         apply_rumble(app);
 
         if (SDL_GetTicks() < app.stream_hint_until) {
@@ -1879,6 +1915,7 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
                 gfx::kWidth / 2, gfx::kHeight - 62, gfx::FontSize::Small,
                 gfx::kTextDim);
         }
+        draw_xbox_home_button(app);
         return;
     }
 
@@ -1981,7 +2018,7 @@ struct Input {
     int swipe_rows = 0;            // vertical swipe -> grid rows to scroll
 };
 
-Input poll_input(SDL_Joystick* joystick) {
+Input poll_input(SDL_Joystick* joystick, bool direct_touch) {
     Input input;
     static float s_touch_down_x = 0, s_touch_down_y = 0;
     static bool s_touching = false;
@@ -2044,6 +2081,48 @@ Input poll_input(SDL_Joystick* joystick) {
             }
         }
     }
+#ifdef __SWITCH__
+    // SDL's video subsystem is intentionally suspended while deko3d owns the
+    // display, so SDL_FINGER events are unavailable during native streaming.
+    // Read the handheld touchscreen from libnx in that phase and emit the same
+    // design-space tap/swipe representation as the SDL path.
+    static bool s_hid_touching = false;
+    static int s_hid_down_x = 0, s_hid_down_y = 0;
+    static int s_hid_last_x = 0, s_hid_last_y = 0;
+    if (direct_touch) {
+        HidTouchScreenState state{};
+        bool touching = hidGetTouchScreenStates(&state, 1) > 0 && state.count > 0;
+        if (touching) {
+            int x = state.touches[0].x * gfx::kWidth / 1280;
+            int y = state.touches[0].y * gfx::kHeight / 720;
+            if (!s_hid_touching) {
+                s_hid_down_x = x;
+                s_hid_down_y = y;
+            }
+            s_hid_touching = true;
+            s_hid_last_x = x;
+            s_hid_last_y = y;
+        } else if (s_hid_touching) {
+            s_hid_touching = false;
+            int dx = s_hid_last_x - s_hid_down_x;
+            int dy = s_hid_last_y - s_hid_down_y;
+            int adx = dx < 0 ? -dx : dx;
+            int ady = dy < 0 ? -dy : dy;
+            if (ady > 120 && ady > adx) {
+                input.swipe_rows = -dy / (kCardH + kGapY);
+                if (input.swipe_rows == 0) input.swipe_rows = dy < 0 ? 1 : -1;
+            } else {
+                input.touch = true;
+                input.touch_x = s_hid_last_x;
+                input.touch_y = s_hid_last_y;
+            }
+        }
+    } else {
+        s_hid_touching = false;
+    }
+#else
+    (void)direct_touch;
+#endif
     // Left analog stick also drives menu navigation: emit one directional
     // step each time the stick crosses into a deflected zone (matches the
     // one-per-press behaviour of the d-pad).
@@ -2086,6 +2165,7 @@ int main(int argc, char** argv) {
         }
     }
     plInitialize(PlServiceType_User);
+    hidInitializeTouchScreen();  // direct reads while SDL video is suspended
     if (R_SUCCEEDED(romfsInit())) Http::set_ca_bundle("romfs:/cacert.pem");
 #endif
     mkdir(kDataDir, 0755);
@@ -2122,7 +2202,11 @@ int main(int argc, char** argv) {
 
     bool running = true;
     while (running) {
-        Input input = poll_input(joystick);
+        bool direct_touch = false;
+#ifdef GNX_NATIVE_STREAM
+        direct_touch = app.deko_active;
+#endif
+        Input input = poll_input(joystick, direct_touch);
         if (input.quit) break;
 
         // A tap on the footer hint bar acts as that button press.
@@ -2553,6 +2637,14 @@ int main(int argc, char** argv) {
                     stream_state == stream::EngineState::Streaming;
 
                 if (streaming) {
+                    if (input.touch &&
+                        point_in_rect(input.touch_x, input.touch_y,
+                                      kXboxHomeRect)) {
+                        // Hold Nexus for several 125 Hz reports. A single tap
+                        // packet can be too brief for the remote guide to open.
+                        app.xbox_home_until = SDL_GetTicks() + 160;
+                        app.ui_sound.play(1.0f);
+                    }
                     // Exit combo: - and + held together.
                     bool minus_held =
                         joystick && SDL_JoystickGetButton(joystick, kBtnMinus);
@@ -2637,14 +2729,16 @@ int main(int argc, char** argv) {
             // on acquireImage instead crashed). So this loop must run fast and
             // yield 1 ms per spin, or it busy-waits at 100% CPU. Presentation
             // pacing lives entirely in pump_video, decoupled from this loop rate.
+            const bool guide_pressed = xbox_home_active(app);
+            app.engine->set_guide_button_pressed(guide_pressed);
             app.engine->pump_video();
             // Pace input at ~125 Hz. The loop spins far faster than the video
             // rate; sending a gamepad packet every spin floods the SCTP input
             // channel ("sctp sendv error 11").
             Uint32 now = SDL_GetTicks();
             if (now - app.last_input_ms >= 8) {
-                app.engine->send_gamepad(
-                    read_gamepad(joystick, app.settings.mapping));
+                app.engine->send_gamepad(read_gamepad(
+                    joystick, app.settings.mapping, guide_pressed));
                 apply_rumble(app);
                 app.last_input_ms = now;
             }

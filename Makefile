@@ -10,12 +10,12 @@ endif
 
 include $(DEVKITPRO)/libnx/switch_rules
 
-APP_TITLE   := green-nx
-APP_AUTHOR  := rmrf404
-APP_VERSION := 1.0.22
+APP_TITLE   := Light_is_Green
+APP_AUTHOR  := rmrf404 (original) / elzerdodata
+APP_VERSION := 0.2.0-pre
 APP_ICON    := icon.jpg
 
-TARGET   := green-nx
+TARGET   := Light_is_Green
 BUILD    := build-switch
 SOURCES  := src/core src/switch
 INCLUDES := src vendor deps/shim/include

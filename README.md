@@ -1,4 +1,8 @@
-# green-nx
+# Light_is_Green
+
+> **Preliminary v0.2.0-pre.** Light_is_Green is a community fork of
+> [green-nx](https://github.com/rmrf404/green-nx), originally created by
+> **rmrf404**. The original author and GPL-3.0 license remain credited.
 
 A standalone, open-source **Xbox Cloud Gaming (xCloud) client for the Nintendo
 Switch** (homebrew). Sign in with your Microsoft account and stream your Game
@@ -16,6 +20,8 @@ involved.
 - **Game library** with box-art covers, search, quality settings
 - Live **xCloud queue estimate** with an on-screen countdown while a server is
   being allocated
+- **Touchscreen Xbox Home/Guide button** in the top-right corner while
+  streaming, with **L3 + R3** retained as the physical-controller alternative
 - **Native WebRTC streaming**: ICE (Teredo), DTLS-SRTP, SCTP data channels,
   RTP video/audio, NACK/PLI recovery — implemented on-console
 - **Hardware H.264 decoding** (NVDEC via FFmpeg's NVTEGRA hwaccel) with
@@ -33,7 +39,7 @@ involved.
 
 ## Install
 
-1. Copy `green-nx.nro` to `sdmc:/switch/` on your SD card.
+1. Copy `Light_is_Green.nro` to `sdmc:/switch/` on your SD card.
 2. Launch **in title mode** — hold **R** while starting an installed game.
    (Applet mode does not have enough memory for hardware video decoding.)
 3. Sign in once with the device code shown on screen (`microsoft.com/link`).
@@ -45,7 +51,7 @@ involved.
 | --- | --- |
 | Library | Left stick / d-pad move · **A** play · **Y** search · **X** refresh · **ZL** settings · **-** sign out · **+** exit |
 | Settings | Stream quality (720p / 1080p / 1080p HQ) · button layout (positional / labels) |
-| In stream | Xbox controls mapped from the Switch pad · hold **-** + **+** to quit |
+| In stream | Xbox controls mapped from the Switch pad · tap **HOME** at top-right or press **L3 + R3** for the Xbox guide · hold **-** + **+** to quit |
 
 ## Build
 
@@ -60,7 +66,7 @@ bash deps/build-switch.sh
 docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 ```
 
-The result is `green-nx.nro`. A small desktop harness
+The result is `Light_is_Green.nro`. A small desktop harness
 (`make -f Makefile.pc`) builds the core (auth/catalog/signaling) for
 development on a PC.
 
@@ -77,7 +83,7 @@ deps/                build script + patches for the WebRTC stack
 
 ## Third-party software
 
-green-nx builds on these open-source projects:
+Light_is_Green builds on the original green-nx work and these open-source projects:
 
 | Project | License | Use |
 | --- | --- | --- |
@@ -98,7 +104,7 @@ REMB, data-channel fixes, Switch port) are in `deps/patches/`.
 
 ## Disclaimer
 
-green-nx is a **fun, experimental, non-commercial** hobby project, provided
+Light_is_Green is a **fun, experimental, non-commercial** hobby project, provided
 as-is for personal use. It is **not affiliated with, endorsed by, or supported
 by Microsoft or Nintendo** in any way. Xbox, Xbox Cloud Gaming and Game Pass
 are trademarks of Microsoft. Nintendo Switch is a trademark of Nintendo. You
@@ -108,3 +114,9 @@ implements a client for a service you already pay for.
 ## License
 
 [GPL-3.0](LICENSE)
+
+## Credits
+
+- Original project and core implementation: **rmrf404** —
+  [green-nx](https://github.com/rmrf404/green-nx)
+- Light_is_Green fork and v0.2 additions: **elzerdodata**
