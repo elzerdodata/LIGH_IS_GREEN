@@ -39,6 +39,12 @@ public:
     void start_home(const std::string& server_id);
 
     SessionState refresh_state();
+
+    // Best-effort queue estimate for a cloud title. The wait-time endpoint is
+    // advisory and may be unavailable, so callers must keep polling the
+    // session normally when no estimate is returned.
+    std::optional<int> fetch_wait_time(const std::string& title_id);
+
     SessionState state() const { return state_; }
     const std::string& error_details() const { return error_details_; }
 

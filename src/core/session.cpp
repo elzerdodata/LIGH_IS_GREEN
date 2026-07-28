@@ -214,6 +214,30 @@ SessionState GssvSession::refresh_state() {
     return state_;
 }
 
+std::optional<int> GssvSession::fetch_wait_time(
+    const std::string& title_id) {
+    if (title_id.empty()) return std::nullopt;
+    try {
+        HttpResponse response = http_.get(
+            credentials_.host + "/v1/waittime/" + title_id, headers());
+        if (!response.ok() || response.body.empty()) return std::nullopt;
+
+        json parsed = json::parse(response.body, nullptr, false);
+        if (parsed.is_discarded()) return std::nullopt;
+        const char* key = "estimatedTotalWaitTimeInSeconds";
+        if (!parsed.contains(key) || !parsed[key].is_number_integer())
+            return std::nullopt;
+
+        int seconds = parsed[key].get<int>();
+        if (seconds < 0) return std::nullopt;
+        return seconds;
+    } catch (const std::exception&) {
+        // Queue information is optional. A failed estimate must never abort
+        // the real session-state polling and WebRTC setup.
+        return std::nullopt;
+    }
+}
+
 void GssvSession::connect(const std::string& passport_token) {
     json body = {{"userToken", passport_token}};
     parse_or_throw(http_.post(url("/connect"), body.dump(), headers()),

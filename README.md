@@ -14,6 +14,8 @@ involved.
 - Microsoft **device-code sign-in** (no password typed on console); tokens
   cached on SD
 - **Game library** with box-art covers, search, quality settings
+- Live **xCloud queue estimate** with an on-screen countdown while a server is
+  being allocated
 - **Native WebRTC streaming**: ICE (Teredo), DTLS-SRTP, SCTP data channels,
   RTP video/audio, NACK/PLI recovery — implemented on-console
 - **Hardware H.264 decoding** (NVDEC via FFmpeg's NVTEGRA hwaccel) with
