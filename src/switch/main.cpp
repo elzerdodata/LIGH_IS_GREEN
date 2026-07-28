@@ -287,6 +287,7 @@ struct Settings {
     int brightness = 0;    // post-process offset: -20..+20
     int contrast = 100;    // post-process multiplier: 70..130 percent
     int saturation = 100;  // post-process multiplier: 0..150 percent
+    int gamma = 100;       // midtone curve: 50..200 percent; 100 = 1.00
     int sharpness = 0;  // luma sharpening: 0=Off, 1=Low, 2=Medium, 3=High
     int debug_hud = 0;  // 0=off, 1=on: on-screen debug overlay while streaming
 };
@@ -430,6 +431,7 @@ Settings load_settings() {
     settings.brightness = std::clamp(data.value("brightness", 0), -20, 20);
     settings.contrast = std::clamp(data.value("contrast", 100), 70, 130);
     settings.saturation = std::clamp(data.value("saturation", 100), 0, 150);
+    settings.gamma = std::clamp(data.value("gamma", 100), 50, 200);
     settings.sharpness = std::clamp(data.value("sharpness", 0), 0, 3);
     settings.debug_hud = std::clamp(data.value("debug_hud", 0), 0, 1);
     return settings;
@@ -448,6 +450,7 @@ void save_settings(const Settings& settings) {
                 {"brightness", settings.brightness},
                 {"contrast", settings.contrast},
                 {"saturation", settings.saturation},
+                {"gamma", settings.gamma},
                 {"sharpness", settings.sharpness},
                 {"debug_hud", settings.debug_hud}}.dump(2);
 }
@@ -808,9 +811,11 @@ constexpr int kMargin = 60;    // TV-safe margin on all edges
 constexpr int kFooterH = 84;
 constexpr int kFooterY = gfx::kHeight - kFooterH;
 #ifdef GNX_NATIVE_STREAM
-// Touch target and deko3d overlay share this 1920x1080 design-space rectangle.
-// At the Switch's 1280x720 handheld output it remains a comfortable 131x77 px.
-constexpr SDL_Rect kXboxHomeRect = {1692, 32, 196, 116};
+// Compact 48x48 physical-pixel touch target in handheld mode. It sits eight
+// design pixels from the two-dot control and contains only the Xbox symbol.
+constexpr SDL_Rect kXboxHomeRect = {
+    stream::kGuideButtonRect.x, stream::kGuideButtonRect.y,
+    stream::kGuideButtonRect.w, stream::kGuideButtonRect.h};
 
 bool point_in_rect(int x, int y, const SDL_Rect& rect) {
     return x >= rect.x && x < rect.x + rect.w && y >= rect.y &&
@@ -830,15 +835,26 @@ void draw_xbox_home_button(App& app) {
     const bool pressed = xbox_home_active(app);
     app.gfx.fill(kXboxHomeRect,
                  pressed ? gfx::Color{16, 124, 16, 235}
-                         : gfx::Color{10, 13, 18, 190});
-    app.gfx.frame(kXboxHomeRect, pressed ? gfx::kText : gfx::kFocus, 4);
-    SDL_Rect icon = {kXboxHomeRect.x + 18, kXboxHomeRect.y + 22, 70, 70};
-    app.gfx.fill(icon, pressed ? gfx::kText : gfx::kAccent);
-    app.gfx.text_centered("X", icon.x + icon.w / 2, icon.y + 13,
-                          gfx::FontSize::Body,
-                          pressed ? gfx::kAccent : gfx::kText);
-    app.gfx.text("HOME", kXboxHomeRect.x + 105, kXboxHomeRect.y + 39,
-                 gfx::FontSize::Small, gfx::kText);
+                         : gfx::Color{5, 12, 17, 210});
+    app.gfx.frame(kXboxHomeRect, pressed ? gfx::kText : gfx::kFocus, 3);
+
+    SDL_Renderer* renderer = app.gfx.renderer();
+    const int cx = kXboxHomeRect.x + kXboxHomeRect.w / 2;
+    const int cy = kXboxHomeRect.y + kXboxHomeRect.h / 2;
+    gfx::Color sphere = pressed ? gfx::kText : gfx::kAccent;
+    SDL_SetRenderDrawColor(renderer, sphere.r, sphere.g, sphere.b, sphere.a);
+    for (int dy = -25; dy <= 25; ++dy) {
+        int half = static_cast<int>(std::sqrt(25 * 25 - dy * dy));
+        SDL_RenderDrawLine(renderer, cx - half, cy + dy, cx + half, cy + dy);
+    }
+    gfx::Color mark = pressed ? gfx::kAccent : gfx::kText;
+    SDL_SetRenderDrawColor(renderer, mark.r, mark.g, mark.b, mark.a);
+    for (int t = -2; t <= 2; ++t) {
+        SDL_RenderDrawLine(renderer, cx - 14, cy - 15 + t, cx + 14,
+                           cy + 15 + t);
+        SDL_RenderDrawLine(renderer, cx + 14, cy - 15 + t, cx - 14,
+                           cy + 15 + t);
+    }
 }
 #endif
 
@@ -897,15 +913,16 @@ void draw_focus_frames(App& app, const SDL_Rect& r) {
                   {gfx::kFocus.r, gfx::kFocus.g, gfx::kFocus.b, 38}, 8);
 }
 
-// Header: 44x44 accent square with "nx" + wordmark, top-left inside margins.
+// v0.4 header: restrained brand bar with the title and release badge.
 void draw_header(App& app) {
-    SDL_Rect logo = {kMargin, 48, 44, 44};
-    app.gfx.fill(logo, gfx::kAccent);
-    app.gfx.text_centered("nx", logo.x + 22, logo.y + 6, gfx::FontSize::Small,
-                          gfx::kText);
-    app.gfx.text("Light_is_Green", logo.x + 64, logo.y + 4,
-                 gfx::FontSize::Note,
+    app.gfx.fill({kMargin, 42, 8, 58}, gfx::kFocus);
+    app.gfx.text("Light is Green", kMargin + 28, 44, gfx::FontSize::Body,
                  gfx::kText);
+    SDL_Rect version = {kMargin + 306, 49, 92, 40};
+    app.gfx.fill(version, gfx::kSurface);
+    app.gfx.frame(version, gfx::kChipEdge, 2);
+    app.gfx.text_centered("v0.4", version.x + version.w / 2, version.y + 4,
+                          gfx::FontSize::Small, gfx::kFocus);
 }
 
 // Fallback cover: per-title dark hue + big translucent initials, so a grid
@@ -945,7 +962,7 @@ void draw_cover_fallback(App& app, const Game& game, const SDL_Rect& rect,
 void draw_splash(App& app) {
     Uint32 elapsed = SDL_GetTicks() - app.scene_started;
     int logo_w = static_cast<int>(120 * std::min(elapsed / 300.0f, 1.0f));
-    int word_w = app.gfx.text_width("Light_is_Green", gfx::FontSize::Huge);
+    int word_w = app.gfx.text_width("Light is Green", gfx::FontSize::Huge);
     int row_w = 120 + 36 + word_w;
     int x0 = (gfx::kWidth - row_w) / 2;
     if (logo_w > 0) {
@@ -955,7 +972,7 @@ void draw_splash(App& app) {
                                   gfx::kText);
     }
     if (elapsed > 300) {
-        app.gfx.text("Light_is_Green", x0 + 156, 408, gfx::FontSize::Huge,
+        app.gfx.text("Light is Green", x0 + 156, 408, gfx::FontSize::Huge,
                      gfx::kText);
         app.gfx.text_centered("Xbox Cloud Gaming for Nintendo Switch",
                               gfx::kWidth / 2, 548, gfx::FontSize::Note,
@@ -1097,6 +1114,7 @@ stream::QuickMenuState quick_menu_state(const App& app) {
     state.brightness = app.settings.brightness;
     state.contrast = app.settings.contrast;
     state.saturation = app.settings.saturation;
+    state.gamma = app.settings.gamma;
     state.sharpness = app.settings.sharpness;
     return state;
 }
@@ -1107,7 +1125,7 @@ void push_quick_menu_state(App& app, bool persist) {
 }
 
 // Returns true when the touch belongs to the quick menu. A tap outside closes
-// an open panel but remains available to the independent HOME touch target.
+// an open panel but remains available to the independent Xbox touch target.
 bool handle_quick_menu_touch(App& app, int x, int y) {
     if (point_in_rect(x, y, stream::kQuickToggleRect)) {
         app.quick_menu_open = !app.quick_menu_open;
@@ -1132,6 +1150,7 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
         app.settings.brightness = 0;
         app.settings.contrast = 100;
         app.settings.saturation = 100;
+        app.settings.gamma = 100;
         app.settings.sharpness = 0;
         changed = true;
     } else {
@@ -1153,6 +1172,9 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
             else if (row == stream::QuickSaturation)
                 app.settings.saturation = std::clamp(
                     app.settings.saturation + direction * 10, 0, 150);
+            else if (row == stream::QuickGamma)
+                app.settings.gamma = std::clamp(
+                    app.settings.gamma + direction * 5, 50, 200);
             else
                 app.settings.sharpness =
                     (app.settings.sharpness + direction + 4) % 4;
@@ -1287,6 +1309,12 @@ void draw_library(App& app) {
                      gfx::kText);
     }
 
+    // A translucent stage groups navigation and covers while allowing the new
+    // illustrated v0.4 background to remain visible around the edges.
+    SDL_Rect stage = {120, 108, gfx::kWidth - 240, kFooterY - 132};
+    app.gfx.fill(stage, {4, 10, 14, 96});
+    app.gfx.frame(stage, {42, 74, 72, 150}, 2);
+
     // Consoles tab: one card per linked Xbox — pick one to stream.
     auto draw_console_cards = [&app]() {
         for (int i = 0; i < static_cast<int>(app.consoles.size()) && i < 3;
@@ -1326,9 +1354,14 @@ void draw_library(App& app) {
     int tabs = app.consoles.empty() ? 3 : kTabCount;
     for (int t = 0; t < tabs; ++t) {
         bool active = static_cast<int>(app.tab) == t;
-        int w = app.gfx.text(kTabNames[t], tx, 124, gfx::FontSize::Body,
-                             active ? gfx::kText : gfx::kFaint);
-        if (active) app.gfx.fill({tx, 176, w, 5}, gfx::kAccent);
+        int w = app.gfx.text_width(kTabNames[t], gfx::FontSize::Body);
+        if (active) {
+            SDL_Rect pill = {tx - 18, 116, w + 36, 60};
+            app.gfx.fill(pill, {16, 124, 16, 92});
+            app.gfx.frame(pill, {57, 224, 103, 150}, 2);
+        }
+        app.gfx.text(kTabNames[t], tx, 124, gfx::FontSize::Body,
+                     active ? gfx::kText : gfx::kFaint);
         tx += w + 44;
     }
     draw_chip(app, "R", tx, 128, false);
@@ -1623,6 +1656,12 @@ void draw_settings(App& app) {
         {"Brightness", signed_value(app.settings.brightness)},
         {"Contrast", std::to_string(app.settings.contrast) + "%"},
         {"Saturation", std::to_string(app.settings.saturation) + "%"},
+        {"Gamma", [&app] {
+             char value[16];
+             std::snprintf(value, sizeof(value), "%.2f",
+                           app.settings.gamma / 100.0f);
+             return std::string(value);
+         }()},
         {"Sharpness", kSharpnessLabels[app.settings.sharpness]},
     };
     if (!app.consoles.empty())
@@ -1732,10 +1771,14 @@ void draw_settings(App& app) {
             line2 = "grayscale, while higher values make colors stronger.";
             break;
         case 10:
+            line1 = "Adjusts midtones without moving the darkest blacks or";
+            line2 = "brightest whites. 1.00 is neutral; higher is brighter.";
+            break;
+        case 11:
             line1 = "Sharpens the streamed image, which is a touch soft at";
             line2 = "cloud bitrates. Low is subtle; High can ring on edges.";
             break;
-        case 11:
+        case 12:
             line1 = "Where Play launches games: xCloud (cloud servers) or";
             line2 = "remote play from your own console over your network.";
             break;
@@ -2069,7 +2112,7 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
     // Teach the persistent deko3d overlays before the first video frame.
     app.gfx.text_centered(
         "In the stream: tap  ..  for picture controls   |   "
-        "tap HOME or press L3 + R3 for the Xbox guide",
+        "tap the Xbox symbol or press L3 + R3 for the Xbox guide",
         gfx::kWidth / 2, 920, gfx::FontSize::Small, gfx::kTextDim);
 
     // Source/quality chip, top right.
@@ -2078,7 +2121,8 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
             ? (app.consoles.empty() || app.consoles[0].name.empty()
                    ? std::string("Your Xbox")
                    : app.consoles[0].name)
-            : std::string("xCloud · ") + kQualityLabels[app.settings.quality];
+            : std::string("xCloud · ") +
+                  kQualityLabels[app.settings.quality];
     int qw = app.gfx.text_width(quality, gfx::FontSize::Small) + 40;
     app.gfx.fill({gfx::kWidth - kMargin - qw, 48, qw, 44},
                  {gfx::kSurface.r, gfx::kSurface.g, gfx::kSurface.b, 217});
@@ -2607,10 +2651,11 @@ int main(int argc, char** argv) {
 
             case Scene::Settings: {
                 // Row order: quality, mapping, vibration, region, language,
-                // volume, pacing, brightness, contrast, saturation, sharpness,
+                // volume, pacing, brightness, contrast, saturation, gamma,
+                // sharpness,
                 // [source when a console is linked], Debug HUD, accounts,
                 // sign out.
-                int hud_row = app.consoles.empty() ? 11 : 12;
+                int hud_row = app.consoles.empty() ? 12 : 13;
                 int accounts_row = hud_row + 1;
                 int signout_row = hud_row + 2;
                 if (input.up)
@@ -2688,12 +2733,15 @@ int main(int argc, char** argv) {
                         app.settings.saturation = std::clamp(
                             app.settings.saturation + direction * 10, 0, 150);
                     else if (app.settings_cursor == 10)
+                        app.settings.gamma = std::clamp(
+                            app.settings.gamma + direction * 5, 50, 200);
+                    else if (app.settings_cursor == 11)
                         app.settings.sharpness =
                             (app.settings.sharpness + direction + 4) % 4;
                     // "Preferred source" only exists with a linked console;
                     // Debug HUD sits right after it either way. Accounts and
                     // Sign out are A-rows, handled above.
-                    else if (!app.consoles.empty() && app.settings_cursor == 11)
+                    else if (!app.consoles.empty() && app.settings_cursor == 12)
                         app.settings.source =
                             (app.settings.source + direction + 3) % 3;
                     else if (app.settings_cursor == hud_row)

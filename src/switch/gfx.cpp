@@ -46,9 +46,7 @@ bool Gfx::init() {
 }
 
 void Gfx::shutdown() {
-    for (auto& [key, cached] : text_cache_)
-        SDL_DestroyTexture(cached.texture);
-    text_cache_.clear();
+    destroy_renderer_textures();
     for (TTF_Font*& handle : fonts_)
         if (handle) TTF_CloseFont(handle), handle = nullptr;
     if (renderer_) SDL_DestroyRenderer(renderer_);
@@ -59,7 +57,7 @@ void Gfx::shutdown() {
 }
 
 bool Gfx::create_window_renderer() {
-    window_ = SDL_CreateWindow("Light_is_Green", SDL_WINDOWPOS_CENTERED,
+    window_ = SDL_CreateWindow("Light is Green", SDL_WINDOWPOS_CENTERED,
                                SDL_WINDOWPOS_CENTERED, kWidth, kHeight,
                                SDL_WINDOW_SHOWN);
     if (!window_) return false;
@@ -68,6 +66,12 @@ bool Gfx::create_window_renderer() {
     if (!renderer_) return false;
     SDL_RenderSetLogicalSize(renderer_, kWidth, kHeight);
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+#ifdef __SWITCH__
+    background_ = IMG_LoadTexture(renderer_, "romfs:/ui/light_is_green_bg.png");
+#else
+    background_ = IMG_LoadTexture(renderer_, "romfs/ui/light_is_green_bg.png");
+#endif
+    if (background_) SDL_SetTextureBlendMode(background_, SDL_BLENDMODE_BLEND);
     return true;
 }
 
@@ -80,9 +84,7 @@ bool Gfx::resume() {
 }
 
 void Gfx::suspend() {
-    for (auto& [key, cached] : text_cache_)
-        SDL_DestroyTexture(cached.texture);
-    text_cache_.clear();
+    destroy_renderer_textures();
     if (renderer_) SDL_DestroyRenderer(renderer_), renderer_ = nullptr;
     if (window_) SDL_DestroyWindow(window_), window_ = nullptr;
     // Destroying the window is not enough: SDL's mesa/EGL backend keeps the
@@ -99,6 +101,12 @@ TTF_Font* Gfx::font(FontSize size) {
 void Gfx::begin_frame() {
     SDL_SetRenderDrawColor(renderer_, kBg.r, kBg.g, kBg.b, 255);
     SDL_RenderClear(renderer_);
+    if (background_) {
+        SDL_Rect full = {0, 0, kWidth, kHeight};
+        SDL_RenderCopy(renderer_, background_, nullptr, &full);
+        // A dark scrim keeps cover art and small text readable in handheld mode.
+        fill(full, {2, 7, 10, 148});
+    }
 }
 
 void Gfx::end_frame() {
@@ -203,6 +211,13 @@ void Gfx::trim_text_cache() {
             ++it;
         }
     }
+}
+
+void Gfx::destroy_renderer_textures() {
+    for (auto& [key, cached] : text_cache_)
+        SDL_DestroyTexture(cached.texture);
+    text_cache_.clear();
+    if (background_) SDL_DestroyTexture(background_), background_ = nullptr;
 }
 
 }  // namespace gnx::gfx

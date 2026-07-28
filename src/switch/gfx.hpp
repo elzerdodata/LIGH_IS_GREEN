@@ -17,12 +17,12 @@ struct Color {
 };
 
 // Palette — "OLED premium" (docs-design/green-nx-redesign.dc.html, card 1a)
-constexpr Color kBg{10, 13, 18};          // #0A0D12 global background
-constexpr Color kBar{14, 17, 24};         // #0E1118 footer / header bands
-constexpr Color kSurface{22, 27, 36};     // #161B24 cards, rows, name plates
-constexpr Color kSurfaceHi{33, 40, 54};   // #212836 focused surface / chips
-constexpr Color kAccent{16, 124, 16};     // #107C10 brand, active tabs, values
-constexpr Color kFocus{47, 191, 47};      // #2FBF2F ONLY for the focus system
+constexpr Color kBg{4, 9, 13};              // v0.4 fallback background
+constexpr Color kBar{6, 12, 18, 236};        // header/footer glass
+constexpr Color kSurface{10, 20, 27, 224};   // translucent cards and rows
+constexpr Color kSurfaceHi{18, 38, 43, 238}; // focused glass surface
+constexpr Color kAccent{16, 124, 16};         // Xbox green
+constexpr Color kFocus{57, 224, 103};         // emerald focus / glow
 constexpr Color kText{240, 243, 248};     // #F0F3F8 primary text
 constexpr Color kTextDim{152, 162, 179};  // #98A2B3 secondary text, hints
 constexpr Color kWarn{240, 180, 60};      // #F0B43C favorites, notices
@@ -70,9 +70,11 @@ private:
     SDL_Texture* render_text(const std::string& utf8, FontSize size,
                              Color color, int* width, int* height);
     bool create_window_renderer();  // window + renderer only (no subsystem init)
+    void destroy_renderer_textures();
 
     SDL_Window* window_ = nullptr;
     SDL_Renderer* renderer_ = nullptr;
+    SDL_Texture* background_ = nullptr;
     TTF_Font* fonts_[5] = {};
     void* font_data_ = nullptr;  // shared system font blob (not owned)
 

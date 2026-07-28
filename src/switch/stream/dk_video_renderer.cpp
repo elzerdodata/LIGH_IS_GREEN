@@ -59,22 +59,21 @@ constexpr Vertex kHudQuad[] = {
     {{-0.40f, +0.98f, 0.0f}, {1.0f, 0.0f}},
 };
 
-// Top-right overlay matching main.cpp's 1692,32,196,116 touch target in the
-// shared 1920x1080 design space. Clip-space geometry scales with docked and
-// handheld output while the touch coordinates stay in the same design space.
+// Compact Xbox symbol beside the two-dot handle: 1676,48,72,72 in the shared
+// 1920x1080 design space. The eight-pixel gap reads as one control cluster.
 constexpr Vertex kGuideQuad[] = {
-    {{+0.7625f, +0.9407f, 0.0f}, {0.0f, 0.0f}},
-    {{+0.7625f, +0.7259f, 0.0f}, {0.0f, 1.0f}},
-    {{+0.9667f, +0.7259f, 0.0f}, {1.0f, 1.0f}},
-    {{+0.9667f, +0.9407f, 0.0f}, {1.0f, 0.0f}},
+    {{+0.7458f, +0.9111f, 0.0f}, {0.0f, 0.0f}},
+    {{+0.7458f, +0.7778f, 0.0f}, {0.0f, 1.0f}},
+    {{+0.8208f, +0.7778f, 0.0f}, {1.0f, 1.0f}},
+    {{+0.8208f, +0.9111f, 0.0f}, {1.0f, 0.0f}},
 };
 
-// Transparent 512x640 quick-menu texture in shared 1920x1080 design space.
+// Transparent 512x720 quick-menu texture in shared 1920x1080 design space.
 // It contains the small handle at the top-right and expands left/down.
 constexpr Vertex kQuickQuad[] = {
     {{+0.2083f, +0.9111f, 0.0f}, {0.0f, 0.0f}},
-    {{+0.2083f, -0.2741f, 0.0f}, {0.0f, 1.0f}},
-    {{+0.7417f, -0.2741f, 0.0f}, {1.0f, 1.0f}},
+    {{+0.2083f, -0.4222f, 0.0f}, {0.0f, 1.0f}},
+    {{+0.7417f, -0.4222f, 0.0f}, {1.0f, 1.0f}},
     {{+0.7417f, +0.9111f, 0.0f}, {1.0f, 0.0f}},
 };
 
@@ -86,7 +85,7 @@ struct Transformation {
     alignas(16) float offset[4];
     alignas(16) float uv_data[4];
     alignas(16) float sharp_data[4];  // x=strength, y=overshoot allowance
-    alignas(16) float picture_data[4];  // brightness, contrast, saturation
+    alignas(16) float picture_data[4];  // brightness, contrast, saturation, gamma
 };
 static_assert(sizeof(Transformation) == 112, "std140 Transformation");
 
@@ -129,6 +128,7 @@ void DkVideoRenderer::set_quick_menu_state(const QuickMenuState& state) {
         next.brightness != quick_state_.brightness ||
         next.contrast != quick_state_.contrast ||
         next.saturation != quick_state_.saturation ||
+        next.gamma != quick_state_.gamma ||
         next.sharpness != quick_state_.sharpness;
     bool menu_changed =
         next.open != quick_state_.open ||
@@ -514,11 +514,12 @@ void DkVideoRenderer::update_transform(AVFrame* frame) {
     t.picture_data[0] = static_cast<float>(quick_state_.brightness) / 100.0f;
     t.picture_data[1] = static_cast<float>(quick_state_.contrast) / 100.0f;
     t.picture_data[2] = static_cast<float>(quick_state_.saturation) / 100.0f;
+    t.picture_data[3] = static_cast<float>(quick_state_.gamma) / 100.0f;
     std::memcpy(static_cast<uint8_t*>(data_cpu_) + kUniformOff, &t, sizeof(t));
-    logf("deko3d: color=%d full=%d crop=%.4fx%.4f picture=%+d/%d/%d sharp=%d",
+    logf("deko3d: color=%d full=%d crop=%.4fx%.4f picture=%+d/%d/%d gamma=%.2f sharp=%d",
          space, (int)full, t.uv_data[2], t.uv_data[3],
          quick_state_.brightness, quick_state_.contrast,
-         quick_state_.saturation, quick_state_.sharpness);
+         quick_state_.saturation, t.picture_data[3], quick_state_.sharpness);
 }
 
 DkVideoRenderer::FrameMapping* DkVideoRenderer::map_frame(AVFrame* frame,
@@ -603,41 +604,6 @@ void DkVideoRenderer::blit_text(const char* s, int x, int y) {
     SDL_FreeSurface(surf);
 }
 
-void DkVideoRenderer::blit_guide_text(const char* s, int x, int y) {
-    if (!hud_font_ || !s || !*s) return;
-    SDL_Color white{255, 255, 255, 255};
-    SDL_Surface* surf = TTF_RenderUTF8_Blended(hud_font_, s, white);
-    if (!surf) return;
-    SDL_LockSurface(surf);
-    int bpp = surf->format->BytesPerPixel;
-    for (int j = 0; j < surf->h; ++j) {
-        int ty = y + j;
-        if (ty < 0 || ty >= static_cast<int>(kGuideTexH)) continue;
-        auto* rowp = static_cast<uint8_t*>(surf->pixels) + j * surf->pitch;
-        for (int i = 0; i < surf->w; ++i) {
-            int tx = x + i;
-            if (tx < 0 || tx >= static_cast<int>(kGuideTexW)) continue;
-            uint32_t p = 0;
-            std::memcpy(&p, rowp + i * bpp, bpp < 4 ? bpp : 4);
-            uint8_t r, g, b, a;
-            SDL_GetRGBA(p, surf->format, &r, &g, &b, &a);
-            if (a == 0) continue;
-            uint32_t& dst = guide_pixels_[ty * kGuideTexW + tx];
-            uint8_t dr = dst & 0xFF, dg = (dst >> 8) & 0xFF,
-                    db = (dst >> 16) & 0xFF, da = (dst >> 24) & 0xFF;
-            float af = a / 255.0f, ia = 1.0f - af;
-            uint8_t nr = static_cast<uint8_t>(r * af + dr * ia);
-            uint8_t ng = static_cast<uint8_t>(g * af + dg * ia);
-            uint8_t nb = static_cast<uint8_t>(b * af + db * ia);
-            uint8_t na = static_cast<uint8_t>(a + da * ia);
-            dst = nr | (ng << 8) | (nb << 16) |
-                  (static_cast<uint32_t>(na) << 24);
-        }
-    }
-    SDL_UnlockSurface(surf);
-    SDL_FreeSurface(surf);
-}
-
 void DkVideoRenderer::blit_quick_text(const char* s, int x, int y) {
     if (!hud_font_ || !s || !*s) return;
     SDL_Color white{255, 255, 255, 255};
@@ -689,8 +655,7 @@ void DkVideoRenderer::rasterize_guide() {
                                          : rgba(255, 255, 255, 255);
     std::fill(guide_pixels_.begin(), guide_pixels_.end(), 0);
 
-    // Four transparent pixels around the panel soften the screen edge. The
-    // remaining panel, border, circular Xbox badge and X are CPU-rasterized.
+    // Compact glass tile, circular Xbox badge and high-contrast X.
     for (int y = 4; y < static_cast<int>(kGuideTexH) - 4; ++y) {
         for (int x = 4; x < static_cast<int>(kGuideTexW) - 4; ++x) {
             bool border = x < 8 || x >= static_cast<int>(kGuideTexW) - 8 ||
@@ -698,7 +663,7 @@ void DkVideoRenderer::rasterize_guide() {
             guide_pixels_[y * kGuideTexW + x] = border ? edge : panel;
         }
     }
-    constexpr int cx = 48, cy = 56, radius = 30;
+    constexpr int cx = 48, cy = 48, radius = 32;
     for (int y = cy - radius; y <= cy + radius; ++y) {
         for (int x = cx - radius; x <= cx + radius; ++x) {
             int dx = x - cx, dy = y - cy;
@@ -707,14 +672,13 @@ void DkVideoRenderer::rasterize_guide() {
         }
     }
     // A high-contrast X inside the circular Xbox badge.
-    for (int y = cy - 17; y <= cy + 17; ++y) {
-        for (int x = cx - 17; x <= cx + 17; ++x) {
+    for (int y = cy - 18; y <= cy + 18; ++y) {
+        for (int x = cx - 18; x <= cx + 18; ++x) {
             int dx = x - cx, dy = y - cy;
             if (std::abs(std::abs(dx) - std::abs(dy)) <= 2)
                 guide_pixels_[y * kGuideTexW + x] = mark;
         }
     }
-    blit_guide_text("HOME", 92, 38);
     if (guide_cpu_)
         std::memcpy(guide_cpu_, guide_pixels_.data(), guide_pixels_.size() * 4);
     guide_rasterized_pressed_ = guide_pressed_;
@@ -759,10 +723,10 @@ void DkVideoRenderer::rasterize_quick_menu() {
     };
 
     const uint32_t transparent = 0;
-    const uint32_t panel = rgba(10, 13, 18, 232);
-    const uint32_t surface = rgba(24, 30, 40, 224);
-    const uint32_t edge = rgba(73, 87, 105, 255);
-    const uint32_t accent = rgba(47, 191, 47, 255);
+    const uint32_t panel = rgba(5, 12, 17, 240);
+    const uint32_t surface = rgba(12, 25, 30, 226);
+    const uint32_t edge = rgba(42, 74, 72, 255);
+    const uint32_t accent = rgba(57, 224, 103, 255);
     const uint32_t active = rgba(16, 124, 16, 240);
     const uint32_t text = rgba(255, 255, 255, 255);
 
@@ -782,13 +746,14 @@ void DkVideoRenderer::rasterize_quick_menu() {
         blit_quick_text("IMAGE & STATS", menu.x + 20, menu.y + 16);
 
         const char* labels[kQuickRowCount] = {
-            "Performance", "Brightness", "Contrast", "Saturation", "Sharpness"};
+            "Performance", "Brightness", "Contrast", "Saturation", "Gamma",
+            "Sharpness"};
         const char* sharp_labels[4] = {"Off", "Low", "Medium", "High"};
 
         for (int row = 0; row < kQuickRowCount; ++row) {
             QuickRect rr = local(quick_row_rect(row));
             fill(rr.x, rr.y, rr.w, rr.h, surface);
-            frame(rr.x, rr.y, rr.w, rr.h, 2, edge);
+            fill(rr.x + 14, rr.y + rr.h - 1, rr.w - 28, 1, edge);
             blit_quick_text(labels[row], rr.x + 14, rr.y + 12);
 
             if (row == QuickPerformance) {
@@ -817,6 +782,9 @@ void DkVideoRenderer::rasterize_quick_menu() {
                 std::snprintf(value, sizeof(value), "%d%%", quick_state_.contrast);
             else if (row == QuickSaturation)
                 std::snprintf(value, sizeof(value), "%d%%", quick_state_.saturation);
+            else if (row == QuickGamma)
+                std::snprintf(value, sizeof(value), "%.2f",
+                              quick_state_.gamma / 100.0f);
             else
                 std::snprintf(value, sizeof(value), "%s",
                               sharp_labels[quick_state_.sharpness]);
@@ -824,7 +792,7 @@ void DkVideoRenderer::rasterize_quick_menu() {
         }
 
         QuickRect reset = local(kQuickResetRect);
-        fill(reset.x, reset.y, reset.w, reset.h, active);
+        fill(reset.x, reset.y, reset.w, reset.h, surface);
         frame(reset.x, reset.y, reset.w, reset.h, 2, accent);
         blit_quick_text("RESET IMAGE", reset.x + 55, reset.y + 10);
     }

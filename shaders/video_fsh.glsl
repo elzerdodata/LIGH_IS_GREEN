@@ -15,7 +15,7 @@ layout (std140, binding = 0) uniform Transformation
     vec3 offset;
     vec4 uv_data;
     vec4 sharp_data;
-    // x=brightness offset, y=contrast multiplier, z=saturation multiplier.
+    // x=brightness, y=contrast, z=saturation, w=gamma (1.0 is neutral).
     vec4 picture_data;
 } u;
 
@@ -55,6 +55,10 @@ void main()
     float luminance = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
     rgb = mix(vec3(luminance), rgb, u.picture_data.z);
     rgb += vec3(u.picture_data.x);
+    // User-facing gamma follows display convention: values above 1.0 lift
+    // midtones, values below 1.0 deepen them while preserving black and white.
+    rgb = pow(clamp(rgb, 0.0, 1.0),
+              vec3(1.0 / max(u.picture_data.w, 0.01)));
 
     outColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
 }

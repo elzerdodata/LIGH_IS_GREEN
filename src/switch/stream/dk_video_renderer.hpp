@@ -128,7 +128,6 @@ private:
     void rasterize_hud();              // compose panel bg + text into hud_cpu_
     void blit_text(const char* s, int x, int y);  // white text onto hud_pixels_
     void rasterize_guide();            // compose Guide/Home touch button
-    void blit_guide_text(const char* s, int x, int y);
     void rasterize_quick_menu();       // compose dots + expanded picture panel
     void blit_quick_text(const char* s, int x, int y);
 
@@ -202,8 +201,10 @@ private:
 
     // Always-on top-right Xbox Guide/Home touch overlay. It has its own RGBA
     // texture so the optional debug HUD can remain independently disabled.
-    static constexpr uint32_t kGuideTexW = 192;  // RGBA pitch = 768, aligned
-    static constexpr uint32_t kGuideTexH = 112;
+    // 96 keeps the RGBA pitch aligned; the square texture is scaled into the
+    // 72x72 design-space touch target.
+    static constexpr uint32_t kGuideTexW = 96;
+    static constexpr uint32_t kGuideTexH = 96;
     dk::UniqueMemBlock guide_memblock_;
     dk::Image guide_image_;
     dk::ImageDescriptor guide_desc_;
@@ -216,7 +217,7 @@ private:
     // One transparent RGBA texture covers both shapes and costs one overlay
     // draw call regardless of whether the panel is open.
     static constexpr uint32_t kQuickTexW = 512;
-    static constexpr uint32_t kQuickTexH = 640;
+    static constexpr uint32_t kQuickTexH = 720;
     dk::UniqueMemBlock quick_memblock_;
     dk::Image quick_image_;
     dk::ImageDescriptor quick_desc_;
