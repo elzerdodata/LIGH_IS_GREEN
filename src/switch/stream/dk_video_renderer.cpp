@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 
@@ -33,6 +34,7 @@ constexpr uint32_t kSamplerOff = 0x100;   // sampler descriptor set
 constexpr uint32_t kImageOff = 0x200;     // image descriptor set (luma, chroma)
 constexpr uint32_t kVtxOff = 0x300;       // quad vertex buffer
 constexpr uint32_t kHudVtxOff = 0x380;    // HUD overlay corner quad
+constexpr uint32_t kGuideVtxOff = 0x400;  // top-right Guide/Home touch button
 
 struct Vertex {
     float position[3];
@@ -54,6 +56,16 @@ constexpr Vertex kHudQuad[] = {
     {{-0.98f, +0.66f, 0.0f}, {0.0f, 1.0f}},
     {{-0.40f, +0.66f, 0.0f}, {1.0f, 1.0f}},
     {{-0.40f, +0.98f, 0.0f}, {1.0f, 0.0f}},
+};
+
+// Top-right overlay matching main.cpp's 1692,32,196,116 touch target in the
+// shared 1920x1080 design space. Clip-space geometry scales with docked and
+// handheld output while the touch coordinates stay in the same design space.
+constexpr Vertex kGuideQuad[] = {
+    {{+0.7625f, +0.9407f, 0.0f}, {0.0f, 0.0f}},
+    {{+0.7625f, +0.7259f, 0.0f}, {0.0f, 1.0f}},
+    {{+0.9667f, +0.7259f, 0.0f}, {1.0f, 1.0f}},
+    {{+0.9667f, +0.9407f, 0.0f}, {1.0f, 0.0f}},
 };
 
 // std140 layout for: mat3 yuvmat; vec3 offset; vec4 uv_data;
@@ -233,6 +245,8 @@ bool DkVideoRenderer::init() {
     std::memcpy(static_cast<uint8_t*>(data_cpu_) + kVtxOff, kQuad, sizeof(kQuad));
     std::memcpy(static_cast<uint8_t*>(data_cpu_) + kHudVtxOff, kHudQuad,
                 sizeof(kHudQuad));
+    std::memcpy(static_cast<uint8_t*>(data_cpu_) + kGuideVtxOff, kGuideQuad,
+                sizeof(kGuideQuad));
 
     // Sampler descriptor (linear, clamp to edge). Written into the descriptor
     // set from the command buffer each frame (canonical deko3d pattern).
@@ -274,6 +288,30 @@ bool DkVideoRenderer::init() {
         hud_image_.initialize(hud_layout, hud_memblock_, 0);
         hud_desc_.initialize(hud_image_);
     }
+
+    // Always-on Guide/Home overlay texture. It is separate from the optional
+    // debug HUD so disabling diagnostics never removes the touch control.
+    guide_pixels_.assign(kGuideTexW * kGuideTexH, 0);
+    {
+        uint32_t stride = kGuideTexW * 4;
+        dk::ImageLayout guide_layout;
+        dk::ImageLayoutMaker{dev_}
+            .setFlags(DkImageFlags_UsageLoadStore | DkImageFlags_Usage2DEngine |
+                      DkImageFlags_PitchLinear)
+            .setFormat(DkImageFormat_RGBA8_Unorm)
+            .setDimensions(kGuideTexW, kGuideTexH)
+            .setPitchStride(stride)
+            .initialize(guide_layout);
+        uint32_t sz = (guide_layout.getSize() + 0xFFF) & ~0xFFFu;
+        guide_memblock_ = dk::MemBlockMaker{dev_, sz}
+                              .setFlags(DkMemBlockFlags_CpuUncached |
+                                        DkMemBlockFlags_GpuCached |
+                                        DkMemBlockFlags_Image)
+                              .create();
+        guide_cpu_ = guide_memblock_.getCpuAddr();
+        guide_image_.initialize(guide_layout, guide_memblock_, 0);
+        guide_desc_.initialize(guide_image_);
+    }
     // System shared font (pl was initialized in main). A null font falls back to
     // a panel with no text -- still proves the overlay, and never crashes.
     if (!hud_font_) {
@@ -284,6 +322,7 @@ bool DkVideoRenderer::init() {
         }
         if (!hud_font_) logf("deko3d: HUD font unavailable (panel only)");
     }
+    rasterize_guide();
 
     initialized_ = true;
     logf("deko3d: initialized (fb %ux%u, %u framebuffers)", fb_width_, fb_height_,
@@ -308,6 +347,9 @@ void DkVideoRenderer::shutdown() {
     fb_memblock_ = nullptr;
     hud_memblock_ = nullptr;
     hud_cpu_ = nullptr;
+    guide_memblock_ = nullptr;
+    guide_cpu_ = nullptr;
+    guide_pixels_.clear();
     dev_ = nullptr;
     initialized_ = false;
     frame_w_ = frame_h_ = 0;
@@ -498,6 +540,88 @@ void DkVideoRenderer::blit_text(const char* s, int x, int y) {
     SDL_FreeSurface(surf);
 }
 
+void DkVideoRenderer::blit_guide_text(const char* s, int x, int y) {
+    if (!hud_font_ || !s || !*s) return;
+    SDL_Color white{255, 255, 255, 255};
+    SDL_Surface* surf = TTF_RenderUTF8_Blended(hud_font_, s, white);
+    if (!surf) return;
+    SDL_LockSurface(surf);
+    int bpp = surf->format->BytesPerPixel;
+    for (int j = 0; j < surf->h; ++j) {
+        int ty = y + j;
+        if (ty < 0 || ty >= static_cast<int>(kGuideTexH)) continue;
+        auto* rowp = static_cast<uint8_t*>(surf->pixels) + j * surf->pitch;
+        for (int i = 0; i < surf->w; ++i) {
+            int tx = x + i;
+            if (tx < 0 || tx >= static_cast<int>(kGuideTexW)) continue;
+            uint32_t p = 0;
+            std::memcpy(&p, rowp + i * bpp, bpp < 4 ? bpp : 4);
+            uint8_t r, g, b, a;
+            SDL_GetRGBA(p, surf->format, &r, &g, &b, &a);
+            if (a == 0) continue;
+            uint32_t& dst = guide_pixels_[ty * kGuideTexW + tx];
+            uint8_t dr = dst & 0xFF, dg = (dst >> 8) & 0xFF,
+                    db = (dst >> 16) & 0xFF, da = (dst >> 24) & 0xFF;
+            float af = a / 255.0f, ia = 1.0f - af;
+            uint8_t nr = static_cast<uint8_t>(r * af + dr * ia);
+            uint8_t ng = static_cast<uint8_t>(g * af + dg * ia);
+            uint8_t nb = static_cast<uint8_t>(b * af + db * ia);
+            uint8_t na = static_cast<uint8_t>(a + da * ia);
+            dst = nr | (ng << 8) | (nb << 16) |
+                  (static_cast<uint32_t>(na) << 24);
+        }
+    }
+    SDL_UnlockSurface(surf);
+    SDL_FreeSurface(surf);
+}
+
+void DkVideoRenderer::rasterize_guide() {
+    auto rgba = [](uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+        return static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
+               (static_cast<uint32_t>(b) << 16) |
+               (static_cast<uint32_t>(a) << 24);
+    };
+    const uint32_t panel = guide_pressed_ ? rgba(16, 124, 16, 235)
+                                          : rgba(10, 13, 18, 190);
+    const uint32_t edge = guide_pressed_ ? rgba(255, 255, 255, 255)
+                                         : rgba(47, 191, 47, 255);
+    const uint32_t icon = guide_pressed_ ? rgba(255, 255, 255, 255)
+                                         : rgba(16, 124, 16, 255);
+    const uint32_t mark = guide_pressed_ ? rgba(16, 124, 16, 255)
+                                         : rgba(255, 255, 255, 255);
+    std::fill(guide_pixels_.begin(), guide_pixels_.end(), 0);
+
+    // Four transparent pixels around the panel soften the screen edge. The
+    // remaining panel, border, circular Xbox badge and X are CPU-rasterized.
+    for (int y = 4; y < static_cast<int>(kGuideTexH) - 4; ++y) {
+        for (int x = 4; x < static_cast<int>(kGuideTexW) - 4; ++x) {
+            bool border = x < 8 || x >= static_cast<int>(kGuideTexW) - 8 ||
+                          y < 8 || y >= static_cast<int>(kGuideTexH) - 8;
+            guide_pixels_[y * kGuideTexW + x] = border ? edge : panel;
+        }
+    }
+    constexpr int cx = 48, cy = 56, radius = 30;
+    for (int y = cy - radius; y <= cy + radius; ++y) {
+        for (int x = cx - radius; x <= cx + radius; ++x) {
+            int dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy <= radius * radius)
+                guide_pixels_[y * kGuideTexW + x] = icon;
+        }
+    }
+    // A high-contrast X inside the circular Xbox badge.
+    for (int y = cy - 17; y <= cy + 17; ++y) {
+        for (int x = cx - 17; x <= cx + 17; ++x) {
+            int dx = x - cx, dy = y - cy;
+            if (std::abs(std::abs(dx) - std::abs(dy)) <= 2)
+                guide_pixels_[y * kGuideTexW + x] = mark;
+        }
+    }
+    blit_guide_text("HOME", 92, 38);
+    if (guide_cpu_)
+        std::memcpy(guide_cpu_, guide_pixels_.data(), guide_pixels_.size() * 4);
+    guide_rasterized_pressed_ = guide_pressed_;
+}
+
 void DkVideoRenderer::rasterize_hud() {
     // deko3d RGBA8_Unorm byte order is R,G,B,A -> pack little-endian. Fill the
     // panel background (black, ~0.55 alpha), then composite the white text.
@@ -611,6 +735,7 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     // Recompute HUD stats + re-rasterize the text texture now, while the GPU is
     // idle (render() ends with waitIdle) and before we record any commands.
     if (hud_enabled_) update_hud(frame);
+    if (guide_pressed_ != guide_rasterized_pressed_) rasterize_guide();
 
     int slot = queue_.acquireImage(swapchain_);
 
@@ -628,6 +753,9 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     // Image descriptor #2 = the HUD text texture (sampled by the overlay pass).
     cmdbuf_.pushData(data_gpu_ + kImageOff + 2 * sizeof(DkImageDescriptor),
                      &hud_desc_, sizeof(DkImageDescriptor));
+    // Image descriptor #3 = the always-on Xbox Guide/Home touch overlay.
+    cmdbuf_.pushData(data_gpu_ + kImageOff + 3 * sizeof(DkImageDescriptor),
+                     &guide_desc_, sizeof(DkImageDescriptor));
 
     dk::ImageView view{framebuffers_[slot]};
     cmdbuf_.bindRenderTargets({&view});
@@ -652,7 +780,7 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     cmdbuf_.bindDepthStencilState(depth_stencil);
 
     cmdbuf_.bindSamplerDescriptorSet(data_gpu_ + kSamplerOff, 1);
-    cmdbuf_.bindImageDescriptorSet(data_gpu_ + kImageOff, 3);
+    cmdbuf_.bindImageDescriptorSet(data_gpu_ + kImageOff, 4);
     cmdbuf_.barrier(DkBarrier_None,
                     DkInvalidateFlags_Image | DkInvalidateFlags_Descriptors);
 
@@ -670,28 +798,29 @@ bool DkVideoRenderer::render(AVFrame* frame) {
 
     cmdbuf_.draw(DkPrimitive_Quads, 4, 1, 0, 0);
 
-    // --- HUD overlay pass (stage 1): sample the rasterized stats texture and
-    // alpha-blend it over the video, top-left. Reuses the video vertex shader;
-    // hud_fsh_ samples image descriptor #2 through sampler #0. Gated by the
-    // "Debug HUD" setting.
+    // --- Alpha-blended overlays. The debug HUD is optional; the top-right
+    // Xbox Guide/Home touch control is always drawn during native streaming.
+    dk::BlendState overlay_blend;
+    overlay_blend.setColorBlendOp(DkBlendOp_Add);
+    overlay_blend.setSrcColorBlendFactor(DkBlendFactor_SrcAlpha);
+    overlay_blend.setDstColorBlendFactor(DkBlendFactor_InvSrcAlpha);
+    overlay_blend.setAlphaBlendOp(DkBlendOp_Add);
+    overlay_blend.setSrcAlphaBlendFactor(DkBlendFactor_One);
+    overlay_blend.setDstAlphaBlendFactor(DkBlendFactor_InvSrcAlpha);
+    dk::ColorState overlay_color;
+    overlay_color.setBlendEnable(0, true);
+    cmdbuf_.bindBlendStates(0, {overlay_blend});
+    cmdbuf_.bindColorState(overlay_color);
+    cmdbuf_.bindShaders(DkStageFlag_GraphicsMask,
+                        {&vertex_shader_, &hud_fsh_});
     if (hud_enabled_) {
-        dk::BlendState hud_blend;
-        hud_blend.setColorBlendOp(DkBlendOp_Add);
-        hud_blend.setSrcColorBlendFactor(DkBlendFactor_SrcAlpha);
-        hud_blend.setDstColorBlendFactor(DkBlendFactor_InvSrcAlpha);
-        hud_blend.setAlphaBlendOp(DkBlendOp_Add);
-        hud_blend.setSrcAlphaBlendFactor(DkBlendFactor_One);
-        hud_blend.setDstAlphaBlendFactor(DkBlendFactor_InvSrcAlpha);
-        dk::ColorState hud_color;
-        hud_color.setBlendEnable(0, true);
-        cmdbuf_.bindBlendStates(0, {hud_blend});
-        cmdbuf_.bindColorState(hud_color);
-        cmdbuf_.bindShaders(DkStageFlag_GraphicsMask,
-                            {&vertex_shader_, &hud_fsh_});
         cmdbuf_.bindTextures(DkStage_Fragment, 0, {dkMakeTextureHandle(2, 0)});
         cmdbuf_.bindVtxBuffer(0, data_gpu_ + kHudVtxOff, sizeof(kHudQuad));
         cmdbuf_.draw(DkPrimitive_Quads, 4, 1, 0, 0);
     }
+    cmdbuf_.bindTextures(DkStage_Fragment, 0, {dkMakeTextureHandle(3, 0)});
+    cmdbuf_.bindVtxBuffer(0, data_gpu_ + kGuideVtxOff, sizeof(kGuideQuad));
+    cmdbuf_.draw(DkPrimitive_Quads, 4, 1, 0, 0);
 
     queue_.submitCommands(cmdbuf_.finishList());
     queue_.presentImage(swapchain_, slot);
