@@ -284,6 +284,9 @@ struct Settings {
     // Smooth video pacing: steadier motion for about one source frame of
     // extra latency ("Video pacing" row / "smooth" in settings.json).
     bool smooth = false;
+    int brightness = 0;    // post-process offset: -20..+20
+    int contrast = 100;    // post-process multiplier: 70..130 percent
+    int saturation = 100;  // post-process multiplier: 0..150 percent
     int sharpness = 0;  // luma sharpening: 0=Off, 1=Low, 2=Medium, 3=High
     int debug_hud = 0;  // 0=off, 1=on: on-screen debug overlay while streaming
 };
@@ -395,6 +398,7 @@ struct App {
     std::unique_ptr<stream::Engine> engine;
     Uint32 stream_hint_until = 0;
     Uint32 xbox_home_until = 0;  // touchscreen Guide/Nexus press window
+    bool quick_menu_open = false;  // in-stream two-dot picture/stats panel
     bool deko_active = false;  // deko3d owns the display (SDL suspended)
     Uint32 last_input_ms = 0;  // input pacing during deko3d streaming
 #ifdef __SWITCH__
@@ -423,6 +427,9 @@ Settings load_settings() {
     settings.source = std::clamp(data.value("source", 0), 0, 2);
     settings.volume = std::clamp(data.value("volume", 1.0f), 0.5f, 4.0f);
     settings.smooth = data.value("smooth", false);
+    settings.brightness = std::clamp(data.value("brightness", 0), -20, 20);
+    settings.contrast = std::clamp(data.value("contrast", 100), 70, 130);
+    settings.saturation = std::clamp(data.value("saturation", 100), 0, 150);
     settings.sharpness = std::clamp(data.value("sharpness", 0), 0, 3);
     settings.debug_hud = std::clamp(data.value("debug_hud", 0), 0, 1);
     return settings;
@@ -438,6 +445,9 @@ void save_settings(const Settings& settings) {
                 {"source", settings.source},
                 {"volume", settings.volume},
                 {"smooth", settings.smooth},
+                {"brightness", settings.brightness},
+                {"contrast", settings.contrast},
+                {"saturation", settings.saturation},
                 {"sharpness", settings.sharpness},
                 {"debug_hud", settings.debug_hud}}.dump(2);
 }
@@ -807,6 +817,11 @@ bool point_in_rect(int x, int y, const SDL_Rect& rect) {
            y < rect.y + rect.h;
 }
 
+bool point_in_rect(int x, int y, const stream::QuickRect& rect) {
+    return x >= rect.x && x < rect.x + rect.w && y >= rect.y &&
+           y < rect.y + rect.h;
+}
+
 bool xbox_home_active(const App& app) {
     return SDL_GetTicks() < app.xbox_home_until;
 }
@@ -1074,6 +1089,86 @@ std::string console_label(const App& app) {
     return console.name.empty() ? "Your Xbox" : console.name;
 }
 
+#ifdef GNX_NATIVE_STREAM
+stream::QuickMenuState quick_menu_state(const App& app) {
+    stream::QuickMenuState state;
+    state.open = app.quick_menu_open;
+    state.performance = app.settings.debug_hud != 0;
+    state.brightness = app.settings.brightness;
+    state.contrast = app.settings.contrast;
+    state.saturation = app.settings.saturation;
+    state.sharpness = app.settings.sharpness;
+    return state;
+}
+
+void push_quick_menu_state(App& app, bool persist) {
+    app.engine->set_quick_menu_state(quick_menu_state(app));
+    if (persist) save_settings(app.settings);
+}
+
+// Returns true when the touch belongs to the quick menu. A tap outside closes
+// an open panel but remains available to the independent HOME touch target.
+bool handle_quick_menu_touch(App& app, int x, int y) {
+    if (point_in_rect(x, y, stream::kQuickToggleRect)) {
+        app.quick_menu_open = !app.quick_menu_open;
+        push_quick_menu_state(app, false);
+        app.ui_sound.play(0.8f);
+        return true;
+    }
+    if (!app.quick_menu_open) return false;
+
+    if (!point_in_rect(x, y, stream::kQuickPanelRect)) {
+        app.quick_menu_open = false;
+        push_quick_menu_state(app, false);
+        return false;
+    }
+
+    bool changed = false;
+    if (point_in_rect(x, y,
+                      stream::quick_row_rect(stream::QuickPerformance))) {
+        app.settings.debug_hud = app.settings.debug_hud ? 0 : 1;
+        changed = true;
+    } else if (point_in_rect(x, y, stream::kQuickResetRect)) {
+        app.settings.brightness = 0;
+        app.settings.contrast = 100;
+        app.settings.saturation = 100;
+        app.settings.sharpness = 0;
+        changed = true;
+    } else {
+        for (int row = stream::QuickBrightness;
+             row <= stream::QuickSharpness; ++row) {
+            int direction = 0;
+            if (point_in_rect(x, y, stream::quick_minus_rect(row)))
+                direction = -1;
+            else if (point_in_rect(x, y, stream::quick_plus_rect(row)))
+                direction = 1;
+            if (direction == 0) continue;
+
+            if (row == stream::QuickBrightness)
+                app.settings.brightness = std::clamp(
+                    app.settings.brightness + direction * 5, -20, 20);
+            else if (row == stream::QuickContrast)
+                app.settings.contrast = std::clamp(
+                    app.settings.contrast + direction * 10, 70, 130);
+            else if (row == stream::QuickSaturation)
+                app.settings.saturation = std::clamp(
+                    app.settings.saturation + direction * 10, 0, 150);
+            else
+                app.settings.sharpness =
+                    (app.settings.sharpness + direction + 4) % 4;
+            changed = true;
+            break;
+        }
+    }
+
+    if (changed) {
+        push_quick_menu_state(app, true);
+        app.ui_sound.play(0.8f);
+    }
+    return true;
+}
+#endif
+
 // Start the stream against the chosen target. launch_game must already be
 // set (a game for xCloud; a pseudo-entry named after the console for home).
 void launch_stream(App& app, bool home) {
@@ -1084,8 +1179,8 @@ void launch_stream(App& app, bool home) {
     app.engine->set_audio_gain(app.settings.volume);
     app.engine->set_pacing(app.settings.smooth ? stream::VideoPacing::Smooth
                                                : stream::VideoPacing::Steady);
-    app.engine->set_sharpness(app.settings.sharpness);
-    app.engine->set_debug_hud(app.settings.debug_hud != 0);
+    app.quick_menu_open = false;
+    push_quick_menu_state(app, false);
     if (app.launching_home)
         app.engine->start_home(selected_console(app).server_id, tier, locale);
     else
@@ -1508,6 +1603,9 @@ void draw_accounts(App& app) {
 
 void draw_settings(App& app) {
     app.gfx.text("Settings", kMargin, 48, gfx::FontSize::Title, gfx::kText);
+    auto signed_value = [](int value) {
+        return std::string(value > 0 ? "+" : "") + std::to_string(value);
+    };
 
     struct Row {
         const char* title;
@@ -1522,6 +1620,9 @@ void draw_settings(App& app) {
         {"Volume",
          std::to_string(static_cast<int>(app.settings.volume * 100 + 0.5f)) + "%"},
         {"Video pacing", app.settings.smooth ? "Smooth" : "Standard"},
+        {"Brightness", signed_value(app.settings.brightness)},
+        {"Contrast", std::to_string(app.settings.contrast) + "%"},
+        {"Saturation", std::to_string(app.settings.saturation) + "%"},
         {"Sharpness", kSharpnessLabels[app.settings.sharpness]},
     };
     if (!app.consoles.empty())
@@ -1541,10 +1642,8 @@ void draw_settings(App& app) {
                                     ? "Press A again to confirm"
                                     : app.gamertag});
     // The list must clear the note box at y=820, which fits 8 rows at the
-    // tightened 78/70 pitch. Volume + pacing + Debug HUD (+ source + sign out on
-    // a linked console) overflow that, so instead of shrinking rows further the
-    // list scrolls: an 8-row window slides only when the cursor crosses its
-    // edge, and dots mark hidden rows. Up to 7 rows keeps the original 108/92.
+    // tightened 78/70 pitch. Picture controls and account actions overflow
+    // that, so an 8-row window slides only when the cursor crosses its edge.
     constexpr int kVisibleRows = 8;
     int shown = std::min(static_cast<int>(rows.size()), kVisibleRows);
     int first = std::clamp(app.settings_cursor - (kVisibleRows - 1), 0,
@@ -1621,10 +1720,22 @@ void draw_settings(App& app) {
             line2 = "steadier 30 fps scenes for about one frame of extra lag.";
             break;
         case 7:
+            line1 = "Adds or removes light after video color conversion.";
+            line2 = "Small changes work best; high values can clip highlights.";
+            break;
+        case 8:
+            line1 = "Expands or compresses the difference between dark and";
+            line2 = "bright areas. 100% preserves the source image.";
+            break;
+        case 9:
+            line1 = "Controls color intensity. 100% is neutral; 0% is";
+            line2 = "grayscale, while higher values make colors stronger.";
+            break;
+        case 10:
             line1 = "Sharpens the streamed image, which is a touch soft at";
             line2 = "cloud bitrates. Low is subtle; High can ring on edges.";
             break;
-        case 8:
+        case 11:
             line1 = "Where Play launches games: xCloud (cloud servers) or";
             line2 = "remote play from your own console over your network.";
             break;
@@ -1955,11 +2066,10 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
               32;
     }
 
-    // In-stream controls, taught here because once deko3d owns the display
-    // no overlay can be drawn on Switch — this screen is the last chance.
+    // Teach the persistent deko3d overlays before the first video frame.
     app.gfx.text_centered(
-        "In the stream:  hold  −  and  +  together to leave   ·   "
-        "press  L3 + R3  together for the Xbox guide menu",
+        "In the stream: tap  ..  for picture controls   |   "
+        "tap HOME or press L3 + R3 for the Xbox guide",
         gfx::kWidth / 2, 920, gfx::FontSize::Small, gfx::kTextDim);
 
     // Source/quality chip, top right.
@@ -2497,9 +2607,10 @@ int main(int argc, char** argv) {
 
             case Scene::Settings: {
                 // Row order: quality, mapping, vibration, region, language,
-                // volume, pacing, sharpness, [source when a console is
-                // linked], Debug HUD, accounts, sign out.
-                int hud_row = app.consoles.empty() ? 8 : 9;
+                // volume, pacing, brightness, contrast, saturation, sharpness,
+                // [source when a console is linked], Debug HUD, accounts,
+                // sign out.
+                int hud_row = app.consoles.empty() ? 11 : 12;
                 int accounts_row = hud_row + 1;
                 int signout_row = hud_row + 2;
                 if (input.up)
@@ -2568,12 +2679,21 @@ int main(int argc, char** argv) {
                     else if (app.settings_cursor == 6)
                         app.settings.smooth = !app.settings.smooth;
                     else if (app.settings_cursor == 7)
+                        app.settings.brightness = std::clamp(
+                            app.settings.brightness + direction * 5, -20, 20);
+                    else if (app.settings_cursor == 8)
+                        app.settings.contrast = std::clamp(
+                            app.settings.contrast + direction * 10, 70, 130);
+                    else if (app.settings_cursor == 9)
+                        app.settings.saturation = std::clamp(
+                            app.settings.saturation + direction * 10, 0, 150);
+                    else if (app.settings_cursor == 10)
                         app.settings.sharpness =
                             (app.settings.sharpness + direction + 4) % 4;
                     // "Preferred source" only exists with a linked console;
                     // Debug HUD sits right after it either way. Accounts and
                     // Sign out are A-rows, handled above.
-                    else if (!app.consoles.empty() && app.settings_cursor == 8)
+                    else if (!app.consoles.empty() && app.settings_cursor == 11)
                         app.settings.source =
                             (app.settings.source + direction + 3) % 3;
                     else if (app.settings_cursor == hud_row)
@@ -2637,7 +2757,10 @@ int main(int argc, char** argv) {
                     stream_state == stream::EngineState::Streaming;
 
                 if (streaming) {
-                    if (input.touch &&
+                    bool quick_touch = input.touch &&
+                        handle_quick_menu_touch(
+                            app, input.touch_x, input.touch_y);
+                    if (input.touch && !quick_touch &&
                         point_in_rect(input.touch_x, input.touch_y,
                                       kXboxHomeRect)) {
                         // Hold Nexus for several 125 Hz reports. A single tap
