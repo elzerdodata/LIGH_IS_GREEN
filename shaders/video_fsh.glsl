@@ -15,6 +15,8 @@ layout (std140, binding = 0) uniform Transformation
     vec3 offset;
     vec4 uv_data;
     vec4 sharp_data;
+    // x=brightness offset, y=contrast multiplier, z=saturation multiplier.
+    vec4 picture_data;
 } u;
 
 void main()
@@ -45,6 +47,14 @@ void main()
                     texture(plane1, uv).r,
                     texture(plane1, uv).g) - u.offset;
     vec3 rgb = u.yuvmat * yuv;
+
+    // Lightweight post-conversion picture controls. Defaults (0, 1, 1) are
+    // exactly neutral; these add only a handful of ALU operations and no
+    // extra texture samples.
+    rgb = (rgb - vec3(0.5)) * u.picture_data.y + vec3(0.5);
+    float luminance = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    rgb = mix(vec3(luminance), rgb, u.picture_data.z);
+    rgb += vec3(u.picture_data.x);
 
     outColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
 }
