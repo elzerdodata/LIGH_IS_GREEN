@@ -602,6 +602,18 @@ const char* session_state_name(SessionState state) {
     return "?";
 }
 
+std::string queue_wait_status(int seconds) {
+    if (seconds <= 0) return "Queued - less than a minute remaining";
+    if (seconds < 60)
+        return "Queued - about " + std::to_string(seconds) +
+               " seconds remaining";
+
+    int minutes = seconds / 60;
+    int remainder = seconds % 60;
+    return "Queued - about " + std::to_string(minutes) + "m " +
+           std::to_string(remainder) + "s remaining";
+}
+
 void Engine::worker() {
     try {
         bool home = !home_server_id_.empty();
@@ -674,6 +686,11 @@ void Engine::worker() {
             bool retry_transport = false;
             SessionState logged_state = SessionState::New;
             std::string session_error;
+            int queue_estimate_seconds = -1;
+            auto queue_estimate_fetched_at =
+                std::chrono::steady_clock::time_point{};
+            auto next_queue_estimate_refresh =
+                std::chrono::steady_clock::time_point{};
             for (int i = 0; i < 300 && !quit_; ++i) {
                 SessionState state = session.refresh_state();
                 if (state != logged_state) {
@@ -681,6 +698,37 @@ void Engine::worker() {
                     log(std::string("session state: ") +
                         session_state_name(state) + " (poll " +
                         std::to_string(i) + ")");
+                }
+                if (state == SessionState::WaitingForResources && !home) {
+                    auto now = std::chrono::steady_clock::now();
+                    if (now >= next_queue_estimate_refresh) {
+                        next_queue_estimate_refresh =
+                            now + std::chrono::seconds(15);
+                        std::optional<int> estimate =
+                            session.fetch_wait_time(title_id_);
+                        if (estimate) {
+                            queue_estimate_seconds = *estimate;
+                            queue_estimate_fetched_at = now;
+                            log("queue estimate: " +
+                                std::to_string(*estimate) + " seconds");
+                        } else {
+                            log("queue estimate unavailable");
+                        }
+                    }
+
+                    if (queue_estimate_seconds >= 0) {
+                        int elapsed = static_cast<int>(
+                            std::chrono::duration_cast<std::chrono::seconds>(
+                                now - queue_estimate_fetched_at)
+                                .count());
+                        set_status(queue_wait_status(std::max(
+                            0, queue_estimate_seconds - elapsed)));
+                    } else {
+                        set_status("Queued - estimating wait time...");
+                    }
+                } else if (state == SessionState::Provisioning) {
+                    set_status(home ? "Preparing your Xbox..."
+                                    : "Preparing your cloud server...");
                 }
                 if (state == SessionState::ReadyToConnect && !connected) {
                     set_status("Authenticating...");
