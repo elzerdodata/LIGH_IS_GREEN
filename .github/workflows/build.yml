@@ -1,4 +1,4 @@
-# Clean-clone build of green-nx: WebRTC deps + the .nro, exactly as a
+# Clean-clone build of Light_is_Green: WebRTC deps + the .nro, exactly as a
 # contributor would build them. Catches works-only-on-one-machine breakage
 # (missing files, unresolved symbols) before it lands on main.
 name: build
@@ -17,13 +17,13 @@ jobs:
       - name: Build WebRTC deps (libpeer/srtp/usrsctp/mbedtls)
         run: bash deps/build-switch.sh
 
-      - name: Build green-nx.nro
+      - name: Build Light_is_Green.nro
         run: docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 
       - name: Verify artifact
-        run: ls -l green-nx.nro
+        run: ls -l Light_is_Green.nro
 
       - uses: actions/upload-artifact@v4
         with:
-          name: green-nx-nro
-          path: green-nx.nro
+          name: Light_is_Green-v0.2-pre-nro
+          path: Light_is_Green.nro
