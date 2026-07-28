@@ -59,7 +59,7 @@ void Gfx::shutdown() {
 }
 
 bool Gfx::create_window_renderer() {
-    window_ = SDL_CreateWindow("green-nx", SDL_WINDOWPOS_CENTERED,
+    window_ = SDL_CreateWindow("Light_is_Green", SDL_WINDOWPOS_CENTERED,
                                SDL_WINDOWPOS_CENTERED, kWidth, kHeight,
                                SDL_WINDOW_SHOWN);
     if (!window_) return false;
