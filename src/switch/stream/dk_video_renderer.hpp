@@ -20,6 +20,8 @@
 
 #include <deko3d.hpp>
 
+#include "quick_menu.hpp"
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/frame.h>
@@ -44,14 +46,23 @@ public:
 
     void set_logger(LogFn fn) { log_ = std::move(fn); }
 
-    // Luma sharpening level for the fragment shader: 0=Off, 1=Low, 2=Medium,
-    // 3=High. Set before init(); fixed for the stream's lifetime.
+    // Complete live state for the in-stream quick menu and picture controls.
+    // Changes are reflected on the next rendered frame.
+    void set_quick_menu_state(const QuickMenuState& state);
+
+    // Compatibility helpers used by callers that only change one value.
     void set_sharpness(int level) {
-        sharpness_ = level < 0 ? 0 : (level > 3 ? 3 : level);
+        QuickMenuState next = quick_state_;
+        next.sharpness = level;
+        set_quick_menu_state(next);
     }
 
     // Enable/disable the debug HUD overlay pass (drawn on top of the video).
-    void set_hud_enabled(bool e) { hud_enabled_ = e; }
+    void set_hud_enabled(bool e) {
+        QuickMenuState next = quick_state_;
+        next.performance = e;
+        set_quick_menu_state(next);
+    }
 
     // Highlight the always-visible touchscreen Xbox Guide/Home button.
     void set_guide_pressed(bool pressed) { guide_pressed_ = pressed; }
@@ -118,6 +129,8 @@ private:
     void blit_text(const char* s, int x, int y);  // white text onto hud_pixels_
     void rasterize_guide();            // compose Guide/Home touch button
     void blit_guide_text(const char* s, int x, int y);
+    void rasterize_quick_menu();       // compose dots + expanded picture panel
+    void blit_quick_text(const char* s, int x, int y);
 
     LogFn log_;
     bool initialized_ = false;
@@ -160,7 +173,7 @@ private:
     uint32_t chroma_w_ = 0, chroma_h_ = 0;
     bool linear_ = false;                // pitch-linear surface?
     bool transform_dirty_ = true;
-    int sharpness_ = 0;  // 0=Off..3=High, baked into the UBO (set_sharpness)
+    QuickMenuState quick_state_;
     int color_space_ = -1;
     bool color_full_ = false;
     bool warned_not_hw_ = false;
@@ -198,6 +211,18 @@ private:
     std::vector<uint32_t> guide_pixels_;
     bool guide_pressed_ = false;
     bool guide_rasterized_pressed_ = false;
+
+    // Always-visible two-dot handle and its optional expanded quick panel.
+    // One transparent RGBA texture covers both shapes and costs one overlay
+    // draw call regardless of whether the panel is open.
+    static constexpr uint32_t kQuickTexW = 512;
+    static constexpr uint32_t kQuickTexH = 640;
+    dk::UniqueMemBlock quick_memblock_;
+    dk::Image quick_image_;
+    dk::ImageDescriptor quick_desc_;
+    void* quick_cpu_ = nullptr;
+    std::vector<uint32_t> quick_pixels_;
+    bool quick_dirty_ = true;
 };
 
 }  // namespace gnx::stream

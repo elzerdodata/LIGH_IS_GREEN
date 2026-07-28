@@ -1442,14 +1442,32 @@ SDL_Texture* Engine::pump_video() {
 bool Engine::begin_deko_output() {
 #ifdef __SWITCH__
     dk_video_.set_logger([this](const char* m) { log(std::string(m)); });
-    dk_video_.set_sharpness(sharpness_);
-    dk_video_.set_hud_enabled(debug_hud_);
+    dk_video_.set_quick_menu_state(quick_menu_state_);
     bool ok = dk_video_.init();
     log(ok ? "deko3d output started" : "deko3d output FAILED to start");
     return ok;
 #else
     return false;
 #endif
+}
+
+void Engine::set_quick_menu_state(const QuickMenuState& state) {
+    quick_menu_state_ = normalized_quick_menu(state);
+#ifdef __SWITCH__
+    dk_video_.set_quick_menu_state(quick_menu_state_);
+#endif
+}
+
+void Engine::set_sharpness(int level) {
+    QuickMenuState next = quick_menu_state_;
+    next.sharpness = level;
+    set_quick_menu_state(next);
+}
+
+void Engine::set_debug_hud(bool enabled) {
+    QuickMenuState next = quick_menu_state_;
+    next.performance = enabled;
+    set_quick_menu_state(next);
 }
 
 void Engine::end_deko_output() {

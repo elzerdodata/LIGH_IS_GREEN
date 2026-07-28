@@ -16,6 +16,7 @@
 #include "../../core/session.hpp"
 #include "../../core/xcloud_protocol.hpp"
 #include "audio_player.hpp"
+#include "quick_menu.hpp"
 #include "video_decoder.hpp"
 #include "video_jitter.hpp"
 #ifdef __SWITCH__
@@ -74,12 +75,13 @@ public:
     // before each stream start; default Steady.
     void set_pacing(VideoPacing pacing) { pacing_ = pacing; }
 
-    // Luma sharpening level (0=Off..3=High), forwarded to the deko3d
-    // renderer. Set from the "sharpness" setting before each stream start.
-    void set_sharpness(int level) { sharpness_ = level; }
+    // In-stream performance/picture quick menu. The state is retained before
+    // startup and can also be changed live while deko3d owns the display.
+    void set_quick_menu_state(const QuickMenuState& state);
 
-    // Draw the on-screen debug HUD overlay while streaming. Set before start().
-    void set_debug_hud(bool enabled) { debug_hud_ = enabled; }
+    // Compatibility helpers for the existing Settings screen.
+    void set_sharpness(int level);
+    void set_debug_hud(bool enabled);
 
     EngineState state() const { return state_; }
     std::string status() const;
@@ -164,7 +166,7 @@ private:
     std::string locale_ = "en-US";  // streamed console's system language
     float audio_gain_ = 1.0f;       // forwarded to AudioPlayer::set_gain
     VideoPacing pacing_ = VideoPacing::Steady;  // set before start()
-    int sharpness_ = 0;  // 0=Off..3=High, forwarded to DkVideoRenderer
+    QuickMenuState quick_menu_state_;
 public:
     void log(const std::string& line);  // also used by the libpeer log sink
 
@@ -249,7 +251,6 @@ private:
     // pump_video), in SDL performance-counter ticks: millisecond deadlines
     // quantized to an uneven 16/17 ms grid; the counter keeps the fraction.
     double next_present_counter_ = 0;
-    bool debug_hud_ = false;                // draw the debug HUD overlay
     std::atomic<Uint64> last_keyframe_req_{0};
     std::atomic<uint32_t> pli_sent_{0};  // RTCP PLI keyframe requests
 

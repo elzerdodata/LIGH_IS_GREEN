@@ -35,6 +35,7 @@ constexpr uint32_t kImageOff = 0x200;     // image descriptor set (luma, chroma)
 constexpr uint32_t kVtxOff = 0x300;       // quad vertex buffer
 constexpr uint32_t kHudVtxOff = 0x380;    // HUD overlay corner quad
 constexpr uint32_t kGuideVtxOff = 0x400;  // top-right Guide/Home touch button
+constexpr uint32_t kQuickVtxOff = 0x480;  // two-dot handle + quick panel
 
 struct Vertex {
     float position[3];
@@ -68,7 +69,16 @@ constexpr Vertex kGuideQuad[] = {
     {{+0.9667f, +0.9407f, 0.0f}, {1.0f, 0.0f}},
 };
 
-// std140 layout for: mat3 yuvmat; vec3 offset; vec4 uv_data;
+// Transparent 512x640 quick-menu texture in shared 1920x1080 design space.
+// It contains the small handle at the top-right and expands left/down.
+constexpr Vertex kQuickQuad[] = {
+    {{+0.2083f, +0.9111f, 0.0f}, {0.0f, 0.0f}},
+    {{+0.2083f, -0.2741f, 0.0f}, {0.0f, 1.0f}},
+    {{+0.7417f, -0.2741f, 0.0f}, {1.0f, 1.0f}},
+    {{+0.7417f, +0.9111f, 0.0f}, {1.0f, 0.0f}},
+};
+
+// std140 layout for the fragment shader's video conversion and controls.
 struct Transformation {
     alignas(16) float yuvmat_col0[4];
     alignas(16) float yuvmat_col1[4];
@@ -76,8 +86,9 @@ struct Transformation {
     alignas(16) float offset[4];
     alignas(16) float uv_data[4];
     alignas(16) float sharp_data[4];  // x=strength, y=overshoot allowance
+    alignas(16) float picture_data[4];  // brightness, contrast, saturation
 };
-static_assert(sizeof(Transformation) == 96, "std140 Transformation");
+static_assert(sizeof(Transformation) == 112, "std140 Transformation");
 
 // Column-major YUV->RGB matrices (matching Moonlight-Switch / BT.xxx).
 const float kBt601Lim[9] = {1.1644f, 1.1644f, 1.1644f, 0.0f,    -0.3917f,
@@ -111,6 +122,22 @@ const float* color_matrix(int space, bool full) {
 }  // namespace
 
 DkVideoRenderer::~DkVideoRenderer() { shutdown(); }
+
+void DkVideoRenderer::set_quick_menu_state(const QuickMenuState& state) {
+    QuickMenuState next = normalized_quick_menu(state);
+    bool picture_changed =
+        next.brightness != quick_state_.brightness ||
+        next.contrast != quick_state_.contrast ||
+        next.saturation != quick_state_.saturation ||
+        next.sharpness != quick_state_.sharpness;
+    bool menu_changed =
+        next.open != quick_state_.open ||
+        next.performance != quick_state_.performance || picture_changed;
+    quick_state_ = next;
+    hud_enabled_ = next.performance;
+    if (picture_changed) transform_dirty_ = true;
+    if (menu_changed) quick_dirty_ = true;
+}
 
 void DkVideoRenderer::logf(const char* fmt, ...) {
     if (!log_) return;
@@ -247,6 +274,8 @@ bool DkVideoRenderer::init() {
                 sizeof(kHudQuad));
     std::memcpy(static_cast<uint8_t*>(data_cpu_) + kGuideVtxOff, kGuideQuad,
                 sizeof(kGuideQuad));
+    std::memcpy(static_cast<uint8_t*>(data_cpu_) + kQuickVtxOff, kQuickQuad,
+                sizeof(kQuickQuad));
 
     // Sampler descriptor (linear, clamp to edge). Written into the descriptor
     // set from the command buffer each frame (canonical deko3d pattern).
@@ -312,6 +341,31 @@ bool DkVideoRenderer::init() {
         guide_image_.initialize(guide_layout, guide_memblock_, 0);
         guide_desc_.initialize(guide_image_);
     }
+
+    // Two-dot handle + expanded quick settings panel. Keeping both in one
+    // transparent texture makes open/close a cheap CPU re-rasterization and a
+    // single overlay draw call.
+    quick_pixels_.assign(kQuickTexW * kQuickTexH, 0);
+    {
+        uint32_t stride = kQuickTexW * 4;
+        dk::ImageLayout quick_layout;
+        dk::ImageLayoutMaker{dev_}
+            .setFlags(DkImageFlags_UsageLoadStore | DkImageFlags_Usage2DEngine |
+                      DkImageFlags_PitchLinear)
+            .setFormat(DkImageFormat_RGBA8_Unorm)
+            .setDimensions(kQuickTexW, kQuickTexH)
+            .setPitchStride(stride)
+            .initialize(quick_layout);
+        uint32_t sz = (quick_layout.getSize() + 0xFFF) & ~0xFFFu;
+        quick_memblock_ = dk::MemBlockMaker{dev_, sz}
+                              .setFlags(DkMemBlockFlags_CpuUncached |
+                                        DkMemBlockFlags_GpuCached |
+                                        DkMemBlockFlags_Image)
+                              .create();
+        quick_cpu_ = quick_memblock_.getCpuAddr();
+        quick_image_.initialize(quick_layout, quick_memblock_, 0);
+        quick_desc_.initialize(quick_image_);
+    }
     // System shared font (pl was initialized in main). A null font falls back to
     // a panel with no text -- still proves the overlay, and never crashes.
     if (!hud_font_) {
@@ -323,6 +377,7 @@ bool DkVideoRenderer::init() {
         if (!hud_font_) logf("deko3d: HUD font unavailable (panel only)");
     }
     rasterize_guide();
+    rasterize_quick_menu();
 
     initialized_ = true;
     logf("deko3d: initialized (fb %ux%u, %u framebuffers)", fb_width_, fb_height_,
@@ -350,6 +405,9 @@ void DkVideoRenderer::shutdown() {
     guide_memblock_ = nullptr;
     guide_cpu_ = nullptr;
     guide_pixels_.clear();
+    quick_memblock_ = nullptr;
+    quick_cpu_ = nullptr;
+    quick_pixels_.clear();
     dev_ = nullptr;
     initialized_ = false;
     frame_w_ = frame_h_ = 0;
@@ -451,11 +509,16 @@ void DkVideoRenderer::update_transform(AVFrame* frame) {
     // is how far past the local min/max an edge may ring before it clamps.
     static constexpr float kSharpStrength[4] = {0.0f, 0.60f, 1.20f, 2.0f};
     static constexpr float kSharpOvershoot[4] = {0.0f, 0.02f, 0.035f, 0.05f};
-    t.sharp_data[0] = kSharpStrength[sharpness_];
-    t.sharp_data[1] = kSharpOvershoot[sharpness_];
+    t.sharp_data[0] = kSharpStrength[quick_state_.sharpness];
+    t.sharp_data[1] = kSharpOvershoot[quick_state_.sharpness];
+    t.picture_data[0] = static_cast<float>(quick_state_.brightness) / 100.0f;
+    t.picture_data[1] = static_cast<float>(quick_state_.contrast) / 100.0f;
+    t.picture_data[2] = static_cast<float>(quick_state_.saturation) / 100.0f;
     std::memcpy(static_cast<uint8_t*>(data_cpu_) + kUniformOff, &t, sizeof(t));
-    logf("deko3d: color space=%d full=%d crop=%.4fx%.4f sharp=%d", space,
-         (int)full, t.uv_data[2], t.uv_data[3], sharpness_);
+    logf("deko3d: color=%d full=%d crop=%.4fx%.4f picture=%+d/%d/%d sharp=%d",
+         space, (int)full, t.uv_data[2], t.uv_data[3],
+         quick_state_.brightness, quick_state_.contrast,
+         quick_state_.saturation, quick_state_.sharpness);
 }
 
 DkVideoRenderer::FrameMapping* DkVideoRenderer::map_frame(AVFrame* frame,
@@ -575,6 +638,41 @@ void DkVideoRenderer::blit_guide_text(const char* s, int x, int y) {
     SDL_FreeSurface(surf);
 }
 
+void DkVideoRenderer::blit_quick_text(const char* s, int x, int y) {
+    if (!hud_font_ || !s || !*s) return;
+    SDL_Color white{255, 255, 255, 255};
+    SDL_Surface* surf = TTF_RenderUTF8_Blended(hud_font_, s, white);
+    if (!surf) return;
+    SDL_LockSurface(surf);
+    int bpp = surf->format->BytesPerPixel;
+    for (int j = 0; j < surf->h; ++j) {
+        int ty = y + j;
+        if (ty < 0 || ty >= static_cast<int>(kQuickTexH)) continue;
+        auto* rowp = static_cast<uint8_t*>(surf->pixels) + j * surf->pitch;
+        for (int i = 0; i < surf->w; ++i) {
+            int tx = x + i;
+            if (tx < 0 || tx >= static_cast<int>(kQuickTexW)) continue;
+            uint32_t p = 0;
+            std::memcpy(&p, rowp + i * bpp, bpp < 4 ? bpp : 4);
+            uint8_t r, g, b, a;
+            SDL_GetRGBA(p, surf->format, &r, &g, &b, &a);
+            if (a == 0) continue;
+            uint32_t& dst = quick_pixels_[ty * kQuickTexW + tx];
+            uint8_t dr = dst & 0xFF, dg = (dst >> 8) & 0xFF,
+                    db = (dst >> 16) & 0xFF, da = (dst >> 24) & 0xFF;
+            float af = a / 255.0f, ia = 1.0f - af;
+            uint8_t nr = static_cast<uint8_t>(r * af + dr * ia);
+            uint8_t ng = static_cast<uint8_t>(g * af + dg * ia);
+            uint8_t nb = static_cast<uint8_t>(b * af + db * ia);
+            uint8_t na = static_cast<uint8_t>(a + da * ia);
+            dst = nr | (ng << 8) | (nb << 16) |
+                  (static_cast<uint32_t>(na) << 24);
+        }
+    }
+    SDL_UnlockSurface(surf);
+    SDL_FreeSurface(surf);
+}
+
 void DkVideoRenderer::rasterize_guide() {
     auto rgba = [](uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
         return static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
@@ -620,6 +718,121 @@ void DkVideoRenderer::rasterize_guide() {
     if (guide_cpu_)
         std::memcpy(guide_cpu_, guide_pixels_.data(), guide_pixels_.size() * 4);
     guide_rasterized_pressed_ = guide_pressed_;
+}
+
+void DkVideoRenderer::rasterize_quick_menu() {
+    auto rgba = [](uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+        return static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
+               (static_cast<uint32_t>(b) << 16) |
+               (static_cast<uint32_t>(a) << 24);
+    };
+    auto fill = [&](int x, int y, int w, int h, uint32_t color) {
+        int x0 = std::clamp(x, 0, static_cast<int>(kQuickTexW));
+        int y0 = std::clamp(y, 0, static_cast<int>(kQuickTexH));
+        int x1 = std::clamp(x + w, 0, static_cast<int>(kQuickTexW));
+        int y1 = std::clamp(y + h, 0, static_cast<int>(kQuickTexH));
+        for (int py = y0; py < y1; ++py)
+            std::fill(quick_pixels_.begin() + py * kQuickTexW + x0,
+                      quick_pixels_.begin() + py * kQuickTexW + x1, color);
+    };
+    auto frame = [&](int x, int y, int w, int h, int thickness,
+                     uint32_t color) {
+        fill(x, y, w, thickness, color);
+        fill(x, y + h - thickness, w, thickness, color);
+        fill(x, y, thickness, h, color);
+        fill(x + w - thickness, y, thickness, h, color);
+    };
+    auto circle = [&](int cx, int cy, int radius, uint32_t color) {
+        for (int y = cy - radius; y <= cy + radius; ++y) {
+            for (int x = cx - radius; x <= cx + radius; ++x) {
+                int dx = x - cx, dy = y - cy;
+                if (dx * dx + dy * dy <= radius * radius &&
+                    x >= 0 && x < static_cast<int>(kQuickTexW) &&
+                    y >= 0 && y < static_cast<int>(kQuickTexH))
+                    quick_pixels_[y * kQuickTexW + x] = color;
+            }
+        }
+    };
+    auto local = [](const QuickRect& r) {
+        return QuickRect{r.x - kQuickTextureRect.x,
+                         r.y - kQuickTextureRect.y, r.w, r.h};
+    };
+
+    const uint32_t transparent = 0;
+    const uint32_t panel = rgba(10, 13, 18, 232);
+    const uint32_t surface = rgba(24, 30, 40, 224);
+    const uint32_t edge = rgba(73, 87, 105, 255);
+    const uint32_t accent = rgba(47, 191, 47, 255);
+    const uint32_t active = rgba(16, 124, 16, 240);
+    const uint32_t text = rgba(255, 255, 255, 255);
+
+    std::fill(quick_pixels_.begin(), quick_pixels_.end(), transparent);
+
+    QuickRect toggle = local(kQuickToggleRect);
+    fill(toggle.x, toggle.y, toggle.w, toggle.h,
+         quick_state_.open ? active : panel);
+    frame(toggle.x, toggle.y, toggle.w, toggle.h, 3, accent);
+    circle(toggle.x + 23, toggle.y + toggle.h / 2, 6, text);
+    circle(toggle.x + 49, toggle.y + toggle.h / 2, 6, text);
+
+    if (quick_state_.open) {
+        QuickRect menu = local(kQuickPanelRect);
+        fill(menu.x, menu.y, menu.w, menu.h, panel);
+        frame(menu.x, menu.y, menu.w, menu.h, 3, accent);
+        blit_quick_text("IMAGE & STATS", menu.x + 20, menu.y + 16);
+
+        const char* labels[kQuickRowCount] = {
+            "Performance", "Brightness", "Contrast", "Saturation", "Sharpness"};
+        const char* sharp_labels[4] = {"Off", "Low", "Medium", "High"};
+
+        for (int row = 0; row < kQuickRowCount; ++row) {
+            QuickRect rr = local(quick_row_rect(row));
+            fill(rr.x, rr.y, rr.w, rr.h, surface);
+            frame(rr.x, rr.y, rr.w, rr.h, 2, edge);
+            blit_quick_text(labels[row], rr.x + 14, rr.y + 12);
+
+            if (row == QuickPerformance) {
+                fill(rr.x + 350, rr.y + 6, 104, rr.h - 12,
+                     quick_state_.performance ? active : rgba(42, 49, 60, 240));
+                frame(rr.x + 350, rr.y + 6, 104, rr.h - 12, 2,
+                      quick_state_.performance ? accent : edge);
+                blit_quick_text(quick_state_.performance ? "ON" : "OFF",
+                                rr.x + 378, rr.y + 12);
+                continue;
+            }
+
+            QuickRect minus = local(quick_minus_rect(row));
+            QuickRect plus = local(quick_plus_rect(row));
+            fill(minus.x, minus.y + 4, minus.w, minus.h - 8, rgba(42, 49, 60, 240));
+            fill(plus.x, plus.y + 4, plus.w, plus.h - 8, rgba(42, 49, 60, 240));
+            frame(minus.x, minus.y + 4, minus.w, minus.h - 8, 2, edge);
+            frame(plus.x, plus.y + 4, plus.w, plus.h - 8, 2, edge);
+            blit_quick_text("-", minus.x + 25, minus.y + 10);
+            blit_quick_text("+", plus.x + 22, plus.y + 10);
+
+            char value[24];
+            if (row == QuickBrightness)
+                std::snprintf(value, sizeof(value), "%+d", quick_state_.brightness);
+            else if (row == QuickContrast)
+                std::snprintf(value, sizeof(value), "%d%%", quick_state_.contrast);
+            else if (row == QuickSaturation)
+                std::snprintf(value, sizeof(value), "%d%%", quick_state_.saturation);
+            else
+                std::snprintf(value, sizeof(value), "%s",
+                              sharp_labels[quick_state_.sharpness]);
+            blit_quick_text(value, rr.x + 300, rr.y + 12);
+        }
+
+        QuickRect reset = local(kQuickResetRect);
+        fill(reset.x, reset.y, reset.w, reset.h, active);
+        frame(reset.x, reset.y, reset.w, reset.h, 2, accent);
+        blit_quick_text("RESET IMAGE", reset.x + 55, reset.y + 10);
+    }
+
+    if (quick_cpu_)
+        std::memcpy(quick_cpu_, quick_pixels_.data(),
+                    quick_pixels_.size() * sizeof(uint32_t));
+    quick_dirty_ = false;
 }
 
 void DkVideoRenderer::rasterize_hud() {
@@ -736,6 +949,7 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     // idle (render() ends with waitIdle) and before we record any commands.
     if (hud_enabled_) update_hud(frame);
     if (guide_pressed_ != guide_rasterized_pressed_) rasterize_guide();
+    if (quick_dirty_) rasterize_quick_menu();
 
     int slot = queue_.acquireImage(swapchain_);
 
@@ -756,6 +970,9 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     // Image descriptor #3 = the always-on Xbox Guide/Home touch overlay.
     cmdbuf_.pushData(data_gpu_ + kImageOff + 3 * sizeof(DkImageDescriptor),
                      &guide_desc_, sizeof(DkImageDescriptor));
+    // Image descriptor #4 = two-dot quick menu handle + optional panel.
+    cmdbuf_.pushData(data_gpu_ + kImageOff + 4 * sizeof(DkImageDescriptor),
+                     &quick_desc_, sizeof(DkImageDescriptor));
 
     dk::ImageView view{framebuffers_[slot]};
     cmdbuf_.bindRenderTargets({&view});
@@ -780,7 +997,7 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     cmdbuf_.bindDepthStencilState(depth_stencil);
 
     cmdbuf_.bindSamplerDescriptorSet(data_gpu_ + kSamplerOff, 1);
-    cmdbuf_.bindImageDescriptorSet(data_gpu_ + kImageOff, 4);
+    cmdbuf_.bindImageDescriptorSet(data_gpu_ + kImageOff, 5);
     cmdbuf_.barrier(DkBarrier_None,
                     DkInvalidateFlags_Image | DkInvalidateFlags_Descriptors);
 
@@ -818,6 +1035,9 @@ bool DkVideoRenderer::render(AVFrame* frame) {
         cmdbuf_.bindVtxBuffer(0, data_gpu_ + kHudVtxOff, sizeof(kHudQuad));
         cmdbuf_.draw(DkPrimitive_Quads, 4, 1, 0, 0);
     }
+    cmdbuf_.bindTextures(DkStage_Fragment, 0, {dkMakeTextureHandle(4, 0)});
+    cmdbuf_.bindVtxBuffer(0, data_gpu_ + kQuickVtxOff, sizeof(kQuickQuad));
+    cmdbuf_.draw(DkPrimitive_Quads, 4, 1, 0, 0);
     cmdbuf_.bindTextures(DkStage_Fragment, 0, {dkMakeTextureHandle(3, 0)});
     cmdbuf_.bindVtxBuffer(0, data_gpu_ + kGuideVtxOff, sizeof(kGuideQuad));
     cmdbuf_.draw(DkPrimitive_Quads, 4, 1, 0, 0);
