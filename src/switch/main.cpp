@@ -372,6 +372,7 @@ struct App {
     std::vector<int> visible;  // indices into games for the active tab + search
     std::string query;
     int cursor = 0;
+    Uint32 library_focus_started = 0;  // v0.5 card-selection motion
     LibraryTab tab = LibraryTab::All;
     std::vector<std::string> favorites;  // title_ids, marked by the user
     std::vector<std::string> history;    // title_ids, most-recent first
@@ -489,7 +490,7 @@ void apply_region(const Settings& settings) {
 
 // ---- persistence ----------------------------------------------------------
 
-constexpr int kGamesCacheVersion = 2;  // v1 lacked boxArt: force a refresh
+constexpr int kGamesCacheVersion = 3;  // v3 adds selected-game metadata
 
 void save_games_cache(const std::vector<Game>& games) {
     json list = json::array();
@@ -497,7 +498,11 @@ void save_games_cache(const std::vector<Game>& games) {
         list.push_back({{"titleId", game.title_id},
                         {"productId", game.product_id},
                         {"name", game.name},
-                        {"boxArt", game.box_art_url}});
+                        {"boxArt", game.box_art_url},
+                        {"developer", game.developer},
+                        {"publisher", game.publisher},
+                        {"genre", game.genre},
+                        {"description", game.description}});
     std::ofstream out(user_path("games.json"), std::ios::trunc);
     out << json{{"version", kGamesCacheVersion}, {"games", list}}.dump();
 }
@@ -516,6 +521,10 @@ std::vector<Game> load_games_cache() {
         game.product_id = entry.value("productId", "");
         game.name = entry.value("name", "");
         game.box_art_url = entry.value("boxArt", "");
+        game.developer = entry.value("developer", "");
+        game.publisher = entry.value("publisher", "");
+        game.genre = entry.value("genre", "");
+        game.description = entry.value("description", "");
         if (!game.title_id.empty()) games.push_back(std::move(game));
     }
     return games;
@@ -833,27 +842,33 @@ bool xbox_home_active(const App& app) {
 
 void draw_xbox_home_button(App& app) {
     const bool pressed = xbox_home_active(app);
-    app.gfx.fill(kXboxHomeRect,
-                 pressed ? gfx::Color{16, 124, 16, 235}
-                         : gfx::Color{5, 12, 17, 210});
-    app.gfx.frame(kXboxHomeRect, pressed ? gfx::kText : gfx::kFocus, 3);
-
     SDL_Renderer* renderer = app.gfx.renderer();
     const int cx = kXboxHomeRect.x + kXboxHomeRect.w / 2;
     const int cy = kXboxHomeRect.y + kXboxHomeRect.h / 2;
+    auto circle = [&](int radius, gfx::Color color, int y_offset = 0) {
+        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+        for (int dy = -radius; dy <= radius; ++dy) {
+            int half = static_cast<int>(
+                std::sqrt(radius * radius - dy * dy));
+            SDL_RenderDrawLine(renderer, cx - half, cy + y_offset + dy,
+                               cx + half, cy + y_offset + dy);
+        }
+    };
+
+    // Symbol only. The 72x72 rect remains the touch target, but the old green
+    // square and border are intentionally not painted.
+    circle(22, {0, 0, 0,
+                static_cast<Uint8>(pressed ? 180 : 125)}, 2);
+    const int radius = pressed ? 20 : 18;
     gfx::Color sphere = pressed ? gfx::kText : gfx::kAccent;
-    SDL_SetRenderDrawColor(renderer, sphere.r, sphere.g, sphere.b, sphere.a);
-    for (int dy = -25; dy <= 25; ++dy) {
-        int half = static_cast<int>(std::sqrt(25 * 25 - dy * dy));
-        SDL_RenderDrawLine(renderer, cx - half, cy + dy, cx + half, cy + dy);
-    }
+    circle(radius, sphere);
     gfx::Color mark = pressed ? gfx::kAccent : gfx::kText;
     SDL_SetRenderDrawColor(renderer, mark.r, mark.g, mark.b, mark.a);
     for (int t = -2; t <= 2; ++t) {
-        SDL_RenderDrawLine(renderer, cx - 14, cy - 15 + t, cx + 14,
-                           cy + 15 + t);
-        SDL_RenderDrawLine(renderer, cx + 14, cy - 15 + t, cx - 14,
-                           cy + 15 + t);
+        SDL_RenderDrawLine(renderer, cx - 10, cy - 11 + t, cx + 10,
+                           cy + 11 + t);
+        SDL_RenderDrawLine(renderer, cx + 10, cy - 11 + t, cx - 10,
+                           cy + 11 + t);
     }
 }
 #endif
@@ -913,7 +928,7 @@ void draw_focus_frames(App& app, const SDL_Rect& r) {
                   {gfx::kFocus.r, gfx::kFocus.g, gfx::kFocus.b, 38}, 8);
 }
 
-// v0.4 header: restrained brand bar with the title and release badge.
+// Restrained brand bar with the title and current prerelease badge.
 void draw_header(App& app) {
     app.gfx.fill({kMargin, 42, 8, 58}, gfx::kFocus);
     app.gfx.text("Light is Green", kMargin + 28, 44, gfx::FontSize::Body,
@@ -921,7 +936,7 @@ void draw_header(App& app) {
     SDL_Rect version = {kMargin + 306, 49, 92, 40};
     app.gfx.fill(version, gfx::kSurface);
     app.gfx.frame(version, gfx::kChipEdge, 2);
-    app.gfx.text_centered("v0.4", version.x + version.w / 2, version.y + 4,
+    app.gfx.text_centered("v0.5", version.x + version.w / 2, version.y + 4,
                           gfx::FontSize::Small, gfx::kFocus);
 }
 
@@ -1076,16 +1091,40 @@ void draw_signin(App& app) {
     draw_hints(app, {{"ZL", "Settings · region bypass"}, {"B", "Exit"}});
 }
 
-// Grid geometry (card 1e): 6 columns of 230x345 covers from (170,220),
-// 40px column gap, 72px row gap (room for the focused card's name plate).
+// Grid geometry: a permanent selected-game information rail sits above two
+// rows of covers. The tighter row gap leaves room for a 5% animated focus
+// scale without colliding with the footer.
 constexpr int kColumns = 6;
 constexpr int kCardW = 230;
 constexpr int kCardH = 345;
 constexpr int kGapX = 40;
-constexpr int kGapY = 72;
+constexpr int kGapY = 45;
 constexpr int kGridX = 170;
-constexpr int kGridY = 220;
+constexpr int kGridY = 250;
 constexpr int kRowsVisible = 2;
+constexpr Uint32 kLibraryFocusMotionMs = 220;
+
+int draw_text_wrapped(App& app, const std::string& text, int x, int y,
+                      gfx::FontSize size, gfx::Color color, int max_width,
+                      int line_h, int max_lines);
+
+float library_focus_motion(const App& app) {
+    if (app.library_focus_started == 0) return 1.0f;
+    float t = std::clamp(
+        (SDL_GetTicks() - app.library_focus_started) /
+            static_cast<float>(kLibraryFocusMotionMs),
+        0.0f, 1.0f);
+    // Ease-out-back gives selection a brief, restrained spring without ever
+    // blocking input or changing the grid's layout bounds.
+    float u = t - 1.0f;
+    return 1.0f + 2.70158f * u * u * u + 1.70158f * u * u;
+}
+
+SDL_Rect scale_about_center(const SDL_Rect& rect, float scale) {
+    int w = static_cast<int>(std::lround(rect.w * scale));
+    int h = static_cast<int>(std::lround(rect.h * scale));
+    return {rect.x - (w - rect.w) / 2, rect.y - (h - rect.h) / 2, w, h};
+}
 
 const char* kTabNames[kTabCount] = {"All games", "Favorites", "History",
                                     "Consoles"};
@@ -1094,6 +1133,19 @@ const char* kQualityLabels[3] = {"720p", "1080p", "1080p high bitrate"};
 const char* kMappingLabels[2] = {"Positional (Switch A = Xbox B)",
                                  "Match labels (Switch A = Xbox A)"};
 const char* kSharpnessLabels[4] = {"Off", "Low", "Medium", "High"};
+
+std::string selected_game_meta(const App& app, const Game& game) {
+    std::string meta = !game.developer.empty() ? game.developer : game.publisher;
+    if (!game.genre.empty()) {
+        if (!meta.empty()) meta += " · ";
+        meta += game.genre;
+    }
+    if (!meta.empty()) meta += " · ";
+    meta += "Xbox Cloud Gaming · ";
+    meta += kQualityLabels[app.settings.quality];
+    if (is_favorite(app, game.title_id)) meta += " · Favorite";
+    return meta;
+}
 
 const HomeConsole& selected_console(const App& app) {
     return app.consoles[std::clamp(
@@ -1227,12 +1279,15 @@ void draw_loading(App& app) {
                           gfx::FontSize::Note, gfx::kTextDim);
 }
 
-// One library card. The focused card scales 1.08x (230x345 -> 248x372,
-// centered), gets border+glow and a name plate under it (card 1a layer 1+4).
+// One library card. Focus grows from 1.00x to 1.05x over 220 ms; only the
+// drawn destination changes, so neighbours never reflow and input stays live.
 void draw_card(App& app, const Game& game, const SDL_Rect& card,
                bool focused) {
     SDL_Rect dst = card;
-    if (focused) dst = {card.x - 9, card.y - 13, kCardW + 18, kCardH + 27};
+    if (focused) {
+        float scale = 1.0f + 0.05f * library_focus_motion(app);
+        dst = scale_about_center(card, scale);
+    }
 
     SDL_Texture* cover = app.covers->get(game.title_id, game.box_art_url);
     if (cover)
@@ -1249,13 +1304,30 @@ void draw_card(App& app, const Game& game, const SDL_Rect& card,
 
     if (focused) {
         draw_focus_frames(app, dst);
-        SDL_Rect plate = {card.x - 18, card.y + kCardH + 14, kCardW + 36, 44};
-        app.gfx.fill(plate, gfx::kSurface);
-        const std::string& label =
-            game.name.empty() ? game.title_id : game.name;
-        app.gfx.text_centered(label.substr(0, 24), plate.x + plate.w / 2,
-                              plate.y + 8, gfx::FontSize::Small, gfx::kText);
     }
+}
+
+void draw_selected_game_info(App& app, const Game& game) {
+    float motion = std::clamp(library_focus_motion(app), 0.0f, 1.0f);
+    Uint8 surface_alpha = static_cast<Uint8>(205.0f * motion);
+    Uint8 text_alpha = static_cast<Uint8>(255.0f * motion);
+    int slide = static_cast<int>(8.0f * (1.0f - motion));
+    SDL_Rect rail = {kGridX, 182, gfx::kWidth - kGridX * 2, 58};
+    app.gfx.fill(rail, {10, 20, 27, surface_alpha});
+    app.gfx.fill({rail.x, rail.y, 6, rail.h},
+                 {gfx::kFocus.r, gfx::kFocus.g, gfx::kFocus.b, text_alpha});
+
+    const std::string& raw_title =
+        game.name.empty() ? game.title_id : game.name;
+    std::string title = raw_title.substr(0, 48);
+    std::string meta = selected_game_meta(app, game);
+    app.gfx.text(title, rail.x + 24, rail.y + 1 + slide,
+                 gfx::FontSize::Note,
+                 {gfx::kText.r, gfx::kText.g, gfx::kText.b, text_alpha});
+    app.gfx.text(meta.substr(0, 92), rail.x + 24, rail.y + 31 + slide,
+                 gfx::FontSize::Small,
+                 {gfx::kTextDim.r, gfx::kTextDim.g, gfx::kTextDim.b,
+                  text_alpha});
 }
 
 // Empty-state pattern (card 1l): big glyph box + title + instruction with
@@ -1405,6 +1477,10 @@ void draw_library(App& app) {
             draw_empty_state(app, "", gfx::kText,
                              "No games available for this account",
                              "Press", "ZR", "to refresh your library");
+    } else {
+        draw_selected_game_info(
+            app, app.games[app.visible[std::clamp(
+                     app.cursor, 0, static_cast<int>(app.visible.size()) - 1)]]);
     }
 
     // Draw the focused card last so its scale/glow overlaps neighbours.
@@ -1440,8 +1516,8 @@ void draw_library(App& app) {
                      {"+", "Exit"}});
 }
 
-// Game detail (card 1f): big cover left, title + meta chips + action buttons
-// right. Play is focused on entry, so A-A launches as fast as before.
+// Game detail: big cover left, real catalog metadata + action buttons right.
+// Play is focused on entry, so A-A launches as fast as before.
 void draw_detail(App& app) {
     if (app.detail_index < 0 ||
         app.detail_index >= static_cast<int>(app.games.size()))
@@ -1479,19 +1555,34 @@ void draw_detail(App& app) {
     meta_chip(kQualityLabels[app.settings.quality], gfx::kTextDim);
     if (fav) meta_chip("★ Favorite", gfx::kWarn);
 
+    std::string byline =
+        !game.developer.empty() ? game.developer : game.publisher;
+    if (!game.genre.empty()) {
+        if (!byline.empty()) byline += " · ";
+        byline += game.genre;
+    }
+    if (!byline.empty())
+        app.gfx.text(byline.substr(0, 56), rx, 302, gfx::FontSize::Small,
+                     gfx::kTextDim);
+    std::string summary = game.description.empty()
+                              ? "Playable from your Xbox Cloud Gaming library."
+                              : game.description;
+    draw_text_wrapped(app, summary, rx, 340, gfx::FontSize::Small,
+                      gfx::kTextDim, 640, 36, 2);
+
     // Action buttons, 640 wide. Buttons don't scale on focus — only
     // border+glow (and the primary keeps its accent fill). "Play on…" is
     // drawn only with a linked console (card 1f visibility rule).
     const char* fav_label = fav ? "★ Remove favorite" : "★ Add favorite";
-    SDL_Rect play = {rx, 400, 640, 96};
+    SDL_Rect play = {rx, 440, 640, 96};
     app.gfx.fill(play, gfx::kAccent);
     app.gfx.text_centered("Play", play.x + 320, play.y + 24,
                           gfx::FontSize::Body, gfx::kText);
-    SDL_Rect favbtn = {rx, 520, 640, 96};
+    SDL_Rect favbtn = {rx, 560, 640, 96};
     app.gfx.fill(favbtn, gfx::kSurface);
     app.gfx.text_centered(fav_label, favbtn.x + 320, favbtn.y + 24,
                           gfx::FontSize::Body, gfx::kText);
-    SDL_Rect source = {rx, 640, 640, 96};
+    SDL_Rect source = {rx, 680, 640, 96};
     if (!app.consoles.empty()) {
         app.gfx.fill(source, gfx::kSurface);
         app.gfx.text("Play on…", source.x + 44, source.y + 24,
@@ -1510,7 +1601,7 @@ void draw_detail(App& app) {
     draw_focus_frames(app, focused);
 
     app.gfx.text("Streams in your account's language · change in Settings",
-                 rx, app.consoles.empty() ? 680 : 792, gfx::FontSize::Small,
+                 rx, app.consoles.empty() ? 688 : 808, gfx::FontSize::Small,
                  gfx::kFaint);
 
     draw_hints(app, {{"A", "Select", true}, {"B", "Back"}});
@@ -2452,6 +2543,7 @@ int main(int argc, char** argv) {
                         app.tab = LibraryTab::Consoles;
                     apply_filter(app);
                     app.scene = Scene::Library;
+                    app.library_focus_started = SDL_GetTicks();
                     try {
                         app.gamertag = app.auth->fetch_profile().gamertag;
                         remember_gamertag(app.gamertag);
@@ -2918,10 +3010,14 @@ int main(int argc, char** argv) {
         }
 #endif
 
-        if (app.cursor != nav_cursor || app.tab != nav_tab ||
+        bool navigation_changed =
+            app.cursor != nav_cursor || app.tab != nav_tab ||
             app.console_cursor != nav_console ||
-            app.settings_cursor != nav_settings)
+            app.settings_cursor != nav_settings;
+        if (navigation_changed)
             app.ui_sound.play(1.0f);
+        if (navigation_changed && app.scene == Scene::Library)
+            app.library_focus_started = SDL_GetTicks();
 
         app.covers->pump();
         app.gfx.begin_frame();

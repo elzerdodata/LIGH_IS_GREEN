@@ -137,6 +137,28 @@ void fetch_names(Http& http, std::vector<Game>& games,
             if (localized.empty()) continue;
             const json& properties = localized.front();
             found->second->name = properties.value("ProductTitle", "");
+            found->second->developer = properties.value("DeveloperName", "");
+            found->second->publisher = properties.value("PublisherName", "");
+            found->second->description =
+                properties.value("ShortDescription", "");
+            if (found->second->description.empty())
+                found->second->description =
+                    properties.value("ProductDescription", "");
+
+            // Category shape varies slightly between catalog products. Accept
+            // both the common string array and named category objects.
+            const json product_properties =
+                product.value("Properties", json::object());
+            const json categories =
+                product_properties.value("Categories", json::array());
+            if (!categories.empty()) {
+                const json& first = categories.front();
+                if (first.is_string())
+                    found->second->genre = first.get<std::string>();
+                else if (first.is_object())
+                    found->second->genre = first.value(
+                        "Name", first.value("CategoryName", ""));
+            }
 
             std::string poster, box_art;
             for (const json& image :

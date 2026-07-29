@@ -1,6 +1,6 @@
 # Light is Green
 
-> **Preliminary v0.4.0-pre / Versión preliminar v0.4.0-pre**
+> **Preliminary v0.5.0-pre / Versión preliminar v0.5.0-pre**
 
 English | [Español](#español)
 
@@ -13,15 +13,19 @@ Nintendo Switch** homebrew. Authentication, WebRTC, hardware H.264 decoding,
 GPU rendering, audio, and controller input all run on the console; no companion
 PC is required.
 
-## What's new in v0.4
+## What's new in v0.5
 
-- Redesigned dark interface with emerald accents and a new original background.
-- Small Xbox Guide symbol placed directly beside the **••** quick-menu button;
-  the oversized `HOME` tile has been removed.
-- **Gamma** control added to Settings and the in-stream quick menu.
-- Gamma, brightness, contrast, saturation, and sharpness changes are applied
-  live during playback and can be reset together.
-- Refined in-stream panel spacing and visual hierarchy for handheld use.
+- Frameless, symbol-only **••** and Xbox Guide controls in the extreme top safe
+  strip. Their visible glyphs are smaller while their full 48×48 physical-pixel
+  touch targets remain easy to tap.
+- The controls no longer use bright green square outlines and are positioned
+  above the Switch status clock instead of covering it.
+- The selected game now grows with a short 220 ms spring animation instead of
+  snapping instantly between states.
+- A persistent selection rail shows the game's title, developer/publisher,
+  genre, cloud source, stream quality, and favorite state when available.
+- The game detail view now includes Microsoft Store metadata and a short
+  description. Existing v0.4 Gamma and live image controls remain available.
 
 ## Features
 
@@ -81,7 +85,7 @@ src/switch/          SDL2 interface, covers, and input
 src/switch/stream/   WebRTC, RTP, NVDEC, deko3d, and Opus streaming engine
 shaders/             deko3d video shaders
 deps/                Switch dependency build scripts and patches
-romfs/ui/            v0.4 interface artwork
+romfs/ui/            interface artwork
 ```
 
 ## Third-party software
@@ -113,7 +117,7 @@ valid subscription and hardware.
 - License: [GPL-3.0](LICENSE)
 - Original project and core implementation: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Light is Green fork and v0.2–v0.4 work: **elzerdodata**
+- Light is Green fork and v0.2–v0.5 work: **elzerdodata**
 
 ---
 
@@ -128,15 +132,20 @@ Gaming (xCloud) para Nintendo Switch**. La autenticación, WebRTC, decodificaci�
 H.264 por hardware, renderizado en GPU, audio y controles funcionan en la
 consola; no requiere una PC auxiliar.
 
-## Novedades de v0.4
+## Novedades de v0.5
 
-- Interfaz oscura rediseñada con acentos esmeralda y un nuevo fondo original.
-- Símbolo pequeño de Xbox Guide ubicado directamente junto al botón rápido
-  **••**; se eliminó el recuadro `HOME` grande.
-- Control de **Gamma** agregado a Ajustes y al menú rápido durante la partida.
-- Gamma, brillo, contraste, saturación y nitidez se aplican en tiempo real y se
-  pueden restablecer juntos.
-- Espaciado y jerarquía visual mejorados para uso portátil.
+- Controles **••** y Xbox Guide sin recuadros, ubicados en la franja segura del
+  extremo superior. Los símbolos visibles son más pequeños, pero conservan
+  áreas táctiles físicas completas de 48×48 píxeles.
+- Se eliminaron los bordes cuadrados verdes y los controles quedan por encima
+  del reloj de estado de Switch, sin taparlo.
+- El juego seleccionado ahora crece con una breve animación elástica de 220 ms
+  en lugar de cambiar de tamaño instantáneamente.
+- Una ficha de selección permanente muestra título, desarrollador/editor,
+  género, fuente en la nube, calidad y estado de favorito cuando están
+  disponibles.
+- La vista de detalles ahora incluye metadatos de Microsoft Store y una
+  descripción breve. Gamma y los controles de imagen de v0.4 siguen incluidos.
 
 ## Funciones
 
@@ -198,7 +207,7 @@ src/switch/          interfaz SDL2, carátulas y controles
 src/switch/stream/   WebRTC, RTP, NVDEC, deko3d y motor de audio Opus
 shaders/             shaders de video para deko3d
 deps/                scripts y parches de dependencias para Switch
-romfs/ui/            arte de interfaz de v0.4
+romfs/ui/            arte de interfaz
 ```
 
 ## Software de terceros
@@ -230,4 +239,4 @@ propia suscripción válida y tu hardware.
 - Licencia: [GPL-3.0](LICENSE)
 - Proyecto original e implementación base: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Fork Light is Green y trabajo de v0.2–v0.4: **elzerdodata**
+- Fork Light is Green y trabajo de v0.2–v0.5: **elzerdodata**

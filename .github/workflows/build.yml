@@ -25,5 +25,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Light_is_Green-v0.4-pre-nro
+          name: Light_is_Green-v0.5-pre-nro
           path: Light_is_Green.nro

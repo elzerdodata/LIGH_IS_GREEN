@@ -13,6 +13,10 @@ struct Game {
     std::string product_id;  // Microsoft Store bigId, for metadata lookup
     std::string name;        // filled by fetch_names()
     std::string box_art_url;
+    std::string developer;   // best-effort Microsoft Store metadata
+    std::string publisher;
+    std::string genre;
+    std::string description;
 };
 
 // Titles the signed-in account can actually play (entitlement or subscription),
@@ -20,7 +24,7 @@ struct Game {
 std::vector<Game> fetch_playable_titles(Http& http,
                                         const EndpointCredentials& cloud);
 
-// Fills name/box_art_url from the public Microsoft Store display catalog.
+// Fills display metadata from the public Microsoft Store display catalog.
 // Batched; no authentication required.
 void fetch_names(Http& http, std::vector<Game>& games,
                  const std::string& market = "US",

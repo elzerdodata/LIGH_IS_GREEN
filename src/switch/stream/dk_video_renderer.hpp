@@ -216,8 +216,8 @@ private:
     // Always-visible two-dot handle and its optional expanded quick panel.
     // One transparent RGBA texture covers both shapes and costs one overlay
     // draw call regardless of whether the panel is open.
-    static constexpr uint32_t kQuickTexW = 512;
-    static constexpr uint32_t kQuickTexH = 720;
+    static constexpr uint32_t kQuickTexW = 672;
+    static constexpr uint32_t kQuickTexH = 724;
     dk::UniqueMemBlock quick_memblock_;
     dk::Image quick_image_;
     dk::ImageDescriptor quick_desc_;
