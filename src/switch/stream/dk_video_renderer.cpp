@@ -86,8 +86,12 @@ struct Transformation {
     alignas(16) float uv_data[4];
     alignas(16) float sharp_data[4];  // x=strength, y=overshoot allowance
     alignas(16) float picture_data[4];  // brightness, contrast, saturation, gamma
+    alignas(16) float motion_data[4];  // x=blend factor, y=enabled
 };
-static_assert(sizeof(Transformation) == 112, "std140 Transformation");
+
+static_assert(7 * sizeof(DkImageDescriptor) <= kVtxOff - kImageOff,
+              "image descriptors overlap the vertex buffer");
+static_assert(sizeof(Transformation) == 128, "std140 Transformation");
 
 // Column-major YUV->RGB matrices (matching Moonlight-Switch / BT.xxx).
 const float kBt601Lim[9] = {1.1644f, 1.1644f, 1.1644f, 0.0f,    -0.3917f,
@@ -295,6 +299,11 @@ bool DkVideoRenderer::init() {
     hud_text_cache_.clear();
     fps_tick_ = 0;
     fps_frames_ = 0;
+    output_frames_ = 0;
+    generated_frames_ = 0;
+    fps_ = 0.0f;
+    output_fps_ = 0.0f;
+    generated_fps_ = 0.0f;
     fps_last_data_ = nullptr;
     net_valid_ = false;  // don't show the previous stream's numbers
     {
@@ -842,27 +851,38 @@ void DkVideoRenderer::update_hud(AVFrame* frame) {
     if (dt >= freq / 2) {  // recompute FPS over ~0.5 s windows
         fps_ = static_cast<float>(fps_frames_) * static_cast<float>(freq) /
                static_cast<float>(dt);
+        output_fps_ = static_cast<float>(output_frames_) *
+                      static_cast<float>(freq) / static_cast<float>(dt);
+        generated_fps_ = static_cast<float>(generated_frames_) *
+                         static_cast<float>(freq) / static_cast<float>(dt);
         fps_frames_ = 0;
+        output_frames_ = 0;
+        generated_frames_ = 0;
         fps_tick_ = now;
     }
-    char buf[160];
+    char buf[220];
     if (net_valid_.load(std::memory_order_relaxed)) {
         std::snprintf(buf, sizeof(buf),
-                      "%dx%d\n%.0f fps  %.1f Mbps\nloss %.1f%%  buf %dms",
-                      frame->width, frame->height, fps_,
+                      "%dx%d\nsrc %.0f  out %.0f  gen %.0f fps\n"
+                      "%.1f Mbps  loss %.1f%%\nbuf %dms",
+                      frame->width, frame->height, fps_, output_fps_,
+                      generated_fps_,
                       net_mbps_.load(std::memory_order_relaxed),
                       net_loss_.load(std::memory_order_relaxed),
                       net_buffer_ms_.load(std::memory_order_relaxed));
     } else {
-        std::snprintf(buf, sizeof(buf), "%dx%d\n%.0f fps", frame->width,
-                      frame->height, fps_);
+        std::snprintf(buf, sizeof(buf),
+                      "%dx%d\nsrc %.0f  out %.0f  gen %.0f fps",
+                      frame->width, frame->height, fps_, output_fps_,
+                      generated_fps_);
     }
     if (hud_text_cache_ == buf) return;  // unchanged -> keep the current texture
     hud_text_cache_ = buf;
     rasterize_hud();
 }
 
-bool DkVideoRenderer::render(AVFrame* frame) {
+bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
+                             float motion_blend) {
     if (!initialized_) return false;
     maybe_rebuild_swapchain();  // follow dock/undock (720p <-> 1080p)
     if (!swapchain_) return false;
@@ -913,9 +933,42 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     FrameMapping* fm = map_frame(frame, base, handle, size);
     if (!fm) return false;
 
+    // Motion mode presents a lightweight midpoint between consecutive decoded
+    // surfaces. It intentionally reuses the same zero-copy mapping path: no CPU
+    // readback and no extra decoded-frame upload are introduced.
+    FrameMapping* motion_fm = nullptr;
+    if (motion_frame && motion_blend > 0.0f &&
+        motion_frame->format == AV_PIX_FMT_NVTEGRA &&
+        motion_frame->width == frame->width &&
+        motion_frame->height == frame->height) {
+        AVNVTegraMap* motion_map = av_nvtegra_frame_get_fbuf_map(motion_frame);
+        if (motion_map && motion_map->is_linear == map->is_linear &&
+            motion_frame->linesize[0] == frame->linesize[0] &&
+            motion_frame->linesize[1] == frame->linesize[1]) {
+            void* motion_base = av_nvtegra_map_get_addr(motion_map);
+            uint32_t motion_handle = av_nvtegra_map_get_handle(motion_map);
+            uint32_t motion_size = av_nvtegra_map_get_size(motion_map);
+            if (motion_base && motion_size) {
+                motion_fm = map_frame(motion_frame, motion_base, motion_handle,
+                                      motion_size);
+            }
+        }
+    }
+    const float blend = motion_fm ? std::clamp(motion_blend, 0.0f, 1.0f) : 0.0f;
+    auto* transform = reinterpret_cast<Transformation*>(
+        static_cast<uint8_t*>(data_cpu_) + kUniformOff);
+    transform->motion_data[0] = blend;
+    transform->motion_data[1] = motion_fm ? 1.0f : 0.0f;
+    transform->motion_data[2] = 0.0f;
+    transform->motion_data[3] = 0.0f;
+
     // Recompute HUD stats + re-rasterize the text texture now, while the GPU is
     // idle (render() ends with waitIdle) and before we record any commands.
-    if (hud_enabled_) update_hud(frame);
+    if (hud_enabled_) {
+        ++output_frames_;
+        if (motion_fm) ++generated_frames_;
+        update_hud(frame);
+    }
     if (guide_pressed_ != guide_rasterized_pressed_) rasterize_guide();
     if (quick_dirty_) rasterize_quick_menu();
 
@@ -941,6 +994,14 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     // Image descriptor #4 = two-dot quick menu handle + optional panel.
     cmdbuf_.pushData(data_gpu_ + kImageOff + 4 * sizeof(DkImageDescriptor),
                      &quick_desc_, sizeof(DkImageDescriptor));
+    // Image descriptors #5/#6 = the next decoded frame used by Motion. When
+    // Motion is inactive they alias the current frame, keeping all samplers
+    // valid without requiring a separate shader variant.
+    FrameMapping* next = motion_fm ? motion_fm : fm;
+    cmdbuf_.pushData(data_gpu_ + kImageOff + 5 * sizeof(DkImageDescriptor),
+                     &next->luma_desc, sizeof(DkImageDescriptor));
+    cmdbuf_.pushData(data_gpu_ + kImageOff + 6 * sizeof(DkImageDescriptor),
+                     &next->chroma_desc, sizeof(DkImageDescriptor));
 
     dk::ImageView view{framebuffers_[slot]};
     cmdbuf_.bindRenderTargets({&view});
@@ -965,12 +1026,13 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     cmdbuf_.bindDepthStencilState(depth_stencil);
 
     cmdbuf_.bindSamplerDescriptorSet(data_gpu_ + kSamplerOff, 1);
-    cmdbuf_.bindImageDescriptorSet(data_gpu_ + kImageOff, 5);
+    cmdbuf_.bindImageDescriptorSet(data_gpu_ + kImageOff, 7);
     cmdbuf_.barrier(DkBarrier_None,
                     DkInvalidateFlags_Image | DkInvalidateFlags_Descriptors);
 
     cmdbuf_.bindTextures(DkStage_Fragment, 0,
-                         {dkMakeTextureHandle(0, 0), dkMakeTextureHandle(1, 0)});
+                         {dkMakeTextureHandle(0, 0), dkMakeTextureHandle(1, 0),
+                          dkMakeTextureHandle(5, 0), dkMakeTextureHandle(6, 0)});
     cmdbuf_.bindUniformBuffer(DkStage_Fragment, 0, data_gpu_ + kUniformOff, 256);
 
     cmdbuf_.bindVtxAttribState(

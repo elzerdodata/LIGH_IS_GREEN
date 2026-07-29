@@ -8,6 +8,8 @@ layout (location = 0) out vec4 outColor;
 
 layout (binding = 0) uniform sampler2D plane0;
 layout (binding = 1) uniform sampler2D plane1;
+layout (binding = 2) uniform sampler2D motionPlane0;
+layout (binding = 3) uniform sampler2D motionPlane1;
 
 layout (std140, binding = 0) uniform Transformation
 {
@@ -17,6 +19,9 @@ layout (std140, binding = 0) uniform Transformation
     vec4 sharp_data;
     // x=brightness, y=contrast, z=saturation, w=gamma (1.0 is neutral).
     vec4 picture_data;
+    // x=blend factor, y=enabled. Motion beta uses 0.5 for the generated
+    // midpoint between adjacent 30 fps source frames.
+    vec4 motion_data;
 } u;
 
 void main()
@@ -29,12 +34,28 @@ void main()
     // exceed the local neighborhood min/max only by that allowance, which is
     // what keeps hard edges from growing halos.
     float y = texture(plane0, uv).r;
+    vec2 chroma = texture(plane1, uv).rg;
+    if (u.motion_data.y > 0.5) {
+        y = mix(y, texture(motionPlane0, uv).r, u.motion_data.x);
+        chroma = mix(chroma, texture(motionPlane1, uv).rg,
+                     u.motion_data.x);
+    }
     if (u.sharp_data.x > 0.0) {
         vec2 px = 1.0 / vec2(textureSize(plane0, 0));
         float yl = texture(plane0, uv - vec2(px.x, 0.0)).r;
         float yr = texture(plane0, uv + vec2(px.x, 0.0)).r;
         float yu = texture(plane0, uv - vec2(0.0, px.y)).r;
         float yd = texture(plane0, uv + vec2(0.0, px.y)).r;
+        if (u.motion_data.y > 0.5) {
+            yl = mix(yl, texture(motionPlane0,
+                                 uv - vec2(px.x, 0.0)).r, u.motion_data.x);
+            yr = mix(yr, texture(motionPlane0,
+                                 uv + vec2(px.x, 0.0)).r, u.motion_data.x);
+            yu = mix(yu, texture(motionPlane0,
+                                 uv - vec2(0.0, px.y)).r, u.motion_data.x);
+            yd = mix(yd, texture(motionPlane0,
+                                 uv + vec2(0.0, px.y)).r, u.motion_data.x);
+        }
         float average = 0.25 * (yl + yr + yu + yd);
         float lo = min(y, min(min(yl, yr), min(yu, yd)));
         float hi = max(y, max(max(yl, yr), max(yu, yd)));
@@ -43,9 +64,7 @@ void main()
                   min(1.0, hi + u.sharp_data.y));
     }
 
-    vec3 yuv = vec3(y,
-                    texture(plane1, uv).r,
-                    texture(plane1, uv).g) - u.offset;
+    vec3 yuv = vec3(y, chroma.r, chroma.g) - u.offset;
     vec3 rgb = u.yuvmat * yuv;
 
     // Lightweight post-conversion picture controls. Defaults (0, 1, 1) are

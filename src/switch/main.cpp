@@ -288,9 +288,12 @@ struct Settings {
     int language = 0;   // index into kLanguage* (0 = English US)
     int source = 0;     // 0=ask every time, 1=xCloud, 2=your Xbox
     float volume = 1.0f;  // output gain for streamed audio (0.5-4.0); tune in settings.json
-    // Smooth video pacing: steadier motion for about one source frame of
-    // extra latency ("Video pacing" row / "smooth" in settings.json).
-    bool smooth = false;
+    // Presentation pacing: 0=Steady (lowest latency), 1=Smooth (one-frame
+    // reserve), 2=Motion (30->60 cross-frame interpolation, experimental).
+    int pacing = 0;
+    // Remote Play media request. The session fingerprint stays on the proven
+    // Android path; this only changes the post-connect video capabilities.
+    int console_quality = 0;  // 0=720p stable, 1=1080p experimental
     int brightness = 0;    // post-process offset: -20..+20
     int contrast = 100;    // post-process multiplier: 70..130 percent
     int saturation = 100;  // post-process multiplier: 0..150 percent
@@ -302,6 +305,8 @@ struct Settings {
 constexpr int kLanguageCount = 14;
 constexpr int kVibrationLevels = 4;
 constexpr int kQualityLevels = 4;
+constexpr int kPacingLevels = 3;
+constexpr int kConsoleQualityLevels = 2;
 
 Settings load_settings();
 void save_settings(const Settings& settings);
@@ -439,7 +444,15 @@ Settings load_settings() {
         std::clamp(data.value("language", 0), 0, kLanguageCount - 1);
     settings.source = std::clamp(data.value("source", 0), 0, 2);
     settings.volume = std::clamp(data.value("volume", 1.0f), 0.5f, 4.0f);
-    settings.smooth = data.value("smooth", false);
+    // v0.6 stored a bool named "smooth". Prefer the new three-state value,
+    // but migrate the old key so users keep their existing choice.
+    if (data.contains("pacing"))
+        settings.pacing =
+            std::clamp(data.value("pacing", 0), 0, kPacingLevels - 1);
+    else
+        settings.pacing = data.value("smooth", false) ? 1 : 0;
+    settings.console_quality = std::clamp(
+        data.value("console_quality", 0), 0, kConsoleQualityLevels - 1);
     settings.brightness = std::clamp(data.value("brightness", 0), -20, 20);
     settings.contrast = std::clamp(data.value("contrast", 100), 70, 130);
     settings.saturation = std::clamp(data.value("saturation", 100), 0, 150);
@@ -459,7 +472,11 @@ void save_settings(const Settings& settings) {
                 {"language", settings.language},
                 {"source", settings.source},
                 {"volume", settings.volume},
-                {"smooth", settings.smooth},
+                {"pacing", settings.pacing},
+                // Keep the legacy key so switching back to stable v0.6 does
+                // not silently reset Smooth/Motion to Steady.
+                {"smooth", settings.pacing != 0},
+                {"console_quality", settings.console_quality},
                 {"brightness", settings.brightness},
                 {"contrast", settings.contrast},
                 {"saturation", settings.saturation},
@@ -1310,6 +1327,9 @@ const char* kTabNames[kTabCount] = {"All games", "Favorites", "History",
 
 const char* kQualityLabels[kQualityLevels] = {
     "720p", "1080p", "1080p HQ · Windows", "1080p HQ · Tizen test"};
+const char* kConsoleQualityLabels[kConsoleQualityLevels] = {
+    "720p · Stable", "1080p · Experimental"};
+const char* kPacingLabels[kPacingLevels] = {"Steady", "Smooth", "Motion"};
 const char* kMappingLabels[2] = {"Positional (Switch A = Xbox B)",
                                  "Match labels (Switch A = Xbox A)"};
 const char* kSharpnessLabels[4] = {"Off", "Low", "Medium", "High"};
@@ -1422,11 +1442,15 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
 void launch_stream(App& app, bool home) {
     app.launching_home = home && !app.consoles.empty();
 #ifdef GNX_NATIVE_STREAM
-    QualityTier tier = static_cast<QualityTier>(app.settings.quality);
+    QualityTier tier = app.launching_home
+                           ? (app.settings.console_quality == 1
+                                  ? QualityTier::P1080
+                                  : QualityTier::P720)
+                           : static_cast<QualityTier>(app.settings.quality);
     const char* locale = kLanguageCodes[app.settings.language];
     app.engine->set_audio_gain(app.settings.volume);
-    app.engine->set_pacing(app.settings.smooth ? stream::VideoPacing::Smooth
-                                               : stream::VideoPacing::Steady);
+    app.engine->set_pacing(
+        static_cast<stream::VideoPacing>(app.settings.pacing));
     app.quick_menu_open = false;
     push_quick_menu_state(app, false);
     if (app.launching_home)
@@ -2118,13 +2142,15 @@ void draw_settings(App& app) {
     };
     std::vector<Row> rows = {
         {"Stream quality", kQualityLabels[app.settings.quality]},
+        {"Console quality",
+         kConsoleQualityLabels[app.settings.console_quality]},
         {"Button layout", kMappingLabels[app.settings.mapping]},
         {"Vibration", kVibrationLabels[app.settings.vibration]},
         {"Region bypass", kRegionLabels[app.settings.region]},
         {"Game language", kLanguageLabels[app.settings.language]},
         {"Volume",
          std::to_string(static_cast<int>(app.settings.volume * 100 + 0.5f)) + "%"},
-        {"Video pacing", app.settings.smooth ? "Smooth" : "Standard"},
+        {"Pacing", kPacingLabels[app.settings.pacing]},
         {"Brightness", signed_value(app.settings.brightness)},
         {"Contrast", std::to_string(app.settings.contrast) + "%"},
         {"Saturation", std::to_string(app.settings.saturation) + "%"},
@@ -2223,57 +2249,74 @@ void draw_settings(App& app) {
         line1 = "On-screen overlay with live stream stats (resolution, FPS,";
         line2 = "bitrate, loss). A debug tool -- turn it off for clean playback.";
     } else switch (app.settings_cursor) {
-        case 5:
-            line1 = "Output volume for streamed audio — raise it if the stream";
+        case 6:
+            line1 = "Output volume for streamed audio - raise it if the stream";
             line2 = "sounds quiet even with the console at full volume.";
             break;
-        case 6:
-            line1 = "Smooth evens motion out by holding one frame in reserve —";
-            line2 = "steadier 30 fps scenes for about one frame of extra lag.";
-            break;
         case 7:
+            if (app.settings.pacing == 0) {
+                line1 = "Steady prioritizes latency and repeats the newest frame";
+                line2 = "on a local 60 Hz clock when the network arrives late.";
+            } else if (app.settings.pacing == 1) {
+                line1 = "Smooth holds one source frame to absorb network jitter.";
+                line2 = "Motion is steadier, with about one frame of extra lag.";
+            } else {
+                line1 = "Motion blends a midpoint between 30 fps source frames.";
+                line2 = "Experimental: it is not optical-flow frame generation.";
+            }
+            break;
+        case 8:
             line1 = "Adds or removes light after video color conversion.";
             line2 = "Small changes work best; high values can clip highlights.";
             break;
-        case 8:
+        case 9:
             line1 = "Expands or compresses the difference between dark and";
             line2 = "bright areas. 100% preserves the source image.";
             break;
-        case 9:
+        case 10:
             line1 = "Controls color intensity. 100% is neutral; 0% is";
             line2 = "grayscale, while higher values make colors stronger.";
             break;
-        case 10:
+        case 11:
             line1 = "Adjusts midtones without moving the darkest blacks or";
             line2 = "brightest whites. 1.00 is neutral; higher is brighter.";
             break;
-        case 11:
+        case 12:
             line1 = "Sharpens the streamed image, which is a touch soft at";
             line2 = "cloud bitrates. Low is subtle; High can ring on edges.";
             break;
-        case 12:
+        case 13:
             line1 = "Chooses the xCloud datacenter. Auto follows Xbox; a fixed";
             line2 = "region can avoid a busy queue but may add network latency.";
             break;
-        case 13:
+        case 14:
             line1 = "Where Play launches games: xCloud (cloud servers) or";
-            line2 = "remote play from your own console over your network.";
+            line2 = "Remote Play from your Xbox, including away from home.";
             break;
-        case 1:
+        case 2:
             line1 = "Positional keeps the Switch layout under your thumbs;";
             line2 = "match labels follows the printed A/B/X/Y letters.";
             break;
-        case 2:
+        case 3:
             line1 = "Rumble intensity for the game's vibration effects.";
             line2 = "High still leaves headroom to avoid the HD-rumble hum.";
             break;
-        case 3:
+        case 4:
             line1 = "Region bypass spoofs your location to Xbox to reach";
             line2 = "xCloud from an unsupported country. Use at your own risk.";
             break;
-        case 4:
+        case 5:
             line1 = "Sets the streamed console's language for games without";
             line2 = "an in-game language menu. Takes effect on next launch.";
+            break;
+        case 1:
+            if (app.settings.console_quality == 1) {
+                line1 = "Experimental 1080p Remote Play request. Compatibility";
+                line2 = "depends on Xbox; no video after 15s retries at 720p.";
+            } else {
+                line1 = "Stable 720p Remote Play profile for your own Xbox.";
+                line2 = "Choose 1080p only for beta testing on a strong link.";
+            }
             break;
         case 0:
             if (app.settings.quality == 3) {
@@ -3151,12 +3194,12 @@ int main(int argc, char** argv) {
             }
 
             case Scene::Settings: {
-                // Row order: quality, mapping, vibration, bypass, language,
-                // volume, pacing, brightness, contrast, saturation, gamma,
-                // sharpness, server region,
+                // Row order: cloud quality, console quality, mapping,
+                // vibration, bypass, language, volume, pacing, brightness,
+                // contrast, saturation, gamma, sharpness, server region,
                 // [source when a console is linked], Debug HUD, accounts,
                 // sign out.
-                int hud_row = app.consoles.empty() ? 13 : 14;
+                int hud_row = app.consoles.empty() ? 14 : 15;
                 int accounts_row = hud_row + 1;
                 int signout_row = hud_row + 2;
                 if (input.up)
@@ -3206,47 +3249,54 @@ int main(int argc, char** argv) {
                              kQualityLevels) %
                             kQualityLevels;
                     else if (app.settings_cursor == 1)
+                        app.settings.console_quality =
+                            (app.settings.console_quality + direction +
+                             kConsoleQualityLevels) %
+                            kConsoleQualityLevels;
+                    else if (app.settings_cursor == 2)
                         app.settings.mapping =
                             (app.settings.mapping + direction + 2) % 2;
-                    else if (app.settings_cursor == 2)
+                    else if (app.settings_cursor == 3)
                         app.settings.vibration =
                             (app.settings.vibration + direction +
                              kVibrationLevels) %
                             kVibrationLevels;
-                    else if (app.settings_cursor == 3) {
+                    else if (app.settings_cursor == 4) {
                         app.settings.region =
                             (app.settings.region + direction + 6) % 6;
                         apply_region(app.settings);  // takes effect next request
-                    } else if (app.settings_cursor == 4)
+                    } else if (app.settings_cursor == 5)
                         app.settings.language =
                             (app.settings.language + direction + kLanguageCount) %
                             kLanguageCount;
-                    else if (app.settings_cursor == 5)
+                    else if (app.settings_cursor == 6)
                         app.settings.volume = std::clamp(
                             app.settings.volume + direction * 0.5f, 0.5f, 4.0f);
-                    else if (app.settings_cursor == 6)
-                        app.settings.smooth = !app.settings.smooth;
                     else if (app.settings_cursor == 7)
+                        app.settings.pacing =
+                            (app.settings.pacing + direction + kPacingLevels) %
+                            kPacingLevels;
+                    else if (app.settings_cursor == 8)
                         app.settings.brightness = std::clamp(
                             app.settings.brightness + direction * 5, -20, 20);
-                    else if (app.settings_cursor == 8)
+                    else if (app.settings_cursor == 9)
                         app.settings.contrast = std::clamp(
                             app.settings.contrast + direction * 10, 70, 130);
-                    else if (app.settings_cursor == 9)
+                    else if (app.settings_cursor == 10)
                         app.settings.saturation = std::clamp(
                             app.settings.saturation + direction * 10, 0, 150);
-                    else if (app.settings_cursor == 10)
+                    else if (app.settings_cursor == 11)
                         app.settings.gamma = std::clamp(
                             app.settings.gamma + direction * 5, 50, 200);
-                    else if (app.settings_cursor == 11)
+                    else if (app.settings_cursor == 12)
                         app.settings.sharpness =
                             (app.settings.sharpness + direction + 4) % 4;
-                    else if (app.settings_cursor == 12)
+                    else if (app.settings_cursor == 13)
                         cycle_server_region(app, direction);
                     // "Preferred source" only exists with a linked console;
                     // Debug HUD sits right after it either way. Accounts and
                     // Sign out are A-rows, handled above.
-                    else if (!app.consoles.empty() && app.settings_cursor == 13)
+                    else if (!app.consoles.empty() && app.settings_cursor == 14)
                         app.settings.source =
                             (app.settings.source + direction + 3) % 3;
                     else if (app.settings_cursor == hud_row)
