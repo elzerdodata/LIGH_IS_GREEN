@@ -1,12 +1,12 @@
-# Light is Green v0.5.1-pre
+# Light is Green v0.5.1
 
 English | [Español](#español)
 
 ## Release summary
 
-Version 0.5.1 is a corrective prerelease. It removes the nullable catalog
+Version 0.5.1 is a corrective release. It removes the nullable catalog
 metadata introduced in v0.5.0-pre, restores the proven v0.4 loading path, and
-brings the native Switch library much closer to the approved cinematic design.
+uses the available screen space for a content-first game library.
 
 ### Fixes and changes
 
@@ -14,10 +14,10 @@ brings the native Switch library much closer to the approved cinematic design.
   loading the library.
 - Restored the v0.4 game-cache format and catalog parser.
 - The app once again reads only the existing game name and cover-art fields.
-- Added a compact branded header, search surface, filter pills, a large
-  selected-game hero, and an eight-game carousel.
-- The hero uses existing local data only: title, xCloud source, quality, and
-  favorite state.
+- Added a compact branded header, search surface, filter pills, and an 8×3
+  library grid showing up to 24 games per page.
+- Removed the empty selected-game hero and the non-functional **In-stream**
+  header tab.
 - Added the supplied Joy-Con/Xbox artwork as the NRO icon and in-app brand icon.
 - Preserved the animated selected tile and compact in-stream controls.
 
@@ -32,9 +32,9 @@ history, language, Gamma, or image-control setting needs to be reset.
 
 ## Resumen de la versión
 
-La versión 0.5.1 es una prerelease correctiva. Elimina los metadatos anulables
+La versión 0.5.1 es una versión correctiva. Elimina los metadatos anulables
 introducidos en v0.5.0-pre, restaura la carga comprobada de v0.4 y acerca la
-biblioteca nativa de Switch al diseño cinematográfico aprobado.
+biblioteca nativa de Switch a un diseño centrado en los juegos.
 
 ### Correcciones y cambios
 
@@ -42,10 +42,10 @@ biblioteca nativa de Switch al diseño cinematográfico aprobado.
   al cargar la biblioteca.
 - Se restauraron el formato de caché y el analizador de catálogo de v0.4.
 - La aplicación vuelve a leer únicamente el nombre y la carátula existentes.
-- Se agregaron cabecera compacta, buscador, filtros, un hero grande para el
-  juego seleccionado y un carrusel de ocho juegos.
-- El hero utiliza solo datos locales ya existentes: título, fuente xCloud,
-  calidad y estado de favorito.
+- Se agregaron cabecera compacta, buscador, filtros y una cuadrícula 8×3 que
+  muestra hasta 24 juegos por página.
+- Se eliminaron el hero vacío del juego seleccionado y la pestaña
+  **In-stream** del encabezado, que no tenía función.
 - Se agregó el arte Joy-Con/Xbox suministrado como icono del NRO y de la app.
 - Se conservaron la animación de selección y los controles compactos durante
   la partida.

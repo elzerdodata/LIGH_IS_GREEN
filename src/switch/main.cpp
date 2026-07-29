@@ -1080,18 +1080,22 @@ void draw_signin(App& app) {
     draw_hints(app, {{"ZL", "Settings · region bypass"}, {"B", "Exit"}});
 }
 
-// v0.5.1 library geometry: one cinematic hero and an eight-item carousel.
+// v0.5.1 library geometry: 24 games per page in an 8-by-3 grid.
 constexpr int kColumns = 8;
 constexpr int kCardW = 196;
 constexpr int kCardH = 205;
 constexpr int kGapX = 28;
-constexpr int kGapY = 48;
+constexpr int kGapY = 24;
 constexpr int kGridX = 60;
-constexpr int kGridY = 738;
-constexpr int kRowsVisible = 1;
+constexpr int kGridY = 276;
+constexpr int kRowsVisible = 3;
+constexpr int kPageSize = kColumns * kRowsVisible;
 constexpr int kFilterTabsX = 560;
 constexpr int kFilterTabsY = 126;
 constexpr SDL_Rect kLibraryHero{60, 196, 1800, 450};
+constexpr SDL_Rect kLibraryPanel{60, 196, 1800, 768};
+constexpr SDL_Rect kLibraryNav{798, 18, 324, 72};
+constexpr SDL_Rect kLibrarySettingsTab{960, 24, 152, 60};
 constexpr Uint32 kLibraryFocusMotionMs = 220;
 
 float library_focus_motion(const App& app) {
@@ -1251,13 +1255,17 @@ const gfx::Color kSkeleton[6] = {{22, 27, 36}, {20, 24, 33}, {18, 21, 29},
 void draw_loading(App& app) {
     draw_header(app);
     app.gfx.fill({kMargin, 124, 420, 54}, gfx::kSurface);
-    app.gfx.fill(kLibraryHero, {7, 19, 23, 220});
-    app.gfx.frame(kLibraryHero, {35, 91, 82, 120}, 2);
-    for (int i = 0; i < kColumns; ++i)
-        app.gfx.fill({kGridX + i * (kCardW + kGapX), kGridY, kCardW, kCardH},
-                     kSkeleton[i % 6]);
-    app.gfx.spinner(gfx::kWidth / 2, 430, SDL_GetTicks());
-    app.gfx.text_centered(app.status, gfx::kWidth / 2, 474,
+    app.gfx.fill(kLibraryPanel, {7, 19, 23, 220});
+    app.gfx.frame(kLibraryPanel, {35, 91, 82, 120}, 2);
+    for (int slot = 0; slot < kPageSize; ++slot) {
+        int column = slot % kColumns;
+        int row = slot / kColumns;
+        app.gfx.fill({kGridX + column * (kCardW + kGapX),
+                      kGridY + row * (kCardH + kGapY), kCardW, kCardH},
+                     kSkeleton[slot % 6]);
+    }
+    app.gfx.spinner(gfx::kWidth - kMargin - 20, 216, SDL_GetTicks());
+    app.gfx.text_centered(app.status, gfx::kWidth / 2, 210,
                           gfx::FontSize::Note, gfx::kTextDim);
 }
 
@@ -1281,7 +1289,7 @@ void draw_card(App& app, const Game& game, const SDL_Rect& card,
     app.gfx.fill({dst.x, dst.y + dst.h - 44, dst.w, 44},
                  focused ? gfx::kSurfaceHi : gfx::kSurface);
     const std::string& label = game.name.empty() ? game.title_id : game.name;
-    app.gfx.text(label.substr(0, 15), dst.x + 12, dst.y + dst.h - 35,
+    app.gfx.text(label.substr(0, 13), dst.x + 12, dst.y + dst.h - 35,
                  gfx::FontSize::Small, gfx::kText);
 
     if (is_favorite(app, game.title_id)) {
@@ -1534,16 +1542,16 @@ void draw_empty_state(App& app, const std::string& glyph, gfx::Color glyph_col,
                      {"+", "Exit"}});
 }
 
-// v0.5.1 library: native 16:9 adaptation of the approved hero + carousel
-// design. It intentionally uses only v0.4 catalog fields (name and cover).
+// v0.5.1 library: content-first 8-by-3 grid using only the stable v0.4
+// catalog fields (name and cover). A opens the existing detail screen.
 void draw_library(App& app) {
     draw_header(app);
 
-    SDL_Rect nav = {720, 18, 480, 72};
-    app.gfx.fill(nav, {10, 20, 27, 238});
-    const char* primary_labels[3] = {"Library", "Settings", "In-stream"};
-    for (int i = 0; i < 3; ++i) {
-        SDL_Rect item = {nav.x + 6 + i * 156, nav.y + 6, 152, 60};
+    app.gfx.fill(kLibraryNav, {10, 20, 27, 238});
+    const char* primary_labels[2] = {"Library", "Settings"};
+    for (int i = 0; i < 2; ++i) {
+        SDL_Rect item = {kLibraryNav.x + 6 + i * 156,
+                         kLibraryNav.y + 6, 152, 60};
         if (i == 0) {
             app.gfx.fill(item, {16, 124, 93, 104});
             app.gfx.frame(item, {57, 224, 160, 150}, 2);
@@ -1663,32 +1671,44 @@ void draw_library(App& app) {
     app.cursor = std::clamp(app.cursor, 0,
                             static_cast<int>(app.visible.size()) - 1);
     const Game& selected = app.games[app.visible[app.cursor]];
-    draw_selected_game_info(app, selected);
+    app.gfx.fill(kLibraryPanel, {3, 13, 17, 210});
+    app.gfx.frame(kLibraryPanel, {35, 91, 82, 155}, 2);
 
     const char* section = app.tab == LibraryTab::Favorites
                               ? "Favorites"
                           : app.tab == LibraryTab::History
                               ? "Recently played"
                               : "All games";
-    app.gfx.text(section, kMargin, 680, gfx::FontSize::Note, gfx::kText);
-    std::string count = std::to_string(app.visible.size()) + " games";
+    app.gfx.text(section, kMargin + 20, 212, gfx::FontSize::Note,
+                 gfx::kText);
+    int page_start = (app.cursor / kPageSize) * kPageSize;
+    int page_number = page_start / kPageSize + 1;
+    int page_count =
+        (static_cast<int>(app.visible.size()) + kPageSize - 1) / kPageSize;
+    std::string count = std::to_string(app.visible.size()) + " games  ·  " +
+                        std::to_string(page_number) + "/" +
+                        std::to_string(page_count);
     app.gfx.text(count,
                  gfx::kWidth - kMargin -
                      app.gfx.text_width(count, gfx::FontSize::Small),
-                 686, gfx::FontSize::Small, gfx::kFocus);
+                 216, gfx::FontSize::Small, gfx::kFocus);
 
-    int page_start = (app.cursor / kColumns) * kColumns;
     int focused_slot = app.cursor - page_start;
-    for (int slot = 0; slot < kColumns; ++slot) {
+    for (int slot = 0; slot < kPageSize; ++slot) {
         int index = page_start + slot;
         if (index >= static_cast<int>(app.visible.size())) break;
         if (slot == focused_slot) continue;
-        SDL_Rect card = {kGridX + slot * (kCardW + kGapX), kGridY,
-                         kCardW, kCardH};
+        int column = slot % kColumns;
+        int row = slot / kColumns;
+        SDL_Rect card = {kGridX + column * (kCardW + kGapX),
+                         kGridY + row * (kCardH + kGapY), kCardW, kCardH};
         draw_card(app, app.games[app.visible[index]], card, false);
     }
-    SDL_Rect focused_card = {
-        kGridX + focused_slot * (kCardW + kGapX), kGridY, kCardW, kCardH};
+    int focused_column = focused_slot % kColumns;
+    int focused_row = focused_slot / kColumns;
+    SDL_Rect focused_card = {kGridX + focused_column * (kCardW + kGapX),
+                             kGridY + focused_row * (kCardH + kGapY),
+                             kCardW, kCardH};
     draw_card(app, selected, focused_card, true);
 
     draw_hints(app, {{"A", "Details", true},
@@ -2730,8 +2750,12 @@ int main(int argc, char** argv) {
                 // Touch: tap a tab to switch, or a card to select + open it,
                 // reusing the A path (input.a) below. Design-space coords.
                 if (input.touch) {
-                    if (input.touch_x >= 882 && input.touch_x <= 1034 &&
-                        input.touch_y >= 24 && input.touch_y <= 84) {
+                    if (input.touch_x >= kLibrarySettingsTab.x &&
+                        input.touch_x <= kLibrarySettingsTab.x +
+                                             kLibrarySettingsTab.w &&
+                        input.touch_y >= kLibrarySettingsTab.y &&
+                        input.touch_y <= kLibrarySettingsTab.y +
+                                             kLibrarySettingsTab.h) {
                         input.zl = true;
                     } else if (input.touch_x >= kMargin &&
                         input.touch_x <= kMargin + 420 &&
@@ -2763,22 +2787,18 @@ int main(int argc, char** argv) {
                                 input.a = true;
                             }
                         }
-                    } else if (input.touch_y >= kLibraryHero.y &&
-                               input.touch_y <=
-                                   kLibraryHero.y + kLibraryHero.h) {
-                        input.a = true;
                     } else {
                         int gx = input.touch_x - kGridX;
                         int gy = input.touch_y - kGridY;
                         if (gx >= 0 && gy >= 0) {
                             int col = gx / (kCardW + kGapX);
                             int row = gy / (kCardH + kGapY);
-                            if (col < kColumns &&
+                            if (col < kColumns && row < kRowsVisible &&
                                 gx - col * (kCardW + kGapX) < kCardW &&
                                 gy - row * (kCardH + kGapY) < kCardH) {
-                                int first_row = std::max(
-                                    0, app.cursor / kColumns - (kRowsVisible - 1));
-                                int index = (first_row + row) * kColumns + col;
+                                int page_start =
+                                    (app.cursor / kPageSize) * kPageSize;
+                                int index = page_start + row * kColumns + col;
                                 if (index >= 0 &&
                                     index <
                                         static_cast<int>(app.visible.size())) {

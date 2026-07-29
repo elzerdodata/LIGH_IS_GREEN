@@ -1,6 +1,6 @@
 # Light is Green
 
-> **Preliminary v0.5.1-pre / Versión preliminar v0.5.1-pre**
+> **Current release v0.5.1 / Versión actual v0.5.1**
 
 English | [Español](#español)
 
@@ -18,8 +18,10 @@ PC is required.
 - Fixes the startup `json.exception.type_error.302` regression in v0.5.0-pre.
 - Restores the stable v0.4 catalog path: only game names and cover art are read;
   no extra nullable xCloud/Microsoft Store metadata is requested or cached.
-- Rebuilds the library around the approved cinematic layout: compact header,
-  search surface, filter pills, selected-game hero, and eight-game carousel.
+- Replaces the unused selected-game hero with a content-first 8×3 library
+  grid, showing up to 24 games on each page.
+- Removes the non-functional **In-stream** header tab; streaming controls remain
+  available only while a stream is active.
 - Adds the new Joy-Con/Xbox artwork as both the Homebrew Menu icon and the
   in-app brand icon.
 - Keeps the 220 ms selection animation, compact frameless stream controls,
@@ -56,7 +58,7 @@ PC is required.
 
 | Context | Controls |
 | --- | --- |
-| Library | Left stick / d-pad: move · **A**: open/play · **Y**: search · **X**: refresh · **ZL**: settings · **+**: exit |
+| Library | Left stick / d-pad: move · **A**: open/play · **Y**: search · **X**: favorite · **ZR**: refresh · **ZL**: settings · **+**: exit |
 | Settings | Left/right: change · **A**: open/confirm · **B**: back |
 | In stream | Switch pad: Xbox controls · tap **••**: image/stats panel · tap the small **Xbox symbol** or press **L3 + R3**: Guide · hold **-** + **+**: quit |
 
@@ -136,9 +138,10 @@ consola; no requiere una PC auxiliar.
 - Restaura la ruta estable del catálogo de v0.4: solo se leen nombres y
   carátulas; no se solicitan ni guardan metadatos adicionales anulables de
   xCloud/Microsoft Store.
-- Reconstruye la biblioteca según el diseño cinematográfico aprobado: cabecera
-  compacta, buscador, filtros, hero del juego seleccionado y carrusel de ocho
-  juegos.
+- Reemplaza el hero sin información por una cuadrícula de biblioteca 8×3 que
+  muestra hasta 24 juegos en cada página.
+- Elimina la pestaña **In-stream** del encabezado porque no tenía función; los
+  controles de streaming siguen disponibles durante una partida activa.
 - Agrega el nuevo arte Joy-Con/Xbox como icono del Homebrew Menu y dentro de la
   aplicación.
 - Conserva la animación de selección de 220 ms, los controles compactos sin
@@ -177,7 +180,7 @@ consola; no requiere una PC auxiliar.
 
 | Contexto | Controles |
 | --- | --- |
-| Biblioteca | Stick izquierdo / cruceta: mover · **A**: abrir/jugar · **Y**: buscar · **X**: actualizar · **ZL**: ajustes · **+**: salir |
+| Biblioteca | Stick izquierdo / cruceta: mover · **A**: abrir/jugar · **Y**: buscar · **X**: favorito · **ZR**: actualizar · **ZL**: ajustes · **+**: salir |
 | Ajustes | Izquierda/derecha: cambiar · **A**: abrir/confirmar · **B**: volver |
 | En partida | Controles de Switch: controles Xbox · tocar **••**: panel de imagen/datos · tocar el **símbolo pequeño de Xbox** o pulsar **L3 + R3**: Guide · mantener **-** + **+**: salir |
 
