@@ -26,7 +26,11 @@ namespace gnx::stream {
 //     ever reach the decoder.
 class VideoJitterBuffer {
 public:
-    using Emit = std::function<void(const uint8_t* data, size_t size)>;
+    // H.264 RTP always uses a 90 kHz media clock. Preserve the timestamp all
+    // the way to the pacing layer: packet/decode arrival time contains network
+    // jitter and is not a reliable indication of the source frame cadence.
+    using Emit =
+        std::function<void(const uint8_t* data, size_t size, uint32_t timestamp)>;
     using NackFn = std::function<void(uint16_t pid, uint16_t blp)>;
 
     void reset();

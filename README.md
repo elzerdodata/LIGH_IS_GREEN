@@ -1,6 +1,6 @@
 # Light is Green
 
-> **Stable v0.6.0 · Preview v0.7.0 / Estable v0.6.0 · Preliminar v0.7.0**
+> **Stable v0.6.0 · Preview v0.7.1 / Estable v0.6.0 · Preliminar v0.7.1**
 
 English | [Español](#español)
 
@@ -12,6 +12,21 @@ It is a standalone, open-source **Xbox Cloud Gaming (xCloud) client for
 Nintendo Switch** homebrew. Authentication, WebRTC, hardware H.264 decoding,
 GPU rendering, audio, and controller input all run on the console; no companion
 PC is required.
+
+## v0.7.1 smoothness preview
+
+- Detects 30/60 fps cadence from the H.264 RTP 90 kHz media timestamps instead
+  of packet/decode arrival time, so Wi-Fi bursts cannot make Smooth or Motion
+  switch rhythm incorrectly.
+- Smooth keeps its one-frame jitter reserve but now sheds stale excess reserve
+  after a burst, preventing latency from accumulating for the rest of a stream.
+- Uses deko3d's asynchronous triple-buffer flow and pins every NVDEC surface
+  until its framebuffer slot is returned. This removes the full GPU drain that
+  previously ran after every presented frame.
+- Adds `video|` diagnostics to `stream-log.txt` for packet, assembled-frame,
+  drop, NACK, resync, access-unit-size and decoder-queue analysis.
+- v0.7.1 remains a preview; v0.6.0 is still the stable release. For the most
+  fluid result, use **Smooth**. Motion keeps the v0.7 experimental warning.
 
 ## v0.7.0 preview
 
@@ -144,7 +159,7 @@ valid subscription and hardware.
 - License: [GPL-3.0](LICENSE)
 - Original project and core implementation: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Light is Green fork and v0.2–v0.7 work: **elzerdodata**
+- Light is Green fork and v0.2–v0.7.1 work: **elzerdodata**
 
 ---
 
@@ -158,6 +173,21 @@ Es un cliente homebrew independiente y de código abierto de **Xbox Cloud
 Gaming (xCloud) para Nintendo Switch**. La autenticación, WebRTC, decodificación
 H.264 por hardware, renderizado en GPU, audio y controles funcionan en la
 consola; no requiere una PC auxiliar.
+
+## Avance de fluidez v0.7.1
+
+- Detecta la cadencia de 30/60 fps mediante los timestamps RTP de 90 kHz del
+  video H.264, no mediante el momento irregular en que llegan o se decodifican
+  los paquetes. Una ráfaga de Wi-Fi ya no cambia erróneamente el ritmo.
+- Smooth conserva una trama de reserva contra jitter, pero descarta reserva
+  vieja sobrante después de una ráfaga para que la latencia no quede acumulada.
+- Activa el triple buffer asíncrono de deko3d y mantiene cada superficie NVDEC
+  referenciada hasta que su framebuffer vuelve a estar disponible. Se elimina
+  el vaciado completo de la GPU que antes ocurría después de cada imagen.
+- Agrega líneas `video|` al diagnóstico con paquetes, tramas, descartes, NACK,
+  resincronizaciones, tamaño de unidad y cola del decodificador.
+- v0.7.1 continúa siendo preliminar; v0.6.0 sigue estable. Para priorizar
+  fluidez usa **Smooth**. Motion conserva toda la advertencia experimental.
 
 ## Avance de v0.7.0
 
@@ -295,4 +325,4 @@ propia suscripción válida y tu hardware.
 - Licencia: [GPL-3.0](LICENSE)
 - Proyecto original e implementación base: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Fork Light is Green y trabajo de v0.2–v0.7: **elzerdodata**
+- Fork Light is Green y trabajo de v0.2–v0.7.1: **elzerdodata**

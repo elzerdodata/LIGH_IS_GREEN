@@ -25,17 +25,23 @@ namespace gnx::stream {
 namespace {
 
 constexpr uint32_t kCodeSize = 96 * 1024;  // video vsh + video fsh + hud fsh
-constexpr uint32_t kCmdSize = 64 * 1024;
+constexpr uint32_t kCmdPerFrameSize = 64 * 1024;
+constexpr uint32_t kFrameSlots = 3;
+constexpr uint32_t kCmdSize = kFrameSlots * kCmdPerFrameSize;
 constexpr uint32_t kDataSize = 0x1000;
 
 // data_memblock_ layout (all offsets aligned for their use):
-constexpr uint32_t kUniformOff = 0x000;   // Transformation UBO (256B aligned)
-constexpr uint32_t kSamplerOff = 0x100;   // sampler descriptor set
-constexpr uint32_t kImageOff = 0x200;     // image descriptor set (luma, chroma)
-constexpr uint32_t kVtxOff = 0x300;       // quad vertex buffer
-constexpr uint32_t kHudVtxOff = 0x380;    // HUD overlay corner quad
-constexpr uint32_t kGuideVtxOff = 0x400;  // top-right Guide/Home touch button
-constexpr uint32_t kQuickVtxOff = 0x480;  // two-dot handle + quick panel
+// The canonical transform is CPU-only; each framebuffer has its own GPU UBO so
+// a later frame never overwrites values an earlier queued draw still uses.
+constexpr uint32_t kUniformTemplateOff = 0x000;
+constexpr uint32_t kUniformSlotOff = 0x100;
+constexpr uint32_t kUniformSlotStride = 0x100;
+constexpr uint32_t kSamplerOff = 0x400;   // sampler descriptor set
+constexpr uint32_t kImageOff = 0x500;     // image descriptor set (luma, chroma)
+constexpr uint32_t kVtxOff = 0x600;       // quad vertex buffer
+constexpr uint32_t kHudVtxOff = 0x680;    // HUD overlay corner quad
+constexpr uint32_t kGuideVtxOff = 0x700;  // top-right Guide/Home touch button
+constexpr uint32_t kQuickVtxOff = 0x780;  // two-dot handle + quick panel
 
 struct Vertex {
     float position[3];
@@ -96,6 +102,7 @@ struct Transformation {
 static_assert(7 * sizeof(DkImageDescriptor) <= kVtxOff - kImageOff,
               "image descriptors overlap the vertex buffer");
 static_assert(sizeof(Transformation) == 144, "std140 Transformation");
+static_assert(kFrameSlots == 3, "renderer slot count must match kFbNum");
 
 // Column-major YUV->RGB matrices (matching Moonlight-Switch / BT.xxx).
 const float kBt601Lim[9] = {1.1644f, 1.1644f, 1.1644f, 0.0f,    -0.3917f,
@@ -190,9 +197,20 @@ bool DkVideoRenderer::create_swapchain() {
 }
 
 void DkVideoRenderer::destroy_swapchain() {
-    if (dev_ && queue_) queue_.waitIdle();
+    if (dev_ && queue_) {
+        queue_.waitIdle();
+        release_in_flight_frames();
+    }
     swapchain_ = nullptr;
     fb_memblock_ = nullptr;
+}
+
+void DkVideoRenderer::release_in_flight_frames() {
+    for (unsigned i = 0; i < kFbNum; ++i) {
+        if (in_flight_frames_[i]) av_frame_unref(in_flight_frames_[i]);
+        if (in_flight_motion_frames_[i])
+            av_frame_unref(in_flight_motion_frames_[i]);
+    }
 }
 
 void DkVideoRenderer::maybe_rebuild_swapchain() {
@@ -231,6 +249,16 @@ bool DkVideoRenderer::init() {
         fb_height_ = 720;
     }
     if (!create_swapchain()) return false;
+
+    for (unsigned i = 0; i < kFbNum; ++i) {
+        in_flight_frames_[i] = av_frame_alloc();
+        in_flight_motion_frames_[i] = av_frame_alloc();
+        if (!in_flight_frames_[i] || !in_flight_motion_frames_[i]) {
+            logf("deko3d: could not allocate in-flight frame references");
+            shutdown();
+            return false;
+        }
+    }
 
     // Command + data memory.
     cmd_memblock_ = dk::MemBlockMaker{dev_, kCmdSize}
@@ -401,6 +429,12 @@ bool DkVideoRenderer::init() {
 
 void DkVideoRenderer::shutdown() {
     if (dev_ && queue_) queue_.waitIdle();
+    release_in_flight_frames();
+    for (unsigned i = 0; i < kFbNum; ++i) {
+        if (in_flight_frames_[i]) av_frame_free(&in_flight_frames_[i]);
+        if (in_flight_motion_frames_[i])
+            av_frame_free(&in_flight_motion_frames_[i]);
+    }
     if (hud_font_) {
         TTF_CloseFont(hud_font_);  // also frees the RWops (opened with freesrc=1)
         hud_font_ = nullptr;
@@ -445,6 +479,7 @@ bool DkVideoRenderer::ensure_layouts(AVFrame* frame, bool is_linear) {
         return true;
 
     queue_.waitIdle();
+    release_in_flight_frames();
     frame_w_ = frame->width;
     frame_h_ = frame->height;
     luma_w_ = yw;
@@ -545,7 +580,8 @@ void DkVideoRenderer::update_transform(AVFrame* frame) {
     t.picture_data[1] = static_cast<float>(quick_state_.contrast) / 100.0f;
     t.picture_data[2] = static_cast<float>(quick_state_.saturation) / 100.0f;
     t.picture_data[3] = static_cast<float>(quick_state_.gamma) / 100.0f;
-    std::memcpy(static_cast<uint8_t*>(data_cpu_) + kUniformOff, &t, sizeof(t));
+    std::memcpy(static_cast<uint8_t*>(data_cpu_) + kUniformTemplateOff, &t,
+                sizeof(t));
     logf("deko3d: color=%d full=%d cropY=%.4fx%.4f cropUV=%.4fx%.4f picture=%+d/%d/%d gamma=%.2f sharp=%d",
          space, (int)full, t.luma_uv_data[2], t.luma_uv_data[3],
          t.chroma_uv_data[2], t.chroma_uv_data[3],
@@ -1013,15 +1049,16 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
         }
     }
     const float blend = motion_fm ? std::clamp(motion_blend, 0.0f, 1.0f) : 0.0f;
-    auto* transform = reinterpret_cast<Transformation*>(
-        static_cast<uint8_t*>(data_cpu_) + kUniformOff);
-    transform->motion_data[0] = blend;
-    transform->motion_data[1] = motion_fm ? 1.0f : 0.0f;
-    transform->motion_data[2] = 0.0f;
-    transform->motion_data[3] = 0.0f;
+    auto* transform_template = reinterpret_cast<Transformation*>(
+        static_cast<uint8_t*>(data_cpu_) + kUniformTemplateOff);
+    transform_template->motion_data[0] = blend;
+    transform_template->motion_data[1] = motion_fm ? 1.0f : 0.0f;
+    transform_template->motion_data[2] = 0.0f;
+    transform_template->motion_data[3] = 0.0f;
 
-    // Recompute HUD stats + re-rasterize the text texture now, while the GPU is
-    // idle (render() ends with waitIdle) and before we record any commands.
+    // Recompute HUD stats before recording this frame. The video path itself is
+    // fully asynchronous; the optional diagnostic texture can tolerate one
+    // frame of overlap while its text changes.
     if (hud_enabled_) {
         ++output_frames_;
         if (motion_fm) ++generated_frames_;
@@ -1032,8 +1069,25 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
 
     int slot = queue_.acquireImage(swapchain_);
 
+    // Reacquiring a framebuffer slot means every prior command that sampled
+    // that slot's NVDEC surfaces has completed. Release those refs, then pin
+    // the surfaces used by the command list we are about to submit.
+    av_frame_unref(in_flight_frames_[slot]);
+    av_frame_unref(in_flight_motion_frames_[slot]);
+    bool refs_held = av_frame_ref(in_flight_frames_[slot], frame) == 0;
+    if (refs_held && motion_fm)
+        refs_held = av_frame_ref(in_flight_motion_frames_[slot], motion_frame) ==
+                    0;
+
+    const uint32_t uniform_off =
+        kUniformSlotOff + static_cast<uint32_t>(slot) * kUniformSlotStride;
+    std::memcpy(static_cast<uint8_t*>(data_cpu_) + uniform_off,
+                transform_template, sizeof(*transform_template));
+
     cmdbuf_.clear();
-    cmdbuf_.addMemory(cmd_memblock_, 0, kCmdSize);
+    cmdbuf_.addMemory(cmd_memblock_,
+                      static_cast<uint32_t>(slot) * kCmdPerFrameSize,
+                      kCmdPerFrameSize);
 
     // Write sampler + image descriptors through the command buffer (canonical
     // deko3d path) so the writes are ordered on the GPU timeline before use.
@@ -1091,7 +1145,7 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
     cmdbuf_.bindTextures(DkStage_Fragment, 0,
                          {dkMakeTextureHandle(0, 0), dkMakeTextureHandle(1, 0),
                           dkMakeTextureHandle(5, 0), dkMakeTextureHandle(6, 0)});
-    cmdbuf_.bindUniformBuffer(DkStage_Fragment, 0, data_gpu_ + kUniformOff, 256);
+    cmdbuf_.bindUniformBuffer(DkStage_Fragment, 0, data_gpu_ + uniform_off, 256);
 
     cmdbuf_.bindVtxAttribState(
         {DkVtxAttribState{0, 0, offsetof(Vertex, position), DkVtxAttribSize_3x32,
@@ -1132,7 +1186,10 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
 
     queue_.submitCommands(cmdbuf_.finishList());
     queue_.presentImage(swapchain_, slot);
-    queue_.waitIdle();
+    // Allocation failure is exceptionally unlikely, but without our own ref
+    // the caller may recycle the decoder surface as soon as render() returns.
+    // Fall back to the old synchronous safety path for this one frame.
+    if (!refs_held) queue_.waitIdle();
     return true;
 }
 

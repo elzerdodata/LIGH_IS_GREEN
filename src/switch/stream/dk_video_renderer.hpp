@@ -136,6 +136,10 @@ private:
     void rasterize_guide();            // compose Guide/Home touch button
     void rasterize_quick_menu();       // compose dots + expanded picture panel
     void blit_quick_text(const char* s, int x, int y);
+    // The render queue is asynchronous. Keep every NVDEC surface referenced
+    // until the swapchain gives its framebuffer slot back to us, which proves
+    // the GPU has finished sampling that slot's video textures.
+    void release_in_flight_frames();
 
     LogFn log_;
     bool initialized_ = false;
@@ -144,6 +148,9 @@ private:
     dk::UniqueQueue queue_;
     dk::UniqueCmdBuf cmdbuf_;
     dk::UniqueSwapchain swapchain_;
+
+    AVFrame* in_flight_frames_[kFbNum]{};
+    AVFrame* in_flight_motion_frames_[kFbNum]{};
 
     // deko3d memory blocks (raw; freed in shutdown()).
     dk::UniqueMemBlock fb_memblock_;
