@@ -249,7 +249,8 @@ void VideoJitterBuffer::receive(const uint8_t* rtp, size_t len, uint64_t now_ms,
         Frame& front = frames_.front();
         uint16_t marker_seq = 0;
         if (try_assemble(front, au, &marker_seq)) {
-            last_ts_ = front.timestamp;
+            const uint32_t timestamp = front.timestamp;
+            last_ts_ = timestamp;
             frames_.pop_front();
             if (waiting_keyframe_) {
                 if (!has_keyframe(au)) {  // still no clean IDR -> keep dropping
@@ -261,7 +262,7 @@ void VideoJitterBuffer::receive(const uint8_t* rtp, size_t len, uint64_t now_ms,
             }
             stats_.frames++;
             stats_.last_frame_bytes = static_cast<uint32_t>(au.size());
-            emit(au.data(), au.size());
+            emit(au.data(), au.size(), timestamp);
             continue;
         }
         // Not assemblable yet. If it has waited long enough, give up on it (a

@@ -73,9 +73,10 @@ public:
     // from the "volume" setting before each stream start; 1.0 = unchanged.
     void set_audio_gain(float gain) { audio_gain_ = gain; }
 
-    // Video pacing mode (see VideoPacing). Set before each stream start;
-    // default Steady.
-    void set_pacing(VideoPacing pacing) { pacing_ = pacing; }
+    // Video pacing mode (see VideoPacing). Safe before startup and while a
+    // stream is running; a live change releases queued/interpolation surfaces
+    // before the next present so old-mode frames can never leak across modes.
+    void set_pacing(VideoPacing pacing);
 
     // In-stream performance/picture quick menu. The state is retained before
     // startup and can also be changed live while deko3d owns the display.
@@ -88,6 +89,9 @@ public:
     EngineState state() const { return state_; }
     std::string status() const;
     std::string error() const;
+    // Actual region selected by Xbox after streaming login. Empty while login
+    // is still pending and for the xHome Remote Play path.
+    std::string selected_region() const;
 
     // Render-thread pump: decodes queued video. On Switch it presents each
     // frame through the deko3d renderer (returns nullptr); on PC it returns the
@@ -160,6 +164,7 @@ private:
     mutable std::mutex status_mutex_;
     std::string status_;
     std::string error_;
+    std::string selected_region_;
 
     EndpointCredentials cloud_;
     std::string title_id_;
@@ -202,7 +207,11 @@ private:
     AudioPlayer audio_;
     std::mutex video_mutex_;
     std::condition_variable video_cv_;  // wakes decode_loop when an AU arrives
-    std::deque<std::vector<uint8_t>> video_queue_;
+    struct VideoAccessUnit {
+        std::vector<uint8_t> data;
+        uint32_t rtp_timestamp = 0;  // H.264 90 kHz clock, decode-order frame ts
+    };
+    std::deque<VideoAccessUnit> video_queue_;
     std::atomic<bool> got_frame_{false};
     std::atomic<uint64_t> video_bytes_{0};  // RTP video bytes rx (HUD bitrate)
 
@@ -233,7 +242,8 @@ private:
     std::atomic<uint32_t> source_refresh_period_{1};  // 1=60fps, 2=30fps
     uint32_t source_fast_streak_ = 0;  // decode thread only
     uint32_t source_slow_streak_ = 0;  // decode thread only
-    Uint64 last_decode_ticks_ = 0;     // decode thread only
+    uint32_t last_rtp_timestamp_ = 0;  // decode thread only
+    bool have_rtp_timestamp_ = false;  // decode thread only
 
     // Pacing telemetry, logged once per second from run_peer (pace| line):
     // new/repeated presents, how many refreshes each frame stayed up, and

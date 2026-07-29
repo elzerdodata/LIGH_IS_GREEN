@@ -451,6 +451,12 @@ Settings load_settings() {
             std::clamp(data.value("pacing", 0), 0, kPacingLevels - 1);
     else
         settings.pacing = data.value("smooth", false) ? 1 : 0;
+    // Motion is an explicit per-session opt-in in v0.7. Never restore it at
+    // startup from an older settings file: a user who previously selected the
+    // experimental mode must see the new flashing warning before enabling it
+    // again. Smooth preserves the low-jitter behaviour without dual-surface
+    // interpolation.
+    if (settings.pacing == 2) settings.pacing = 1;
     settings.console_quality = std::clamp(
         data.value("console_quality", 0), 0, kConsoleQualityLevels - 1);
     settings.brightness = std::clamp(data.value("brightness", 0), -20, 20);
@@ -663,8 +669,7 @@ std::string selected_server_region_label(const App& app) {
     if (app.settings.server_region.empty()) {
         for (const ServerRegion& region : app.server_regions)
             if (region.is_default) {
-                std::string host = server_host_code(region.base_uri);
-                return host.empty() ? "Auto" : "Auto · " + host;
+                return "Auto · " + server_region_label(region);
             }
         return "Auto";
     }
@@ -1329,7 +1334,8 @@ const char* kQualityLabels[kQualityLevels] = {
     "720p", "1080p", "1080p HQ · Windows", "1080p HQ · Tizen test"};
 const char* kConsoleQualityLabels[kConsoleQualityLevels] = {
     "720p · Stable", "1080p · Experimental"};
-const char* kPacingLabels[kPacingLevels] = {"Steady", "Smooth", "Motion"};
+const char* kPacingLabels[kPacingLevels] = {
+    "Steady", "Smooth", "Motion · EXPERIMENTAL"};
 const char* kMappingLabels[2] = {"Positional (Switch A = Xbox B)",
                                  "Match labels (Switch A = Xbox A)"};
 const char* kSharpnessLabels[4] = {"Off", "Low", "Medium", "High"};
@@ -1353,10 +1359,21 @@ std::string console_label(const App& app) {
 }
 
 #ifdef GNX_NATIVE_STREAM
+std::string active_stream_region_label(const App& app) {
+    std::string actual = app.engine->selected_region();
+    if (actual.empty()) return selected_server_region_label(app);
+    for (const ServerRegion& region : app.server_regions)
+        if (normalized_server_region(region.name) ==
+            normalized_server_region(actual))
+            return server_region_label(region);
+    return pretty_server_region(actual);
+}
+
 stream::QuickMenuState quick_menu_state(const App& app) {
     stream::QuickMenuState state;
     state.open = app.quick_menu_open;
     state.performance = app.settings.debug_hud != 0;
+    state.pacing = app.settings.pacing;
     state.brightness = app.settings.brightness;
     state.contrast = app.settings.contrast;
     state.saturation = app.settings.saturation;
@@ -1400,7 +1417,7 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
         app.settings.sharpness = 0;
         changed = true;
     } else {
-        for (int row = stream::QuickBrightness;
+        for (int row = stream::QuickPacing;
              row <= stream::QuickSharpness; ++row) {
             int direction = 0;
             if (point_in_rect(x, y, stream::quick_minus_rect(row)))
@@ -1409,7 +1426,11 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
                 direction = 1;
             if (direction == 0) continue;
 
-            if (row == stream::QuickBrightness)
+            if (row == stream::QuickPacing)
+                app.settings.pacing =
+                    (app.settings.pacing + direction + kPacingLevels) %
+                    kPacingLevels;
+            else if (row == stream::QuickBrightness)
                 app.settings.brightness = std::clamp(
                     app.settings.brightness + direction * 5, -20, 20);
             else if (row == stream::QuickContrast)
@@ -2259,10 +2280,10 @@ void draw_settings(App& app) {
                 line2 = "on a local 60 Hz clock when the network arrives late.";
             } else if (app.settings.pacing == 1) {
                 line1 = "Smooth holds one source frame to absorb network jitter.";
-                line2 = "Motion is steadier, with about one frame of extra lag.";
+                line2 = "It is steadier, with about one frame of extra lag.";
             } else {
-                line1 = "Motion blends a midpoint between 30 fps source frames.";
-                line2 = "Experimental: it is not optical-flow frame generation.";
+                line1 = "Motion is 100% experimental midpoint frame generation.";
+                line2 = "It may cause rapid green flashing; switch back if seen.";
             }
             break;
         case 8:
@@ -2617,11 +2638,18 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
                                      : app.launch_game.name;
     app.gfx.text_centered(label, gfx::kWidth / 2, 584, gfx::FontSize::Title,
                           gfx::kText);
-    app.gfx.text_centered(app.engine->status(), gfx::kWidth / 2, 664,
+    app.gfx.text_centered(app.engine->status(), gfx::kWidth / 2, 650,
                           gfx::FontSize::Note, gfx::kTextDim);
 
+    std::string route = app.launching_home
+                            ? "Route: Xbox Remote Play · xHome"
+                            : "Server region: " +
+                                  active_stream_region_label(app);
+    app.gfx.text_centered(route, gfx::kWidth / 2, 700,
+                          gfx::FontSize::Small, gfx::kFocus);
+
     int phase = stream_phase(app.engine->status());
-    SDL_Rect track = {gfx::kWidth / 2 - 280, 736, 560, 6};
+    SDL_Rect track = {gfx::kWidth / 2 - 280, 756, 560, 6};
     app.gfx.fill(track, gfx::kChip);
     app.gfx.fill({track.x, track.y, 140 * (phase + 1), 6}, gfx::kFocus);
 
@@ -2634,7 +2662,7 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
         gfx::Color color = i < phase ? gfx::kFocus
                            : i == phase ? gfx::kText
                                         : gfx::kFaint;
-        sx += app.gfx.text(stages[i], sx, 768, gfx::FontSize::Small, color) +
+        sx += app.gfx.text(stages[i], sx, 788, gfx::FontSize::Small, color) +
               32;
     }
 

@@ -161,6 +161,10 @@ void Engine::start_home(const std::string& server_id, QualityTier tier,
 void Engine::start_common(const std::string& title_id, QualityTier tier,
                           const std::string& locale) {
     stop();
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        selected_region_.clear();
+    }
     title_id_ = title_id;
     tier_ = tier;
     // Console Remote Play uses the proven Android fingerprint to create the
@@ -230,7 +234,8 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
     smooth_refresh_phase_ = 0;
     source_refresh_period_ = 1;
     source_fast_streak_ = source_slow_streak_ = 0;
-    last_decode_ticks_ = 0;
+    last_rtp_timestamp_ = 0;
+    have_rtp_timestamp_ = false;
     pace_new_ = pace_repeat_ = 0;
     pace_hold1_ = pace_hold2_ = pace_hold3_ = pace_hold4p_ = 0;
     pace_skip_ = pace_generated_ = 0;
@@ -299,6 +304,11 @@ std::string Engine::error() const {
     return error_;
 }
 
+std::string Engine::selected_region() const {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    return selected_region_;
+}
+
 void Engine::set_status(const std::string& status) {
     std::lock_guard<std::mutex> lock(status_mutex_);
     status_ = status;
@@ -344,12 +354,15 @@ void Engine::on_video(uint8_t* data, size_t size, void* user) {
     bool want_keyframe = false;
     self->jitter_.receive(
         data, size, SDL_GetTicks64(),
-        [self](const uint8_t* au, size_t au_size) {
+        [self](const uint8_t* au, size_t au_size, uint32_t rtp_timestamp) {
             {
                 std::lock_guard<std::mutex> lock(self->video_mutex_);
                 if (self->video_queue_.size() >= kMaxQueuedVideo)
                     self->video_queue_.clear();
-                self->video_queue_.emplace_back(au, au + au_size);
+                VideoAccessUnit unit;
+                unit.data.assign(au, au + au_size);
+                unit.rtp_timestamp = rtp_timestamp;
+                self->video_queue_.push_back(std::move(unit));
             }
             self->video_cv_.notify_one();  // wake the decode thread (Switch)
         },
@@ -653,9 +666,14 @@ void Engine::worker() {
         log("fetching streaming credentials");
         StreamingCredentials creds = auth_.fetch_streaming_credentials();
         cloud_ = home ? creds.home : creds.cloud;
-        if (!home)
+        if (!home) {
+            {
+                std::lock_guard<std::mutex> lock(status_mutex_);
+                selected_region_ = cloud_.selected_region;
+            }
             log("server region: " + cloud_.selected_region + " | " +
                 cloud_.host);
+        }
         // Without a host every request goes out as a bare path, which curl
         // rejects as a malformed URL -- a useless error for the one thing that
         // actually went wrong: the remote-play login did not come back.
@@ -669,7 +687,8 @@ void Engine::worker() {
             return;
         }
 
-        set_status("Cleaning up old sessions...");
+        set_status(home ? "Preparing Xbox Remote Play route..."
+                        : "Connecting to " + cloud_.selected_region + "...");
         GssvSession::cleanup_stale_sessions(http_, cloud_,
                                             home ? "home" : "cloud");
         log("stale-session cleanup done");
@@ -1405,6 +1424,19 @@ bool Engine::run_peer(GssvSession& session) {
             prev_audio_time = now;
             last_audio_stats = now;
             if (got_frame_) {
+                size_t decode_q;
+                {
+                    std::lock_guard<std::mutex> lock(video_mutex_);
+                    decode_q = video_queue_.size();
+                }
+                const auto video_stats = jitter_.stats();
+                log("video| pkt=" + std::to_string(video_stats.packets) +
+                    " frame=" + std::to_string(video_stats.frames) +
+                    " drop=" + std::to_string(video_stats.dropped) +
+                    " nack=" + std::to_string(video_stats.nacks) +
+                    " resync=" + std::to_string(video_stats.resyncs) +
+                    " au=" + std::to_string(video_stats.last_frame_bytes) +
+                    "B decodeq=" + std::to_string(decode_q));
                 log("audio| rx=" + std::to_string(a.received) +
                     " play=" + std::to_string(a.played) +
                     " fail=" + std::to_string(a.failed) +
@@ -1468,7 +1500,7 @@ bool Engine::run_peer(GssvSession& session) {
 // never skipped at decode time.
 void Engine::decode_loop() {
     while (!quit_) {
-        std::vector<uint8_t> unit;
+        VideoAccessUnit unit;
         {
             std::unique_lock<std::mutex> lock(video_mutex_);
             video_cv_.wait_for(lock, std::chrono::milliseconds(20), [this] {
@@ -1479,29 +1511,33 @@ void Engine::decode_loop() {
             unit = std::move(video_queue_.front());
             video_queue_.pop_front();
         }
-        if (video_.decode(unit.data(), unit.size())) {
-            // Detect the source cadence from decode spacing: ~16 ms gaps mean
-            // a 60 fps stream (present every refresh), ~33 ms mean 30 fps
-            // (present every other refresh). Streaks of 8 debounce the flips
-            // xCloud makes mid-stream. Smooth and Motion consume this.
-            Uint64 decoded_at = SDL_GetTicks64();
-            if (last_decode_ticks_) {
-                Uint64 gap = decoded_at - last_decode_ticks_;
-                if (gap < 25) {
+        if (video_.decode(unit.data.data(), unit.data.size())) {
+            // H.264's RTP clock is fixed at 90 kHz: a frame delta is ~1500
+            // ticks at 60 fps and ~3000 at 30 fps. Unlike packet arrival or
+            // decode spacing, this value is not distorted when Wi-Fi delivers
+            // several frames as a burst. Streaks debounce real source changes.
+            if (have_rtp_timestamp_) {
+                const uint32_t delta = unit.rtp_timestamp - last_rtp_timestamp_;
+                if (delta >= 900 && delta <= 2200) {
                     ++source_fast_streak_;
                     source_slow_streak_ = 0;
                     if (source_fast_streak_ >= 8)
                         source_refresh_period_.store(1,
                                                      std::memory_order_relaxed);
-                } else if (gap < 55) {
+                } else if (delta > 2200 && delta <= 4200) {
                     ++source_slow_streak_;
                     source_fast_streak_ = 0;
                     if (source_slow_streak_ >= 8)
                         source_refresh_period_.store(2,
                                                      std::memory_order_relaxed);
+                } else {
+                    // A source pause, timestamp discontinuity, or skipped
+                    // encoder frame is not evidence of a cadence switch.
+                    source_fast_streak_ = source_slow_streak_ = 0;
                 }
             }
-            last_decode_ticks_ = decoded_at;
+            last_rtp_timestamp_ = unit.rtp_timestamp;
+            have_rtp_timestamp_ = true;
             {
                 std::lock_guard<std::mutex> lock(frame_mutex_);
                 ++shared_frame_seq_;
@@ -1571,8 +1607,18 @@ SDL_Texture* Engine::pump_video() {
                 bool due = !smooth_have_present_ ||
                            ++smooth_refresh_phase_ >= period;
                 // >= 2 keeps one decoded frame in reserve so a late arrival
-                // becomes a queue dip, not a visible repeat.
+                // becomes a queue dip, not a visible repeat. If a network
+                // burst left more than that reserve behind, discard one stale
+                // presentation frame now; otherwise the extra latency would
+                // remain for the rest of the session because source and panel
+                // normally advance at the same average rate.
                 if (due && smooth_frames_.size() >= 2) {
+                    if (smooth_frames_.size() >= 3) {
+                        SmoothFrame stale = smooth_frames_.front();
+                        smooth_frames_.pop_front();
+                        if (stale.frame) av_frame_free(&stale.frame);
+                        pace_skip_.fetch_add(1, std::memory_order_relaxed);
+                    }
                     SmoothFrame next = smooth_frames_.front();
                     smooth_frames_.pop_front();
                     av_frame_unref(present_frame_);
@@ -1644,14 +1690,14 @@ SDL_Texture* Engine::pump_video() {
     // PC: no decode thread (SDL texture upload must stay on this render thread),
     // so decode inline and hand back the SDL texture.
     for (;;) {
-        std::vector<uint8_t> unit;
+        VideoAccessUnit unit;
         {
             std::lock_guard<std::mutex> lock(video_mutex_);
             if (video_queue_.empty()) break;
             unit = std::move(video_queue_.front());
             video_queue_.pop_front();
         }
-        if (video_.decode(unit.data(), unit.size()) && !got_frame_) {
+        if (video_.decode(unit.data.data(), unit.data.size()) && !got_frame_) {
             got_frame_ = true;
             state_ = EngineState::Streaming;
         }
@@ -1674,10 +1720,54 @@ bool Engine::begin_deko_output() {
 }
 
 void Engine::set_quick_menu_state(const QuickMenuState& state) {
-    quick_menu_state_ = normalized_quick_menu(state);
+    QuickMenuState next = normalized_quick_menu(state);
+    set_pacing(static_cast<VideoPacing>(next.pacing));
+    quick_menu_state_ = next;
 #ifdef __SWITCH__
     dk_video_.set_quick_menu_state(quick_menu_state_);
 #endif
+}
+
+void Engine::set_pacing(VideoPacing pacing) {
+    if (pacing != VideoPacing::Steady && pacing != VideoPacing::Smooth &&
+        pacing != VideoPacing::Motion)
+        pacing = VideoPacing::Steady;
+#ifdef __SWITCH__
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    if (pacing_ == pacing) return;
+
+    // Preserve the frame currently on screen, but release every queued or
+    // generated surface owned by the old mode. This is especially important
+    // when leaving Motion: retaining its second NVDEC surface can make the next
+    // shader pass sample a recycled buffer and flash green.
+    if (motion_frame_) av_frame_unref(motion_frame_);
+    for (SmoothFrame& queued : smooth_frames_)
+        if (queued.frame) av_frame_free(&queued.frame);
+    smooth_frames_.clear();
+    smooth_refresh_phase_ = 0;
+
+    if (pacing == VideoPacing::Steady) {
+        shared_frame_valid_ = false;
+        if (shared_frame_) av_frame_unref(shared_frame_);
+        if (shared_frame_ && present_frame_ && present_frame_->data[0] &&
+            av_frame_ref(shared_frame_, present_frame_) == 0) {
+            shared_frame_valid_ = true;
+            shared_frame_seq_ = last_present_seq_;
+        }
+        smooth_have_present_ = false;
+    } else {
+        // Smooth/Motion may keep displaying the stable current frame while the
+        // decode thread builds a fresh two-frame reserve for the new mode.
+        smooth_have_present_ =
+            present_frame_ && present_frame_->data[0] != nullptr;
+        if (shared_frame_) av_frame_unref(shared_frame_);
+        shared_frame_valid_ = false;
+    }
+    pacing_ = pacing;
+#else
+    pacing_ = pacing;
+#endif
+    log(std::string("pacing changed live: ") + pacing_name(pacing));
 }
 
 void Engine::set_sharpness(int level) {
