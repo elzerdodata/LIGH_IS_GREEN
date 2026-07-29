@@ -23,7 +23,8 @@ PC is required.
   automatically with the stable 720p profile.
 - Beta 2 separates console wake/registration retries from WebRTC media retries,
   adds progressive teardown backoff, refreshes the xHome route periodically,
-  and gives remote ICE/DTLS negotiation more time.
+  gives remote ICE/DTLS negotiation more time, and fixes compressed Teredo
+  candidate conversion for Remote Play outside the LAN.
 - Keeps Remote Play available away from home through Xbox's xHome service.
   Success depends on Remote Features, NAT, IPv6/Teredo and UDP connectivity.
 - Expands the performance overlay with source, output and generated FPS.
@@ -159,7 +160,8 @@ consola; no requiere una PC auxiliar.
   nueva con el perfil estable de 720p.
 - Beta 2 separa los reintentos de encendido/registro de los reintentos WebRTC,
   agrega espera progresiva entre sesiones, renueva periódicamente la ruta
-  xHome y concede más tiempo a la negociación ICE/DTLS remota.
+  xHome, concede más tiempo a la negociación ICE/DTLS remota y corrige la
+  conversión de candidatos Teredo comprimidos para jugar fuera de la red local.
 - Mantiene Remote Play fuera de casa mediante el servicio xHome de Xbox. Su
   funcionamiento depende de Remote Features, NAT, IPv6/Teredo y conectividad
   UDP.

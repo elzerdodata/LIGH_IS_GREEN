@@ -97,6 +97,18 @@ std::string ufrag_from_sdp(const std::string& sdp) {
     return sdp.substr(at, end - at);
 }
 
+unsigned long candidate_priority(const std::string& candidate) {
+    // candidate:<foundation> <component> <protocol> <priority> ...
+    std::istringstream fields(candidate);
+    std::string token;
+    for (int field = 0; field <= 3; ++field) {
+        if (!(fields >> token)) return 0;
+    }
+    char* end = nullptr;
+    unsigned long priority = std::strtoul(token.c_str(), &end, 10);
+    return end && *end == '\0' ? priority : 0;
+}
+
 }  // namespace
 
 Engine::Engine(XboxAuth& auth, SDL_Renderer* renderer)
@@ -1052,20 +1064,8 @@ bool Engine::run_peer(GssvSession& session) {
         // trickle in seconds later. Settling for the placeholder alone makes
         // ICE fail, so keep polling until a real candidate shows up.
         auto has_real_candidate = [&remote]() {
-            for (const std::string& c : remote) {
-                // candidate:<found> <comp> UDP <priority> ...
-                size_t sp = 0;
-                int field = 0;
-                unsigned long prio = 0;
-                std::istringstream ss(c);
-                std::string tok;
-                while (ss >> tok && field < 4) {
-                    if (field == 3) prio = std::strtoul(tok.c_str(), nullptr, 10);
-                    field++;
-                }
-                (void)sp;
-                if (prio > 1000) return true;
-            }
+            for (const std::string& candidate : remote)
+                if (candidate_priority(candidate) > 1000) return true;
             return false;
         };
         while (!quit_ && !done && SDL_GetTicks64() < gather_deadline) {
@@ -1087,6 +1087,13 @@ bool Engine::run_peer(GssvSession& session) {
         }
         remote_has_real_candidate = has_real_candidate();
     }
+    // libpeer checks pairs in insertion order. Put the public/Teredo route
+    // before xHome's priority-100 placeholder so an Internet connection does
+    // not burn several STUN timeouts on a known dead endpoint first.
+    std::stable_sort(remote.begin(), remote.end(),
+                     [](const std::string& a, const std::string& b) {
+                         return candidate_priority(a) > candidate_priority(b);
+                     });
     log("collected " + std::to_string(remote.size()) + " remote candidates");
     for (const std::string& candidate : remote) log("  remote cand: " + candidate);
     for (const std::string& candidate : local_candidates_from_sdp(munged))

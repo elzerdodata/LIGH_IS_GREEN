@@ -15,6 +15,9 @@ v0.6.0 remains the stable release.
 - Remote ICE gathering receives up to 25 seconds, DTLS/SCTP receives up to 25
   seconds after ICE connects, and total xHome negotiation receives up to 75
   seconds per fresh session.
+- Teredo candidates now accept compressed IPv6 notation, retain a usable ICE
+  priority after IPv4 conversion, and are checked before the known xHome
+  placeholder route. This specifically targets Remote Play outside the LAN.
 - A failed experimental 1080p negotiation switches every remaining attempt to
   stable 720p. A connected 1080p session gets 25 seconds for first video;
   stable 720p gets 60 seconds before another fresh session is requested.

@@ -1,5 +1,7 @@
 #include "session.hpp"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <functional>
@@ -88,30 +90,64 @@ void throw_on_exchange_error(const json& value, const char* label) {
 // A Teredo IPv6 address (RFC 4380) embeds the node's public IPv4 address and
 // UDP port, both bit-inverted. xCloud advertises its real media endpoint this
 // way; decode it to a plain IPv4 host we can actually reach. Mirrors
-// greenlight's teredo.ts. Returns false if `addr` isn't a full Teredo address.
+// greenlight's teredo.ts. Xbox may send either expanded or compressed IPv6.
 bool decode_teredo(const std::string& addr, std::string* ipv4, int* port) {
-    std::vector<std::string> groups;
-    size_t start = 0;
-    while (true) {
-        size_t colon = addr.find(':', start);
-        groups.push_back(addr.substr(start, colon - start));
-        if (colon == std::string::npos) break;
-        start = colon + 1;
-    }
-    if (groups.size() != 8) return false;         // needs the expanded form
-    if (groups[0] != "2001") return false;         // Teredo prefix 2001:0000
-
-    auto hex = [](const std::string& value) {
-        return static_cast<unsigned>(std::strtoul(value.c_str(), nullptr, 16));
+    auto parse_side = [](const std::string& side,
+                         std::vector<unsigned>* words) {
+        if (side.empty()) return true;
+        size_t start = 0;
+        while (start < side.size()) {
+            size_t colon = side.find(':', start);
+            std::string token = side.substr(start, colon - start);
+            if (token.empty() || token.size() > 4) return false;
+            char* end = nullptr;
+            unsigned long value = std::strtoul(token.c_str(), &end, 16);
+            if (!end || *end != '\0' || value > 0xFFFF) return false;
+            words->push_back(static_cast<unsigned>(value));
+            if (colon == std::string::npos) break;
+            start = colon + 1;
+        }
+        return true;
     };
-    unsigned port_field = hex(groups[5]);
-    std::string ip_hex = groups[6] + groups[7];
-    if (ip_hex.size() != 8) return false;
 
-    unsigned bytes[4];
-    for (int i = 0; i < 4; ++i)
-        bytes[i] = (~hex(ip_hex.substr(i * 2, 2))) & 0xFF;
-    *port = static_cast<int>((~port_field) & 0xFFFF);
+    std::string normalized = addr;
+    if (normalized.size() >= 2 && normalized.front() == '[' &&
+        normalized.back() == ']')
+        normalized = normalized.substr(1, normalized.size() - 2);
+    size_t scope = normalized.find('%');
+    if (scope != std::string::npos) normalized.resize(scope);
+
+    std::vector<unsigned> left;
+    std::vector<unsigned> right;
+    size_t compressed = normalized.find("::");
+    std::array<unsigned, 8> words{};
+    if (compressed == std::string::npos) {
+        if (!parse_side(normalized, &left) || left.size() != words.size())
+            return false;
+        std::copy(left.begin(), left.end(), words.begin());
+    } else {
+        // Only one "::" is valid, and it must replace at least one word.
+        if (normalized.find("::", compressed + 2) != std::string::npos)
+            return false;
+        if (!parse_side(normalized.substr(0, compressed), &left) ||
+            !parse_side(normalized.substr(compressed + 2), &right) ||
+            left.size() + right.size() >= words.size())
+            return false;
+        std::copy(left.begin(), left.end(), words.begin());
+        std::copy(right.begin(), right.end(),
+                  words.begin() + (words.size() - right.size()));
+    }
+
+    // Teredo prefix is 2001:0000::/32, not merely any 2001:: address.
+    if (words[0] != 0x2001 || words[1] != 0x0000) return false;
+
+    unsigned bytes[4] = {
+        (~(words[6] >> 8)) & 0xFF,
+        (~words[6]) & 0xFF,
+        (~(words[7] >> 8)) & 0xFF,
+        (~words[7]) & 0xFF,
+    };
+    *port = static_cast<int>((~words[5]) & 0xFFFF);
     *ipv4 = std::to_string(bytes[0]) + "." + std::to_string(bytes[1]) + "." +
             std::to_string(bytes[2]) + "." + std::to_string(bytes[3]);
     return true;
@@ -362,11 +398,28 @@ std::vector<std::string> GssvSession::receive_ice_candidates(
         std::string ipv4;
         int teredo_port = 0;
         if (!decode_teredo(address, &ipv4, &teredo_port)) continue;
-        // xCloud reaches this node on the decoded port and on UDP 9002.
-        for (int port : {teredo_port, 9002}) {
+        // Keep the original ICE priority so the converted public route is not
+        // mistaken for xHome's priority-100 front-door placeholder. A few
+        // servers have emitted an unusably low priority, so give a converted
+        // Teredo endpoint a conservative floor above that placeholder.
+        char* priority_end = nullptr;
+        unsigned long parsed_priority =
+            std::strtoul(parts[3].c_str(), &priority_end, 10);
+        if (!priority_end || *priority_end != '\0') parsed_priority = 0;
+        unsigned long synthetic_priority =
+            std::max<unsigned long>(parsed_priority, 16777215UL);
+
+        // The working Greenlight route tries UDP 9002 first, then the port
+        // encoded by Teredo. Keep that order because libpeer checks pairs in
+        // insertion order, and avoid adding the same endpoint twice.
+        int previous_port = -1;
+        for (int port : {9002, teredo_port}) {
+            if (port <= 0 || port == previous_port) continue;
+            previous_port = port;
             out.push_back("candidate:" + std::to_string(synthetic_foundation++) +
-                          " 1 UDP 1 " + ipv4 + " " + std::to_string(port) +
-                          " typ host");
+                          " " + parts[1] + " " + parts[2] + " " +
+                          std::to_string(synthetic_priority) + " " + ipv4 +
+                          " " + std::to_string(port) + " typ host");
         }
     }
     return out;
