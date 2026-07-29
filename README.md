@@ -1,6 +1,6 @@
 # Light is Green
 
-> **Current release v0.5.1 / Versión actual v0.5.1**
+> **Current release v0.6.0 / Versión actual v0.6.0**
 
 English | [Español](#español)
 
@@ -13,19 +13,16 @@ Nintendo Switch** homebrew. Authentication, WebRTC, hardware H.264 decoding,
 GPU rendering, audio, and controller input all run on the console; no companion
 PC is required.
 
-## What's new in v0.5.1
+## What's new in v0.6.0
 
-- Fixes the startup `json.exception.type_error.302` regression in v0.5.0-pre.
-- Restores the stable v0.4 catalog path: only game names and cover art are read;
-  no extra nullable xCloud/Microsoft Store metadata is requested or cached.
-- Replaces the unused selected-game hero with a content-first 8×3 library
-  grid, showing up to 24 games on each page.
-- Removes the non-functional **In-stream** header tab; streaming controls remain
-  available only while a stream is active.
-- Adds the new Joy-Con/Xbox artwork as both the Homebrew Menu icon and the
-  in-app brand icon.
-- Keeps the 220 ms selection animation, compact frameless stream controls,
-  Gamma, and all live image controls from v0.5/v0.4.
+- Separates **Region bypass** from the new **Server region** selector.
+- Adds Auto, Chile Central, Brazil South, and every additional xCloud
+  datacenter returned by Xbox during login.
+- Refreshes and caches the live datacenter list, with a safe fallback to the
+  Xbox default when a selected region is unavailable.
+- Changes the normal 1080p high-bitrate preset to the Windows allocation pool
+  while preserving the former Tizen/TV fingerprint as an experimental option.
+- Records the selected region and host in `stream-log.txt` for queue diagnosis.
 
 ## Features
 
@@ -35,9 +32,10 @@ PC is required.
 - Live xCloud queue estimate while a server is allocated.
 - Native WebRTC streaming with hardware H.264 decoding and zero-copy deko3d
   rendering.
-- Opus audio, 60 fps video, and 720p / 1080p / 1080p high-bitrate modes.
-- Configurable game language, region bypass, button mapping, vibration, video
-  pacing, volume, and image controls.
+- Opus audio, 60 fps video, and 720p / 1080p / 1080p HQ Windows modes, plus an
+  experimental Tizen HQ profile.
+- Independent region bypass and xCloud server selection, configurable game
+  language, button mapping, vibration, video pacing, volume, and image controls.
 
 ## Requirements
 
@@ -117,7 +115,7 @@ valid subscription and hardware.
 - License: [GPL-3.0](LICENSE)
 - Original project and core implementation: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Light is Green fork and v0.2–v0.5 work: **elzerdodata**
+- Light is Green fork and v0.2–v0.6 work: **elzerdodata**
 
 ---
 
@@ -132,20 +130,17 @@ Gaming (xCloud) para Nintendo Switch**. La autenticación, WebRTC, decodificaci�
 H.264 por hardware, renderizado en GPU, audio y controles funcionan en la
 consola; no requiere una PC auxiliar.
 
-## Novedades de v0.5.1
+## Novedades de v0.6.0
 
-- Corrige la regresión `json.exception.type_error.302` de v0.5.0-pre al iniciar.
-- Restaura la ruta estable del catálogo de v0.4: solo se leen nombres y
-  carátulas; no se solicitan ni guardan metadatos adicionales anulables de
-  xCloud/Microsoft Store.
-- Reemplaza el hero sin información por una cuadrícula de biblioteca 8×3 que
-  muestra hasta 24 juegos en cada página.
-- Elimina la pestaña **In-stream** del encabezado porque no tenía función; los
-  controles de streaming siguen disponibles durante una partida activa.
-- Agrega el nuevo arte Joy-Con/Xbox como icono del Homebrew Menu y dentro de la
-  aplicación.
-- Conserva la animación de selección de 220 ms, los controles compactos sin
-  recuadros, Gamma y todos los ajustes de imagen de v0.5/v0.4.
+- Separa **Región de bypass** del nuevo selector **Región del servidor**.
+- Agrega Auto, Chile Central, Brazil South y todos los datacenters adicionales
+  de xCloud que Xbox devuelva al iniciar sesión.
+- Actualiza y guarda la lista real de datacenters, con retorno seguro al
+  servidor predeterminado de Xbox cuando una región no esté disponible.
+- Cambia el modo normal de 1080p con alta tasa al pool Windows y conserva el
+  perfil anterior Tizen/TV como opción experimental.
+- Registra la región y el host seleccionados en `stream-log.txt` para facilitar
+  el diagnóstico de colas.
 
 ## Funciones
 
@@ -156,9 +151,10 @@ consola; no requiere una PC auxiliar.
 - Estimación en vivo de la cola de xCloud mientras se asigna un servidor.
 - Streaming WebRTC nativo con decodificación H.264 por hardware y renderizado
   deko3d sin copias adicionales.
-- Audio Opus, video a 60 fps y modos 720p / 1080p / 1080p de alta tasa.
-- Idioma del juego, salto de región, distribución de botones, vibración,
-  suavizado de video, volumen y controles de imagen configurables.
+- Audio Opus, video a 60 fps y modos 720p / 1080p / 1080p HQ Windows, además de
+  un perfil HQ Tizen experimental.
+- Bypass geográfico y servidor de xCloud independientes, además de idioma,
+  distribución de botones, vibración, suavizado, volumen y controles de imagen.
 
 ## Requisitos
 
@@ -239,4 +235,4 @@ propia suscripción válida y tu hardware.
 - Licencia: [GPL-3.0](LICENSE)
 - Proyecto original e implementación base: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Fork Light is Green y trabajo de v0.2–v0.5: **elzerdodata**
+- Fork Light is Green y trabajo de v0.2–v0.6: **elzerdodata**

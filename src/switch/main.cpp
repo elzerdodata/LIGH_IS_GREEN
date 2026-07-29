@@ -36,6 +36,10 @@
 using nlohmann::json;
 using namespace gnx;
 
+#ifndef GNX_VERSION
+#define GNX_VERSION "dev"
+#endif
+
 namespace {
 
 #ifdef __SWITCH__
@@ -274,10 +278,13 @@ struct SwitchRumble {
 #endif
 
 struct Settings {
-    int quality = 2;    // 0=720p, 1=1080p, 2=1080p HQ
+    int quality = 2;    // 0=720p, 1=1080p, 2=HQ Windows, 3=HQ Tizen test
     int mapping = 0;    // 0=positional, 1=match labels
     int vibration = 2;  // rumble intensity: 0=Off, 1=Low, 2=Medium, 3=High
     int region = 0;     // region-bypass IP: 0=Off, else index into kRegion*
+    // Empty = Xbox automatic. Otherwise the stable region.name returned by
+    // offeringSettings.regions, e.g. "ChileCentral" or "BrazilSouth".
+    std::string server_region;
     int language = 0;   // index into kLanguage* (0 = English US)
     int source = 0;     // 0=ask every time, 1=xCloud, 2=your Xbox
     float volume = 1.0f;  // output gain for streamed audio (0.5-4.0); tune in settings.json
@@ -294,6 +301,7 @@ struct Settings {
 
 constexpr int kLanguageCount = 14;
 constexpr int kVibrationLevels = 4;
+constexpr int kQualityLevels = 4;
 
 Settings load_settings();
 void save_settings(const Settings& settings);
@@ -389,6 +397,7 @@ struct App {
     int detail_index = -1;   // games[] index shown in Scene::Detail
     int detail_cursor = 0;   // 0 = Play, 1 = favorite, 2 = Play on... (if any)
     std::vector<HomeConsole> consoles;  // linked Xboxes; empty = hide feature
+    std::vector<ServerRegion> server_regions;  // live xCloud datacenters
     bool launching_home = false;        // what the current stream targets
     int console_cursor = 0;             // selected console (list + launches)
     int pick_cursor = 0;                // SourcePicker: 0 xCloud, 1 your Xbox
@@ -415,7 +424,8 @@ Settings load_settings() {
     if (!in) return settings;
     json data = json::parse(in, nullptr, false);
     if (data.is_discarded()) return settings;
-    settings.quality = std::clamp(data.value("quality", 2), 0, 2);
+    settings.quality =
+        std::clamp(data.value("quality", 2), 0, kQualityLevels - 1);
     settings.mapping = std::clamp(data.value("mapping", 0), 0, 1);
     // "vibration" was an on/off bool before intensity levels existed; migrate.
     if (data.contains("vibration") && data["vibration"].is_boolean())
@@ -424,6 +434,7 @@ Settings load_settings() {
         settings.vibration =
             std::clamp(data.value("vibration", 2), 0, kVibrationLevels - 1);
     settings.region = std::clamp(data.value("region", 0), 0, 5);
+    settings.server_region = data.value("server_region", "");
     settings.language =
         std::clamp(data.value("language", 0), 0, kLanguageCount - 1);
     settings.source = std::clamp(data.value("source", 0), 0, 2);
@@ -444,6 +455,7 @@ void save_settings(const Settings& settings) {
                 {"mapping", settings.mapping},
                 {"vibration", settings.vibration},
                 {"region", settings.region},
+                {"server_region", settings.server_region},
                 {"language", settings.language},
                 {"source", settings.source},
                 {"volume", settings.volume},
@@ -486,6 +498,180 @@ const char* kRegionIps[6] = {"", "143.244.47.65", "169.150.198.66",
 
 void apply_region(const Settings& settings) {
     Http::set_forwarded_for(kRegionIps[std::clamp(settings.region, 0, 5)]);
+}
+
+std::string normalized_server_region(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (unsigned char ch : value)
+        if (std::isalnum(ch))
+            out.push_back(static_cast<char>(std::toupper(ch)));
+    return out;
+}
+
+std::string pretty_server_region(const std::string& name) {
+    struct KnownRegion {
+        const char* id;
+        const char* country;
+        const char* label;
+    };
+    static const KnownRegion known[] = {
+        {"EASTUS", "US", "East US"},
+        {"EASTUS2", "US", "East US 2"},
+        {"NORTHCENTRALUS", "US", "North Central US"},
+        {"SOUTHCENTRALUS", "US", "South Central US"},
+        {"WESTUS", "US", "West US"},
+        {"WESTUS2", "US", "West US 2"},
+        {"WESTUS3", "US", "West US 3"},
+        {"MEXICOCENTRAL", "MX", "Mexico Central"},
+        {"BRAZILSOUTH", "BR", "Brazil South"},
+        {"CHILECENTRAL", "CL", "Chile Central"},
+        {"JAPANEAST", "JP", "Japan East"},
+        {"KOREACENTRAL", "KR", "Korea Central"},
+        {"CENTRALINDIA", "IN", "Central India"},
+        {"SOUTHINDIA", "IN", "South India"},
+        {"AUSTRALIAEAST", "AU", "Australia East"},
+        {"AUSTRALIASOUTHEAST", "AU", "Australia Southeast"},
+        {"SWEDENCENTRAL", "SE", "Sweden Central"},
+        {"UKSOUTH", "GB", "UK South"},
+        {"WESTEUROPE", "NL", "West Europe"},
+    };
+    std::string key = normalized_server_region(name);
+    for (const KnownRegion& region : known)
+        if (key == region.id)
+            return std::string(region.country) + " · " + region.label;
+
+    // Future Xbox regions still remain readable without waiting for an app
+    // update: turn CamelCase into words and keep the stable name as a fallback.
+    std::string label;
+    for (size_t i = 0; i < name.size(); ++i) {
+        unsigned char ch = static_cast<unsigned char>(name[i]);
+        if (i > 0 && std::isupper(ch) &&
+            std::islower(static_cast<unsigned char>(name[i - 1])))
+            label.push_back(' ');
+        label.push_back(static_cast<char>(ch));
+    }
+    return label.empty() ? "Unknown region" : label;
+}
+
+std::string server_host_code(const std::string& base_uri) {
+    size_t start = base_uri.find("://");
+    start = start == std::string::npos ? 0 : start + 3;
+    size_t end = base_uri.find('.', start);
+    if (end == std::string::npos || end <= start) return "";
+    std::string code = base_uri.substr(start, end - start);
+    for (char& ch : code)
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    return code;
+}
+
+std::string server_region_label(const ServerRegion& region) {
+    std::string label = pretty_server_region(region.name);
+    std::string host = server_host_code(region.base_uri);
+    if (host.empty()) {
+        if (normalized_server_region(region.name) == "CHILECENTRAL") host = "CLC";
+        else if (normalized_server_region(region.name) == "BRAZILSOUTH")
+            host = "BRS";
+    }
+    return host.empty() ? label : host + " · " + label;
+}
+
+std::vector<ServerRegion> load_server_regions() {
+    std::ifstream in(data_path("server-regions.json"));
+    if (!in) return {};
+    json data = json::parse(in, nullptr, false);
+    if (!data.is_array()) return {};
+
+    std::vector<ServerRegion> regions;
+    for (const json& item : data) {
+        ServerRegion region;
+        region.name = item.value("name", "");
+        region.base_uri = item.value("base_uri", "");
+        region.is_default = item.value("is_default", false);
+        if (!region.name.empty()) regions.push_back(std::move(region));
+    }
+    return regions;
+}
+
+void save_server_regions(const std::vector<ServerRegion>& regions) {
+    json data = json::array();
+    for (const ServerRegion& region : regions)
+        data.push_back({{"name", region.name},
+                        {"base_uri", region.base_uri},
+                        {"is_default", region.is_default}});
+    std::ofstream out(data_path("server-regions.json"), std::ios::trunc);
+    out << data.dump(2);
+}
+
+bool same_server_regions(const std::vector<ServerRegion>& left,
+                         const std::vector<ServerRegion>& right) {
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); ++i)
+        if (left[i].name != right[i].name ||
+            left[i].base_uri != right[i].base_uri ||
+            left[i].is_default != right[i].is_default)
+            return false;
+    return true;
+}
+
+void sync_server_regions(App& app) {
+    std::vector<ServerRegion> live = app.auth->available_cloud_regions();
+    if (live.empty() || same_server_regions(live, app.server_regions)) return;
+    app.server_regions = std::move(live);
+    save_server_regions(app.server_regions);
+}
+
+std::vector<ServerRegion> server_region_choices(const App& app) {
+    // Keep the two useful South-American choices visible even before the first
+    // online refresh. Their endpoints are never guessed: the auth response
+    // still has to contain the matching stable name before it can be selected.
+    std::vector<ServerRegion> choices = {
+        {"ChileCentral", "", false}, {"BrazilSouth", "", false}};
+    auto merge = [&choices](const ServerRegion& incoming) {
+        const std::string key = normalized_server_region(incoming.name);
+        for (ServerRegion& existing : choices)
+            if (normalized_server_region(existing.name) == key) {
+                if (!incoming.base_uri.empty()) existing = incoming;
+                return;
+            }
+        choices.push_back(incoming);
+    };
+    for (const ServerRegion& region : app.server_regions) merge(region);
+    if (!app.settings.server_region.empty())
+        merge({app.settings.server_region, "", false});
+    return choices;
+}
+
+std::string selected_server_region_label(const App& app) {
+    if (app.settings.server_region.empty()) {
+        for (const ServerRegion& region : app.server_regions)
+            if (region.is_default) {
+                std::string host = server_host_code(region.base_uri);
+                return host.empty() ? "Auto" : "Auto · " + host;
+            }
+        return "Auto";
+    }
+    for (const ServerRegion& region : server_region_choices(app))
+        if (normalized_server_region(region.name) ==
+            normalized_server_region(app.settings.server_region))
+            return server_region_label(region);
+    return pretty_server_region(app.settings.server_region);
+}
+
+void cycle_server_region(App& app, int direction) {
+    std::vector<ServerRegion> choices = server_region_choices(app);
+    int current = 0;  // 0 = Auto; returned regions start at 1.
+    for (size_t i = 0; i < choices.size(); ++i)
+        if (normalized_server_region(choices[i].name) ==
+            normalized_server_region(app.settings.server_region)) {
+            current = static_cast<int>(i) + 1;
+            break;
+        }
+    const int count = static_cast<int>(choices.size()) + 1;
+    current = (current + direction + count) % count;
+    app.settings.server_region =
+        current == 0 ? "" : choices[static_cast<size_t>(current - 1)].name;
+    app.auth->set_preferred_server_region(app.settings.server_region);
 }
 
 // ---- persistence ----------------------------------------------------------
@@ -646,6 +832,8 @@ void start_library_load(App& app, bool force_refresh) {
             app.status = "Fetching streaming credentials...";
             StreamingCredentials credentials =
                 app.auth->fetch_streaming_credentials();
+            app.server_regions = credentials.cloud.regions;
+            save_server_regions(app.server_regions);
             app.status = "Loading your library...";
             Http http;
             // Linked consoles for xHome remote play. Non-fatal: no consoles
@@ -928,7 +1116,8 @@ void draw_header(App& app) {
     app.gfx.draw_brand_icon(icon);
     app.gfx.text("Light is Green", kMargin + 92, 23, gfx::FontSize::Body,
                  gfx::kText);
-    app.gfx.text("v0.5.1", kMargin + 92, 65, gfx::FontSize::Small,
+    app.gfx.text(std::string("v") + GNX_VERSION, kMargin + 92, 65,
+                 gfx::FontSize::Small,
                  gfx::kFocus);
 }
 
@@ -1119,7 +1308,8 @@ SDL_Rect scale_about_center(const SDL_Rect& rect, float scale) {
 const char* kTabNames[kTabCount] = {"All games", "Favorites", "History",
                                     "Consoles"};
 
-const char* kQualityLabels[3] = {"720p", "1080p", "1080p high bitrate"};
+const char* kQualityLabels[kQualityLevels] = {
+    "720p", "1080p", "1080p HQ · Windows", "1080p HQ · Tizen test"};
 const char* kMappingLabels[2] = {"Positional (Switch A = Xbox B)",
                                  "Match labels (Switch A = Xbox A)"};
 const char* kSharpnessLabels[4] = {"Off", "Low", "Medium", "High"};
@@ -1914,6 +2104,9 @@ void draw_accounts(App& app) {
 }
 
 void draw_settings(App& app) {
+    // A stream login may have refreshed Xbox's live datacenter list while the
+    // menu was not visible. Import it once and persist it for the next launch.
+    sync_server_regions(app);
     app.gfx.text("Settings", kMargin, 48, gfx::FontSize::Title, gfx::kText);
     auto signed_value = [](int value) {
         return std::string(value > 0 ? "+" : "") + std::to_string(value);
@@ -1940,8 +2133,9 @@ void draw_settings(App& app) {
              std::snprintf(value, sizeof(value), "%.2f",
                            app.settings.gamma / 100.0f);
              return std::string(value);
-         }()},
+        }()},
         {"Sharpness", kSharpnessLabels[app.settings.sharpness]},
+        {"Server region", selected_server_region_label(app)},
     };
     if (!app.consoles.empty())
         rows.push_back({"Preferred source",
@@ -2058,6 +2252,10 @@ void draw_settings(App& app) {
             line2 = "cloud bitrates. Low is subtle; High can ring on edges.";
             break;
         case 12:
+            line1 = "Chooses the xCloud datacenter. Auto follows Xbox; a fixed";
+            line2 = "region can avoid a busy queue but may add network latency.";
+            break;
+        case 13:
             line1 = "Where Play launches games: xCloud (cloud servers) or";
             line2 = "remote play from your own console over your network.";
             break;
@@ -2076,6 +2274,15 @@ void draw_settings(App& app) {
         case 4:
             line1 = "Sets the streamed console's language for games without";
             line2 = "an in-game language menu. Takes effect on next launch.";
+            break;
+        case 0:
+            if (app.settings.quality == 3) {
+                line1 = "Experimental TV/Tizen pool. It may provide high bitrate";
+                line2 = "but can queue longer; use HQ Windows if that happens.";
+            } else {
+                line1 = "Higher quality needs a stronger connection - 5 GHz";
+                line2 = "Wi-Fi or docked LAN is recommended for high bitrate.";
+            }
             break;
         default:
             line1 = "Higher quality needs a stronger connection — 5 GHz";
@@ -2612,6 +2819,8 @@ int main(int argc, char** argv) {
     app.auth = std::make_unique<XboxAuth>(user_path("tokens.json"));
     app.auth->set_abort_flag(&app.abort_http);
     app.settings = load_settings();
+    app.server_regions = load_server_regions();
+    app.auth->set_preferred_server_region(app.settings.server_region);
     app.favorites = load_id_list("favorites.json");
     app.history = load_id_list("history.json");
     {
@@ -2942,12 +3151,12 @@ int main(int argc, char** argv) {
             }
 
             case Scene::Settings: {
-                // Row order: quality, mapping, vibration, region, language,
+                // Row order: quality, mapping, vibration, bypass, language,
                 // volume, pacing, brightness, contrast, saturation, gamma,
-                // sharpness,
+                // sharpness, server region,
                 // [source when a console is linked], Debug HUD, accounts,
                 // sign out.
-                int hud_row = app.consoles.empty() ? 12 : 13;
+                int hud_row = app.consoles.empty() ? 13 : 14;
                 int accounts_row = hud_row + 1;
                 int signout_row = hud_row + 2;
                 if (input.up)
@@ -2993,7 +3202,9 @@ int main(int argc, char** argv) {
                 if (direction != 0 && app.settings_cursor != signout_row) {
                     if (app.settings_cursor == 0)
                         app.settings.quality =
-                            (app.settings.quality + direction + 3) % 3;
+                            (app.settings.quality + direction +
+                             kQualityLevels) %
+                            kQualityLevels;
                     else if (app.settings_cursor == 1)
                         app.settings.mapping =
                             (app.settings.mapping + direction + 2) % 2;
@@ -3030,10 +3241,12 @@ int main(int argc, char** argv) {
                     else if (app.settings_cursor == 11)
                         app.settings.sharpness =
                             (app.settings.sharpness + direction + 4) % 4;
+                    else if (app.settings_cursor == 12)
+                        cycle_server_region(app, direction);
                     // "Preferred source" only exists with a linked console;
                     // Debug HUD sits right after it either way. Accounts and
                     // Sign out are A-rows, handled above.
-                    else if (!app.consoles.empty() && app.settings_cursor == 12)
+                    else if (!app.consoles.empty() && app.settings_cursor == 13)
                         app.settings.source =
                             (app.settings.source + direction + 3) % 3;
                     else if (app.settings_cursor == hud_row)
