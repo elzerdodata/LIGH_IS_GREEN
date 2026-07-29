@@ -1,5 +1,7 @@
 #include "auth.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <stdexcept>
@@ -41,6 +43,15 @@ const std::vector<std::string> kFormHeaders = {
 const std::vector<std::string> kXblHeaders = {
     "Content-Type: application/json", "x-xbl-contract-version: 1"};
 
+std::string normalized_region_name(const std::string& value) {
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (unsigned char ch : value)
+        if (std::isalnum(ch))
+            normalized.push_back(static_cast<char>(std::toupper(ch)));
+    return normalized;
+}
+
 }  // namespace
 
 XboxAuth::XboxAuth(std::string token_store_path)
@@ -57,6 +68,16 @@ void XboxAuth::set_token_store(std::string path) {
     store_path_ = std::move(path);
     refresh_token_.clear();
     load_refresh_token();
+}
+
+void XboxAuth::set_preferred_server_region(std::string region_name) {
+    std::lock_guard<std::mutex> lock(region_mutex_);
+    preferred_server_region_ = std::move(region_name);
+}
+
+std::vector<ServerRegion> XboxAuth::available_cloud_regions() const {
+    std::lock_guard<std::mutex> lock(region_mutex_);
+    return available_cloud_regions_;
 }
 
 void XboxAuth::save_refresh_token(const std::string& token) {
@@ -174,7 +195,8 @@ std::pair<std::string, std::string> XboxAuth::xsts_authorize(
 }
 
 EndpointCredentials XboxAuth::streaming_login(const std::string& gssv_token,
-                                              const std::string& offering) {
+                                              const std::string& offering,
+                                              const std::string& preferred_region) {
     json body = {{"token", gssv_token}, {"offeringId", offering}};
     json response = expect_ok(
         http_.post("https://" + offering +
@@ -186,16 +208,40 @@ EndpointCredentials XboxAuth::streaming_login(const std::string& gssv_token,
 
     EndpointCredentials credentials;
     credentials.token = response.at("gsToken");
+    const std::string preferred = normalized_region_name(preferred_region);
+    const ServerRegion* selected = nullptr;
     for (const json& region :
          response.at("offeringSettings").value("regions", json::array())) {
-        if (region.value("isDefault", false)) {
-            credentials.host = region.value("baseUri", "");
-            break;
-        }
+        ServerRegion candidate;
+        candidate.name = region.value("name", "");
+        candidate.base_uri = region.value("baseUri", "");
+        candidate.is_default = region.value("isDefault", false);
+        if (candidate.name.empty() || candidate.base_uri.empty()) continue;
+        credentials.regions.push_back(std::move(candidate));
     }
-    if (credentials.host.empty())
+
+    // Vector growth is complete, so pointers into it are now stable.
+    if (!preferred.empty())
+        for (const ServerRegion& region : credentials.regions)
+            if (normalized_region_name(region.name) == preferred) {
+                selected = &region;
+                break;
+            }
+    if (!selected)
+        for (const ServerRegion& region : credentials.regions)
+            if (region.is_default) {
+                selected = &region;
+                break;
+            }
+    // A missing isDefault flag should not make the whole account unusable.
+    if (!selected && !credentials.regions.empty())
+        selected = &credentials.regions.front();
+
+    if (!selected)
         throw std::runtime_error("streaming login " + offering +
-                                 ": no default region");
+                                 ": no available region");
+    credentials.host = selected->base_uri;
+    credentials.selected_region = selected->name;
     return credentials;
 }
 
@@ -206,6 +252,12 @@ StreamingCredentials XboxAuth::fetch_streaming_credentials() {
         xsts_authorize(user_token, "http://gssv.xboxlive.com/");
     (void)uhs;
 
+    std::string preferred_region;
+    {
+        std::lock_guard<std::mutex> lock(region_mutex_);
+        preferred_region = preferred_server_region_;
+    }
+
     StreamingCredentials credentials;
     try {
         credentials.home = streaming_login(gssv_token, "xhome");
@@ -215,9 +267,15 @@ StreamingCredentials XboxAuth::fetch_streaming_credentials() {
         // to stream from a console anyway.
         credentials.home_error = error.what();
     }
-    credentials.cloud = streaming_login(gssv_token, "xgpuweb");
+    credentials.cloud =
+        streaming_login(gssv_token, "xgpuweb", preferred_region);
+    {
+        std::lock_guard<std::mutex> lock(region_mutex_);
+        available_cloud_regions_ = credentials.cloud.regions;
+    }
     try {
-        credentials.cloud_f2p = streaming_login(gssv_token, "xgpuwebf2p");
+        credentials.cloud_f2p =
+            streaming_login(gssv_token, "xgpuwebf2p", preferred_region);
     } catch (const std::exception&) {
         credentials.cloud_f2p = std::nullopt;
     }

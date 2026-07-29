@@ -1,7 +1,9 @@
 #pragma once
 
 #include <optional>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include "http.hpp"
 
@@ -18,9 +20,20 @@ struct DeviceCode {
 
 enum class PollResult { Pending, Authorized, Expired };
 
+struct ServerRegion {
+    std::string name;      // Stable Xbox identifier, e.g. "ChileCentral".
+    std::string base_uri;  // GSSV endpoint for this datacenter.
+    bool is_default = false;
+};
+
 struct EndpointCredentials {
     std::string host;   // e.g. https://uks.gssv-play-prod.xboxlive.com
     std::string token;  // gsToken bearer
+    std::string selected_region;
+    // xCloud returns the currently available datacenters with every streaming
+    // login. Keep them so the UI can offer the real list instead of hardcoding
+    // endpoints that may disappear or change.
+    std::vector<ServerRegion> regions;
 };
 
 struct StreamingCredentials {
@@ -66,6 +79,12 @@ public:
     // per-offering streaming logins (xhome, xgpuweb, xgpuwebf2p).
     StreamingCredentials fetch_streaming_credentials();
 
+    // Empty means Xbox automatic/default. A requested region is matched by its
+    // stable name; if Xbox does not return it, streaming_login safely falls
+    // back to the default region instead of failing the launch.
+    void set_preferred_server_region(std::string region_name);
+    std::vector<ServerRegion> available_cloud_regions() const;
+
     XboxProfile fetch_profile();
 
     // Short-lived MSA token used by the session /connect handshake.
@@ -78,7 +97,8 @@ private:
     std::pair<std::string, std::string> xsts_authorize(
         const std::string& user_token, const std::string& relying_party);
     EndpointCredentials streaming_login(const std::string& gssv_token,
-                                        const std::string& offering);
+                                        const std::string& offering,
+                                        const std::string& preferred_region = "");
 
     void save_refresh_token(const std::string& token);
     void load_refresh_token();
@@ -86,6 +106,9 @@ private:
     Http http_;
     std::string store_path_;
     std::string refresh_token_;
+    mutable std::mutex region_mutex_;
+    std::string preferred_server_region_;
+    std::vector<ServerRegion> available_cloud_regions_;
 };
 
 }  // namespace gnx

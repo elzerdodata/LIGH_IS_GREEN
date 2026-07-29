@@ -63,6 +63,7 @@ TierProfile tier_profile(QualityTier tier) {
         case QualityTier::P720: return {1280, 720, 10000, 60};
         case QualityTier::P1080: return {1920, 1080, 20000, 60};
         case QualityTier::P1080HQ: return {1920, 1080, 30000, 60};
+        case QualityTier::P1080HQTizen: return {1920, 1080, 30000, 60};
     }
     return {1920, 1080, 20000, 60};
 }
@@ -165,9 +166,10 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
     gnx_peer_log_set([](const char* line) {
         if (g_log_engine) g_log_engine->log(std::string("  peer| ") + line);
     });
-    const char* tier_name = tier == QualityTier::P720      ? "720p/android"
-                            : tier == QualityTier::P1080   ? "1080p/windows"
-                                                           : "1080pHQ/tizen";
+    const char* tier_name = tier == QualityTier::P720        ? "720p/android"
+                            : tier == QualityTier::P1080     ? "1080p/windows"
+                            : tier == QualityTier::P1080HQ   ? "1080pHQ/windows"
+                                                             : "1080pHQ/tizen-experimental";
     log("Light_is_Green v" GNX_VERSION " | stream start: " + title_id + " | tier " +
         tier_name +
         (pacing_ == VideoPacing::Smooth ? " | pacing smooth" : ""));
@@ -622,6 +624,9 @@ void Engine::worker() {
         log("fetching streaming credentials");
         StreamingCredentials creds = auth_.fetch_streaming_credentials();
         cloud_ = home ? creds.home : creds.cloud;
+        if (!home)
+            log("server region: " + cloud_.selected_region + " | " +
+                cloud_.host);
         // Without a host every request goes out as a bare path, which curl
         // rejects as a malformed URL -- a useless error for the one thing that
         // actually went wrong: the remote-play login did not come back.

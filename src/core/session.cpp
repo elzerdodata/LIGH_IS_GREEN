@@ -20,7 +20,8 @@ const char* os_name(QualityTier tier) {
     switch (tier) {
         case QualityTier::P720: return "android";
         case QualityTier::P1080: return "windows";
-        case QualityTier::P1080HQ: return "tizen";
+        case QualityTier::P1080HQ: return "windows";
+        case QualityTier::P1080HQTizen: return "tizen";
     }
     return "windows";
 }
