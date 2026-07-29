@@ -1,6 +1,6 @@
 # Light is Green
 
-> **Current release v0.6.0 / Versión actual v0.6.0**
+> **Stable v0.6.0 · Beta v0.6.1-beta.1 / Estable v0.6.0 · Beta v0.6.1-beta.1**
 
 English | [Español](#español)
 
@@ -12,6 +12,22 @@ It is a standalone, open-source **Xbox Cloud Gaming (xCloud) client for
 Nintendo Switch** homebrew. Authentication, WebRTC, hardware H.264 decoding,
 GPU rendering, audio, and controller input all run on the console; no companion
 PC is required.
+
+## v0.6.1 beta preview
+
+- Adds **Pacing: Steady / Smooth / Motion**. Motion inserts a GPU-blended
+  midpoint for detected 30 fps sources; it is experimental interpolation, not
+  optical-flow or AI frame generation.
+- Adds an experimental **1080p Console quality** option for Remote Play. If the
+  1080p session produces no video within 15 seconds, the app starts a fresh
+  session automatically with the stable 720p profile.
+- Keeps Remote Play available away from home through Xbox's xHome service.
+  Success depends on Remote Features, NAT, IPv6/Teredo and UDP connectivity.
+- Expands the performance overlay with source, output and generated FPS.
+
+The beta is published separately. **v0.6.0 remains the recommended stable
+release.** Do not publish `stream-log.txt`: connection diagnostics can include
+IP candidates.
 
 ## What's new in v0.6.0
 
@@ -115,7 +131,7 @@ valid subscription and hardware.
 - License: [GPL-3.0](LICENSE)
 - Original project and core implementation: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Light is Green fork and v0.2–v0.6 work: **elzerdodata**
+- Light is Green fork and v0.2–v0.6.1 beta work: **elzerdodata**
 
 ---
 
@@ -129,6 +145,23 @@ Es un cliente homebrew independiente y de código abierto de **Xbox Cloud
 Gaming (xCloud) para Nintendo Switch**. La autenticación, WebRTC, decodificación
 H.264 por hardware, renderizado en GPU, audio y controles funcionan en la
 consola; no requiere una PC auxiliar.
+
+## Avance de v0.6.1 beta
+
+- Agrega **Pacing: Steady / Smooth / Motion**. Motion inserta en GPU un cuadro
+  intermedio mezclado cuando detecta una fuente de 30 fps; es interpolación
+  experimental, no generación por flujo óptico ni inteligencia artificial.
+- Agrega **Calidad de consola 1080p** experimental para Remote Play. Si no
+  llega video en 15 segundos, la aplicación abre automáticamente una sesión
+  nueva con el perfil estable de 720p.
+- Mantiene Remote Play fuera de casa mediante el servicio xHome de Xbox. Su
+  funcionamiento depende de Remote Features, NAT, IPv6/Teredo y conectividad
+  UDP.
+- Amplía el overlay de rendimiento con FPS de origen, salida y generados.
+
+La beta se publica por separado. **v0.6.0 sigue siendo la versión estable
+recomendada.** No publiques `stream-log.txt`: el diagnóstico puede incluir
+candidatos de direcciones IP.
 
 ## Novedades de v0.6.0
 
@@ -235,4 +268,4 @@ propia suscripción válida y tu hardware.
 - Licencia: [GPL-3.0](LICENSE)
 - Proyecto original e implementación base: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Fork Light is Green y trabajo de v0.2–v0.6: **elzerdodata**
+- Fork Light is Green y trabajo de v0.2–v0.6.1 beta: **elzerdodata**

@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <optional>
 #include <string>
@@ -81,9 +82,11 @@ public:
     bool init();
     void shutdown();
 
-    // Present one decoded frame. frame must be AV_PIX_FMT_NVTEGRA. Returns
-    // false if the frame could not be rendered.
-    bool render(AVFrame* frame);
+    // Present one decoded frame. frame must be AV_PIX_FMT_NVTEGRA. When
+    // motion_frame is compatible and motion_blend is between 0 and 1, the
+    // shader generates a cross-frame midpoint for Motion pacing.
+    bool render(AVFrame* frame, AVFrame* motion_frame = nullptr,
+                float motion_blend = 0.0f);
 
     bool initialized() const { return initialized_; }
 
@@ -162,7 +165,9 @@ private:
     dk::ImageLayout luma_layout_;
     dk::ImageLayout chroma_layout_;
 
-    std::vector<FrameMapping> mappings_;
+    // map_frame may append the second Motion surface after returning the first
+    // one. deque keeps descriptor references stable across push_back.
+    std::deque<FrameMapping> mappings_;
     int current_mapping_ = -1;
 
     DkSamplerDescriptor sampler_desc_{};
@@ -192,8 +197,12 @@ private:
     std::string hud_text_cache_;         // last rasterized text (skip if unchanged)
     uint64_t fps_tick_ = 0;              // armGetSystemTick at last FPS sample
     int fps_frames_ = 0;                 // distinct frames presented this window
+    int output_frames_ = 0;              // all display presents this window
+    int generated_frames_ = 0;           // Motion midpoint presents
     const uint8_t* fps_last_data_ = nullptr;  // last frame's surface, for dedup
     float fps_ = 0.0f;
+    float output_fps_ = 0.0f;
+    float generated_fps_ = 0.0f;
     std::atomic<float> net_mbps_{0.0f};   // set by Engine worker, read by update_hud
     std::atomic<float> net_loss_{0.0f};
     std::atomic<int> net_buffer_ms_{0};

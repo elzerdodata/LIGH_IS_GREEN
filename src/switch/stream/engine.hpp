@@ -45,7 +45,9 @@ enum class EngineState {
 //   Smooth: keep one decoded frame in reserve and present in source order on
 //           a detected 30/60 Hz cadence -- steadier motion at the cost of
 //           about one source frame (~33 ms at 30 fps) of extra latency.
-enum class VideoPacing { Steady = 0, Smooth = 1 };
+//   Motion: Smooth plus a generated midpoint between adjacent 30 fps source
+//           frames. This is image interpolation, not game-engine motion data.
+enum class VideoPacing { Steady = 0, Smooth = 1, Motion = 2 };
 
 // Native xCloud streaming session: GSSV signaling + libpeer WebRTC +
 // NVDEC/SDL video + Opus audio + gamepad input channel.
@@ -71,8 +73,8 @@ public:
     // from the "volume" setting before each stream start; 1.0 = unchanged.
     void set_audio_gain(float gain) { audio_gain_ = gain; }
 
-    // Video pacing mode (see VideoPacing). Set from the "smooth" setting
-    // before each stream start; default Steady.
+    // Video pacing mode (see VideoPacing). Set before each stream start;
+    // default Steady.
     void set_pacing(VideoPacing pacing) { pacing_ = pacing; }
 
     // In-stream performance/picture quick menu. The state is retained before
@@ -163,6 +165,11 @@ private:
     std::string title_id_;
     std::string home_server_id_;  // non-empty selects the home (xhome) path
     QualityTier tier_ = QualityTier::P1080HQ;
+    // The media request may fall back independently of the user's saved tier.
+    // Remote Play always starts with an Android session fingerprint, while
+    // media_tier_ controls the capabilities announced after connection.
+    QualityTier media_tier_ = QualityTier::P1080HQ;
+    bool home_720_fallback_pending_ = false;  // worker thread only
     std::string locale_ = "en-US";  // streamed console's system language
     float audio_gain_ = 1.0f;       // forwarded to AudioPlayer::set_gain
     VideoPacing pacing_ = VideoPacing::Steady;  // set before start()
@@ -207,6 +214,7 @@ private:
     std::mutex frame_mutex_;
     AVFrame* shared_frame_ = nullptr;   // latest decoded (decode thread writes)
     AVFrame* present_frame_ = nullptr;  // render thread's stable ref
+    AVFrame* motion_frame_ = nullptr;   // next source frame for midpoint pass
     bool shared_frame_valid_ = false;
     uint64_t shared_frame_seq_ = 0;     // protected by frame_mutex_
 
@@ -236,6 +244,7 @@ private:
     std::atomic<uint32_t> pace_hold1_{0}, pace_hold2_{0};
     std::atomic<uint32_t> pace_hold3_{0}, pace_hold4p_{0};
     std::atomic<uint32_t> pace_skip_{0};
+    std::atomic<uint32_t> pace_generated_{0};
 
     xcloud::InputSerializer input_;
     std::mutex input_mutex_;

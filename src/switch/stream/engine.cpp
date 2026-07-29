@@ -68,6 +68,15 @@ TierProfile tier_profile(QualityTier tier) {
     return {1920, 1080, 20000, 60};
 }
 
+const char* pacing_name(VideoPacing pacing) {
+    switch (pacing) {
+        case VideoPacing::Steady: return "steady";
+        case VideoPacing::Smooth: return "smooth";
+        case VideoPacing::Motion: return "motion";
+    }
+    return "steady";
+}
+
 // Extract "candidate:..." lines from a local SDP for the /ice POST.
 std::vector<std::string> local_candidates_from_sdp(const std::string& sdp) {
     std::vector<std::string> out;
@@ -142,6 +151,13 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
     stop();
     title_id_ = title_id;
     tier_ = tier;
+    // Console Remote Play uses the proven Android fingerprint to create the
+    // session, but can request 1080p media after WebRTC connects. Keep that
+    // experimental request at the conservative 20 Mbps tier.
+    media_tier_ = !home_server_id_.empty() && tier != QualityTier::P720
+                      ? QualityTier::P1080
+                      : tier;
+    home_720_fallback_pending_ = false;
     locale_ = locale;
     {
         std::lock_guard<std::mutex> lock(log_mutex_);
@@ -170,9 +186,8 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
                             : tier == QualityTier::P1080     ? "1080p/windows"
                             : tier == QualityTier::P1080HQ   ? "1080pHQ/windows"
                                                              : "1080pHQ/tizen-experimental";
-    log("Light_is_Green v" GNX_VERSION " | stream start: " + title_id + " | tier " +
-        tier_name +
-        (pacing_ == VideoPacing::Smooth ? " | pacing smooth" : ""));
+    log("Light_is_Green v" GNX_VERSION " | stream start: " + title_id +
+        " | tier " + tier_name + " | pacing " + pacing_name(pacing_));
     quit_ = false;
     got_frame_ = false;
     channels_open_ = false;
@@ -194,6 +209,7 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
 #ifdef __SWITCH__
     shared_frame_ = av_frame_alloc();
     present_frame_ = av_frame_alloc();
+    motion_frame_ = av_frame_alloc();
     shared_frame_valid_ = false;
     shared_frame_seq_ = 0;
     last_present_seq_ = 0;
@@ -205,7 +221,7 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
     last_decode_ticks_ = 0;
     pace_new_ = pace_repeat_ = 0;
     pace_hold1_ = pace_hold2_ = pace_hold3_ = pace_hold4p_ = 0;
-    pace_skip_ = 0;
+    pace_skip_ = pace_generated_ = 0;
 #endif
     stream_epoch_ = SDL_GetTicks64();
     thread_ = std::thread(&Engine::worker, this);
@@ -251,6 +267,7 @@ void Engine::stop() {
         std::lock_guard<std::mutex> lock(frame_mutex_);
         if (shared_frame_) av_frame_free(&shared_frame_);
         if (present_frame_) av_frame_free(&present_frame_);
+        if (motion_frame_) av_frame_free(&motion_frame_);
         for (SmoothFrame& queued : smooth_frames_)
             if (queued.frame) av_frame_free(&queued.frame);
         smooth_frames_.clear();
@@ -508,7 +525,7 @@ void Engine::handle_channel_message(uint16_t sid, const char* data,
             // gamepad, then declare client capabilities (our quality lever).
             send_on_channel_locked("control", xcloud::authorization_request());
             send_on_channel_locked("control", xcloud::gamepad_changed(0, true));
-            TierProfile profile = tier_profile(tier_);
+            TierProfile profile = tier_profile(media_tier_);
             for (const std::string& message : xcloud::startup_messages(
                      profile.width, profile.height, profile.bitrate_kbps,
                      profile.fps))
@@ -757,11 +774,18 @@ void Engine::worker() {
             session.stop();
             if (quit_) return;
             if (retry_transport) {
+                bool home_720_fallback = home_720_fallback_pending_;
+                home_720_fallback_pending_ = false;
+                // Console wake/registration retries must never consume the
+                // one guaranteed stable-profile attempt promised by the beta.
+                if (home_720_fallback && attempt == attempts - 1) ++attempts;
                 if (attempt == attempts - 1) {
                     fail("The server's media connection never came up");
                     return;
                 }
-                log("retrying with a fresh session (dead media path)");
+                log(home_720_fallback
+                        ? "retrying Remote Play with 720p stable capabilities"
+                        : "retrying with a fresh session (dead media path)");
                 {
                     // Dispose of the dead attempt's peer (normally stop()'s
                     // job) so the next run_peer starts from scratch.
@@ -860,13 +884,22 @@ bool Engine::run_peer(GssvSession& session) {
     std::string munged = sdp_force_stereo(offer);  // no-op safety net
     bool home = !home_server_id_.empty();
     if (home) {
-        // Home offer mirrors green-vita (the working reference) exactly:
-        // 720p caps verbatim and H264 level 3.2 (42e020) instead of 3.1 --
-        // the console agent is stricter than the xCloud servers.
+        // Keep the known-good Remote Play offer at 720p by default. The beta
+        // 1080p path changes only media capabilities after the Android session
+        // was accepted: 8160 macroblocks, 1080p60 throughput and H.264 level
+        // 4.2. If no video arrives, the worker recreates the session at 720p.
+        if (media_tier_ != QualityTier::P720)
+            munged = sdp_scale_video_caps_1080(munged);
         size_t at = munged.find("profile-level-id=42e01f");
-        if (at != std::string::npos) munged.replace(at + 17, 6, "42e020");
+        if (at != std::string::npos)
+            munged.replace(at + 17, 6,
+                           media_tier_ == QualityTier::P720 ? "42e020"
+                                                            : "42e02a");
+        log(std::string("home media request: ") +
+            (media_tier_ == QualityTier::P720 ? "1280x720 stable"
+                                               : "1920x1080 experimental"));
         log("home offer sdp:\n" + munged);
-    } else if (tier_ != QualityTier::P720) {
+    } else if (media_tier_ != QualityTier::P720) {
         // 720p tier ships the template verbatim (proven accepted); 1080p
         // tiers scale the declared decode capability to 1080p60.
         munged = sdp_scale_video_caps_1080(munged);
@@ -951,7 +984,9 @@ bool Engine::run_peer(GssvSession& session) {
     for (const std::string& candidate : local_candidates_from_sdp(munged))
         log("  local  cand: " + candidate);
     if (remote.empty()) {
-        fail("Server sent no ICE candidates");
+        fail(home ? "Your Xbox exposed no remote media path. Check Remote "
+                    "Features, NAT/IPv6, and UDP connectivity."
+                  : "Server sent no ICE candidates");
         return true;
     }
 
@@ -1100,6 +1135,19 @@ bool Engine::run_peer(GssvSession& session) {
             log("ICE connected but DTLS/SCTP never completed -- dead media path");
             return false;
         }
+        // The console accepted the Android/xhome session but did not start a
+        // video track for the experimental 1080p capability set. Retry once
+        // with the proven 720p media offer instead of making the user leave
+        // the stream and change Settings manually.
+        if (!home_server_id_.empty() &&
+            media_tier_ != QualityTier::P720 && handshake_done_ &&
+            !got_frame_ && now - negotiation_started > 15000) {
+            log("home 1080p produced no video after 15s; falling back to 720p");
+            set_status("1080p unavailable - retrying at 720p...");
+            media_tier_ = QualityTier::P720;
+            home_720_fallback_pending_ = true;
+            return false;
+        }
         if (state_ == EngineState::Negotiating &&
             SDL_GetTicks64() - negotiation_started > 45000) {
             fail("Connection timed out");
@@ -1170,7 +1218,8 @@ bool Engine::run_peer(GssvSession& session) {
                             peer_, fraction, cumulative, highest_ext, 0);
                         peer_connection_send_remb(
                             peer_,
-                            static_cast<uint32_t>(tier_profile(tier_).bitrate_kbps) *
+                            static_cast<uint32_t>(
+                                tier_profile(media_tier_).bitrate_kbps) *
                                 1000u);
                     }
                 }
@@ -1229,6 +1278,8 @@ bool Engine::run_peer(GssvSession& session) {
                     smooth_q = smooth_frames_.size();
                 }
                 log("pace| new=" + std::to_string(pace_new_.exchange(0)) +
+                    " gen=" +
+                    std::to_string(pace_generated_.exchange(0)) +
                     " rep=" + std::to_string(pace_repeat_.exchange(0)) +
                     " hold=" + std::to_string(pace_hold1_.exchange(0)) + "/" +
                     std::to_string(pace_hold2_.exchange(0)) + "/" +
@@ -1284,7 +1335,7 @@ void Engine::decode_loop() {
             // Detect the source cadence from decode spacing: ~16 ms gaps mean
             // a 60 fps stream (present every refresh), ~33 ms mean 30 fps
             // (present every other refresh). Streaks of 8 debounce the flips
-            // xCloud makes mid-stream. Only Smooth pacing consumes this.
+            // xCloud makes mid-stream. Smooth and Motion consume this.
             Uint64 decoded_at = SDL_GetTicks64();
             if (last_decode_ticks_) {
                 Uint64 gap = decoded_at - last_decode_ticks_;
@@ -1306,7 +1357,7 @@ void Engine::decode_loop() {
             {
                 std::lock_guard<std::mutex> lock(frame_mutex_);
                 ++shared_frame_seq_;
-                if (pacing_ == VideoPacing::Smooth) {
+                if (pacing_ != VideoPacing::Steady) {
                     // Source order, not newest-wins: the clone refs the same
                     // NVTEGRA surface, so the hard cap below is what keeps the
                     // decoder's surface pool from starving.
@@ -1360,10 +1411,13 @@ SDL_Texture* Engine::pump_video() {
     double now = static_cast<double>(SDL_GetPerformanceCounter());
     if (dk_video_.initialized() && got_frame_ && now >= next_present_counter_) {
         AVFrame* frame = nullptr;
+        AVFrame* motion_frame = nullptr;
+        float motion_blend = 0.0f;
         uint64_t frame_seq = 0;
         {
             std::lock_guard<std::mutex> lock(frame_mutex_);
-            if (pacing_ == VideoPacing::Smooth) {
+            if (motion_frame_) av_frame_unref(motion_frame_);
+            if (pacing_ != VideoPacing::Steady) {
                 uint32_t period =
                     source_refresh_period_.load(std::memory_order_relaxed);
                 bool due = !smooth_have_present_ ||
@@ -1381,6 +1435,18 @@ SDL_Texture* Engine::pump_video() {
                     smooth_refresh_phase_ = 0;
                 } else if (smooth_have_present_) {
                     frame_seq = last_present_seq_;  // hold the current frame
+                    // At a detected 30 fps cadence the refresh between two
+                    // source frames becomes a 50/50 midpoint. Take a stable
+                    // ref because the decode thread may trim the queue as soon
+                    // as this lock is released.
+                    if (motion_frame_ && pacing_ == VideoPacing::Motion &&
+                        period == 2 &&
+                        smooth_refresh_phase_ == 1 && !smooth_frames_.empty() &&
+                        av_frame_ref(motion_frame_,
+                                     smooth_frames_.front().frame) == 0) {
+                        motion_frame = motion_frame_;
+                        motion_blend = 0.5f;
+                    }
                 }
                 if (smooth_have_present_) frame = present_frame_;
             } else if (shared_frame_valid_) {
@@ -1412,11 +1478,14 @@ SDL_Texture* Engine::pump_video() {
                 }
                 last_present_seq_ = frame_seq;
                 present_hold_refreshes_ = 1;
+            } else if (motion_frame) {
+                pace_generated_.fetch_add(1, std::memory_order_relaxed);
+                ++present_hold_refreshes_;
             } else {
                 pace_repeat_.fetch_add(1, std::memory_order_relaxed);
                 ++present_hold_refreshes_;
             }
-            dk_video_.render(frame);
+            dk_video_.render(frame, motion_frame, motion_blend);
         }
         next_present_counter_ += interval;
         if (next_present_counter_ < now)
