@@ -669,29 +669,54 @@ void Engine::worker() {
         // Cloud gets one retry too: a session can come up with a dead media
         // path (ICE connects, DTLS never answers) -- a fresh session
         // re-rolls that server-side fault.
-        // Registration can take well over a minute on a console that just
-        // came back up, so home gets more tries than a wake-up alone needs.
-        int attempts = home ? 6 : 2;
-        bool registering = false;  // last failure was "still registering"
-        for (int attempt = 0; attempt < attempts && !quit_; ++attempt) {
-            if (attempt > 0) {
-                std::string of = " (attempt " + std::to_string(attempt + 1) +
-                                 " of " + std::to_string(attempts) + ")";
+        // Console readiness and WebRTC transport are independent failure
+        // domains. A slow wake/register cycle must not consume the budget for
+        // fresh ICE/DTLS sessions (the old shared six-attempt counter did).
+        const int max_readiness_retries = home ? 10 : 1;
+        const int max_transport_retries = home ? 8 : 2;
+        int readiness_retries = 0;
+        int transport_retries = 0;
+        int total_attempts = 0;
+        bool registering = false;       // console is still registering
+        bool retrying_transport = false;  // previous session reached WebRTC
+        while (!quit_) {
+            ++total_attempts;
+            if (total_attempts > 1) {
+                int retry_number = retrying_transport ? transport_retries
+                                                       : readiness_retries;
+                int retry_limit = retrying_transport ? max_transport_retries
+                                                      : max_readiness_retries;
+                std::string of = " (retry " + std::to_string(retry_number) +
+                                 " of " + std::to_string(retry_limit) + ")";
                 set_status(registering
                                ? "Your console is still registering..." + of
+                           : retrying_transport
+                               ? "Rebuilding the media connection..." + of
                            : home ? "Waking your console..." + of
-                                  : "Retrying the connection...");
-                // Home consoles need ~5 s to boot streaming. Cloud needs the
-                // dead session's teardown to release the account's slot, or
-                // the fresh request queues in "waiting for resources".
-                for (int i = 0; i < (home ? 50 : 30) && !quit_; ++i)
+                                  : "Retrying the connection..." + of);
+
+                // A stopped xHome session can remain reserved server-side for
+                // several seconds. Progressive backoff gives it time to tear
+                // down before asking the console for another ICE/DTLS route.
+                int wait_seconds = home
+                    ? (retrying_transport
+                           ? std::min(20, 8 + transport_retries * 2)
+                           : std::min(15, 5 + readiness_retries * 2))
+                    : 3;
+                log("retry backoff: " + std::to_string(wait_seconds) +
+                    "s | readiness=" + std::to_string(readiness_retries) +
+                    "/" + std::to_string(max_readiness_retries) +
+                    " transport=" + std::to_string(transport_retries) +
+                    "/" + std::to_string(max_transport_retries));
+                for (int i = 0; i < wait_seconds * 10 && !quit_; ++i)
                     std::this_thread::sleep_for(
                         std::chrono::milliseconds(100));
                 if (quit_) break;
             }
             set_status("Requesting a session...");
-            log("requesting session (attempt " + std::to_string(attempt + 1) +
-                " of " + std::to_string(attempts) + ")");
+            log("requesting session #" + std::to_string(total_attempts) +
+                " | readiness=" + std::to_string(readiness_retries) +
+                " transport=" + std::to_string(transport_retries));
             // Home: the console agent only accepts the android fingerprint
             // (green-vita, the working reference, always sends it) -- the
             // windows/tizen quality-tier fingerprints get AgentCommandError.
@@ -761,8 +786,8 @@ void Engine::worker() {
                         session.stop();
                         return;
                     }
-                    // Dead media path: retry with a fresh session; only the
-                    // last attempt surfaces a failure to the user.
+                    // Dead media path: retry with a fresh session; only an
+                    // exhausted transport budget surfaces a final failure.
                     retry_transport = true;
                     break;
                 } else if (state == SessionState::Failed) {
@@ -774,20 +799,34 @@ void Engine::worker() {
             session.stop();
             if (quit_) return;
             if (retry_transport) {
+                ++transport_retries;
                 bool home_720_fallback = home_720_fallback_pending_;
                 home_720_fallback_pending_ = false;
-                // Console wake/registration retries must never consume the
-                // one guaranteed stable-profile attempt promised by the beta.
-                if (home_720_fallback && attempt == attempts - 1) ++attempts;
-                if (attempt == attempts - 1) {
-                    fail("The server's media connection never came up");
+
+                // If the experimental offer never even reaches a usable
+                // transport, do not burn every retry at 1080p. The next fresh
+                // xHome session uses the proven 720p profile immediately.
+                if (home && media_tier_ != QualityTier::P720) {
+                    media_tier_ = QualityTier::P720;
+                    home_720_fallback = true;
+                    log("media negotiation failed at 1080p; forcing 720p "
+                        "for all remaining retries");
+                }
+                if (transport_retries > max_transport_retries) {
+                    fail(home
+                         ? "Remote Play could not establish a media path after "
+                           "several fresh sessions. Leave the Xbox on for a "
+                           "minute, then check NAT/IPv6/UDP or restart Remote "
+                           "Features."
+                         : "xCloud could not establish a media path after "
+                           "several fresh sessions.");
                     return;
                 }
                 log(home_720_fallback
                         ? "retrying Remote Play with 720p stable capabilities"
                         : "retrying with a fresh session (dead media path)");
                 {
-                    // Dispose of the dead attempt's peer (normally stop()'s
+                    // Dispose of the dead session's peer (normally stop()'s
                     // job) so the next run_peer starts from scratch.
                     std::lock_guard<std::mutex> lock(peer_mutex_);
                     if (peer_) {
@@ -799,7 +838,49 @@ void Engine::worker() {
                 peer_state_ = PEER_CONNECTION_NEW;
                 channels_open_ = false;
                 handshake_done_ = false;
+                server_ended_ = false;
+                last_media_ticks_ = 0;
+                pli_sent_ = 0;
+                video_bytes_ = 0;
+                jitter_.reset();
+                {
+                    std::lock_guard<std::mutex> lock(video_mutex_);
+                    video_queue_.clear();
+                }
+                audio_.shutdown();
+                audio_.init();
+                audio_.set_gain(audio_gain_);
                 state_ = EngineState::StartingSession;  // back to connect UI
+                registering = false;
+                retrying_transport = true;
+
+                // A stale xHome route or short-lived token can survive a few
+                // otherwise fresh sessions. Refresh the endpoint every third
+                // transport failure while retaining the last known-good route
+                // if Xbox's credential service is temporarily unavailable.
+                if (home && transport_retries % 3 == 0) {
+                    set_status("Refreshing the Xbox route...");
+                    try {
+                        StreamingCredentials refreshed =
+                            auth_.fetch_streaming_credentials();
+                        if (!refreshed.home.host.empty()) {
+                            cloud_ = refreshed.home;
+                            log("xhome endpoint credentials refreshed after " +
+                                std::to_string(transport_retries) +
+                                " media failures");
+                        } else {
+                            log("xhome credential refresh returned no host; "
+                                "keeping the previous endpoint");
+                        }
+                        GssvSession::cleanup_stale_sessions(http_, cloud_,
+                                                            "home");
+                        log("stale xhome sessions cleaned during route refresh");
+                    } catch (const std::exception& error) {
+                        log(std::string("xhome route refresh/cleanup failed; "
+                                        "keeping the previous endpoint: ") +
+                            error.what());
+                    }
+                }
                 continue;
             }
             // Both of these mean "the console is not ready yet, ask again":
@@ -807,8 +888,8 @@ void Engine::worker() {
             // WaitingForServerToRegister while that service registers with
             // Microsoft (an awake console that was just rebooted, or one whose
             // remote features were re-enabled, sits there for a while). The
-            // second one used to fall through to a hard failure on the very
-            // first attempt, so remote play looked broken when it only needed
+            // second one used to fall through to a hard failure immediately,
+            // so remote play looked broken when it only needed
             // another try.
             registering = session_error.find("WaitingForServerToRegister") !=
                           std::string::npos;
@@ -816,12 +897,22 @@ void Engine::worker() {
                 registering ||
                 session_error.find("AgentCommandError") != std::string::npos;
             if (session_error.empty()) {
-                fail("Timed out waiting for a session");
-                return;
+                if (!home || ++readiness_retries > max_readiness_retries) {
+                    fail("Timed out waiting for a session");
+                    return;
+                }
+                registering = true;
+                retrying_transport = false;
+                log("xhome session polling timed out; retrying readiness " +
+                    std::to_string(readiness_retries) + "/" +
+                    std::to_string(max_readiness_retries));
+                continue;
             }
-            log("session attempt " + std::to_string(attempt + 1) +
+            log("session #" + std::to_string(total_attempts) +
                 " failed: " + session_error);
-            if (!console_not_ready || attempt == attempts - 1) {
+            if (console_not_ready) ++readiness_retries;
+            if (!console_not_ready ||
+                readiness_retries > max_readiness_retries) {
                 fail(console_not_ready
                          ? "Your console never finished registering for remote "
                            "play. Turn Remote Features off and on, or restart "
@@ -829,6 +920,7 @@ void Engine::worker() {
                          : "Session failed: " + session_error);
                 return;
             }
+            retrying_transport = false;
         }
     } catch (const std::exception& error) {
         fail(error.what());
@@ -852,8 +944,9 @@ bool Engine::run_peer(GssvSession& session) {
         std::lock_guard<std::mutex> lock(peer_mutex_);
         peer_ = peer_connection_create(&config);
         if (!peer_) {
-            fail("Failed to create peer connection");
-            return true;
+            log("peer connection allocation failed; requesting a fresh session");
+            set_status("Media setup failed - retrying...");
+            return false;
         }
         peer_connection_oniceconnectionstatechange(peer_,
                                                    &Engine::on_state_change);
@@ -871,8 +964,9 @@ bool Engine::run_peer(GssvSession& session) {
         offer = peer_connection_create_offer(peer_);
     }
     if (!offer) {
-        fail("Failed to create SDP offer");
-        return true;
+        log("SDP offer creation failed; requesting a fresh session");
+        set_status("Video negotiation failed - retrying...");
+        return false;
     }
     log("local offer created (" + std::to_string(std::strlen(offer)) +
         " bytes)");
@@ -909,7 +1003,15 @@ bool Engine::run_peer(GssvSession& session) {
     // CRLF line endings, which would make libpeer parse the ICE ufrag/pwd with
     // a stray '\r' and send STUN checks with a wrong integrity key (silently
     // dropped by the server -> connection never completes).
-    std::string answer = session.exchange_sdp(munged);
+    std::string answer;
+    try {
+        answer = session.exchange_sdp(munged);
+    } catch (const std::exception& error) {
+        log(std::string("SDP exchange failed; requesting a fresh session: ") +
+            error.what());
+        set_status("Xbox signaling failed - retrying...");
+        return false;
+    }
     log("answer received (" + std::to_string(answer.size()) + " bytes)");
     // Dump both SDPs for offline inspection of ICE/setup/codec lines.
     {
@@ -936,8 +1038,13 @@ bool Engine::run_peer(GssvSession& session) {
     // SDP — and libpeer builds candidate pairs exactly once, inside
     // set_remote_description. So collect the server's candidates FIRST.
     std::vector<std::string> remote;
+    bool remote_has_real_candidate = false;
     {
-        Uint64 gather_deadline = SDL_GetTicks64() + 15000;
+        // xHome's useful Teredo/relay candidate can arrive well after the
+        // priority-100 placeholder. Give consoles outside the LAN ten extra
+        // seconds before declaring that no route exists.
+        Uint64 gather_deadline =
+            SDL_GetTicks64() + (home ? 25000 : 15000);
         bool done = false;
         int quiet_polls = 0;
         // xCloud first returns a placeholder front candidate (priority 100 on
@@ -978,16 +1085,22 @@ bool Engine::run_peer(GssvSession& session) {
             if (!done)
                 std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
+        remote_has_real_candidate = has_real_candidate();
     }
     log("collected " + std::to_string(remote.size()) + " remote candidates");
     for (const std::string& candidate : remote) log("  remote cand: " + candidate);
     for (const std::string& candidate : local_candidates_from_sdp(munged))
         log("  local  cand: " + candidate);
-    if (remote.empty()) {
-        fail(home ? "Your Xbox exposed no remote media path. Check Remote "
-                    "Features, NAT/IPv6, and UDP connectivity."
-                  : "Server sent no ICE candidates");
-        return true;
+    if (remote.empty() || (home && !remote_has_real_candidate)) {
+        log(remote.empty()
+                ? (home
+                       ? "xhome returned no remote ICE candidates; fresh route needed"
+                       : "xCloud returned no remote ICE candidates")
+                : "xhome returned only the non-routable placeholder candidate; "
+                  "fresh route needed");
+        set_status(home ? "No Xbox route yet - retrying..."
+                        : "No server route yet - retrying...");
+        return false;
     }
 
     {
@@ -1109,6 +1222,11 @@ bool Engine::run_peer(GssvSession& session) {
         }
 
         if (peer_state_ == PEER_CONNECTION_FAILED) {
+            if (!got_frame_) {
+                log("WebRTC failed during negotiation; requesting a fresh session");
+                set_status("WebRTC route failed - retrying...");
+                return false;
+            }
             fail("WebRTC connection failed");
             return true;
         }
@@ -1117,6 +1235,11 @@ bool Engine::run_peer(GssvSession& session) {
         // this the loop kept running against a dead peer: the last decoded
         // frame stayed on screen forever and the app never left the stream.
         if (server_ended_) {
+            if (!got_frame_) {
+                log("server ended the session before media started; retrying");
+                set_status("Xbox ended setup early - retrying...");
+                return false;
+            }
             log("session ended by the server -- returning to the library");
             end_session();
             return true;
@@ -1124,15 +1247,17 @@ bool Engine::run_peer(GssvSession& session) {
         // Dead media path: ICE is up (the front-door placeholder answers
         // STUN) but DTLS/SCTP never completes -- the handshake starves on
         // CONN_EOF because nothing behind the front door talks back. Healthy
-        // sessions open their channels ~1-2 s after connecting, so 12 s means
-        // never. Hand the decision to worker(): one fresh session re-rolls
-        // it, instead of grinding out the full 45 s timeout below.
+        // sessions open their channels ~1-2 s after connecting. xHome can be
+        // substantially slower across NAT/Teredo, so Remote Play gets 25 s;
+        // cloud keeps the tighter 12 s window.
         if (!ice_connected_at && (current == PEER_CONNECTION_CONNECTED ||
                                   current == PEER_CONNECTION_COMPLETED))
             ice_connected_at = now;
+        Uint64 dtls_timeout = home ? 25000 : 12000;
         if (ice_connected_at && !channels_open_ &&
-            now - ice_connected_at > 12000) {
+            now - ice_connected_at > dtls_timeout) {
             log("ICE connected but DTLS/SCTP never completed -- dead media path");
+            set_status("Secure media channel stalled - retrying...");
             return false;
         }
         // The console accepted the Android/xhome session but did not start a
@@ -1141,17 +1266,28 @@ bool Engine::run_peer(GssvSession& session) {
         // the stream and change Settings manually.
         if (!home_server_id_.empty() &&
             media_tier_ != QualityTier::P720 && handshake_done_ &&
-            !got_frame_ && now - negotiation_started > 15000) {
-            log("home 1080p produced no video after 15s; falling back to 720p");
+            !got_frame_ && now - negotiation_started > 25000) {
+            log("home 1080p produced no video after 25s; falling back to 720p");
             set_status("1080p unavailable - retrying at 720p...");
             media_tier_ = QualityTier::P720;
             home_720_fallback_pending_ = true;
             return false;
         }
+        if (home && media_tier_ == QualityTier::P720 && handshake_done_ &&
+            !got_frame_ && now - negotiation_started > 60000) {
+            log("home 720p handshake completed but no video arrived after "
+                "60s; requesting another fresh session");
+            set_status("Xbox sent no video - retrying...");
+            return false;
+        }
+        Uint64 negotiation_timeout = home ? 75000 : 45000;
         if (state_ == EngineState::Negotiating &&
-            SDL_GetTicks64() - negotiation_started > 45000) {
-            fail("Connection timed out");
-            return true;
+            SDL_GetTicks64() - negotiation_started > negotiation_timeout) {
+            log("negotiation timed out after " +
+                std::to_string(negotiation_timeout / 1000) +
+                "s; requesting a fresh session");
+            set_status("Negotiation timed out - retrying...");
+            return false;
         }
         // Peer gone after it was up: libpeer's consent check timed out (the
         // console dropped off the network or was switched off without telling
@@ -1159,6 +1295,11 @@ bool Engine::run_peer(GssvSession& session) {
         // zero value, so an unconnected peer must not trip this.
         if (ice_connected_at && (current == PEER_CONNECTION_CLOSED ||
                                  current == PEER_CONNECTION_DISCONNECTED)) {
+            if (!got_frame_) {
+                log("peer disconnected before media started; retrying");
+                set_status("Xbox media route disconnected - retrying...");
+                return false;
+            }
             fail("Connection to the console was lost");
             return true;
         }

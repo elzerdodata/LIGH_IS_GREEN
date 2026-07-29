@@ -1,6 +1,6 @@
 # Light is Green
 
-> **Stable v0.6.0 · Beta v0.6.1-beta.1 / Estable v0.6.0 · Beta v0.6.1-beta.1**
+> **Stable v0.6.0 · Beta v0.6.1-beta.2 / Estable v0.6.0 · Beta v0.6.1-beta.2**
 
 English | [Español](#español)
 
@@ -18,9 +18,12 @@ PC is required.
 - Adds **Pacing: Steady / Smooth / Motion**. Motion inserts a GPU-blended
   midpoint for detected 30 fps sources; it is experimental interpolation, not
   optical-flow or AI frame generation.
-- Adds an experimental **1080p Console quality** option for Remote Play. If the
-  1080p session produces no video within 15 seconds, the app starts a fresh
-  session automatically with the stable 720p profile.
+- Adds an experimental **1080p Console quality** option for Remote Play. If
+  negotiation or first video fails, the app starts a fresh session
+  automatically with the stable 720p profile.
+- Beta 2 separates console wake/registration retries from WebRTC media retries,
+  adds progressive teardown backoff, refreshes the xHome route periodically,
+  and gives remote ICE/DTLS negotiation more time.
 - Keeps Remote Play available away from home through Xbox's xHome service.
   Success depends on Remote Features, NAT, IPv6/Teredo and UDP connectivity.
 - Expands the performance overlay with source, output and generated FPS.
@@ -151,9 +154,12 @@ consola; no requiere una PC auxiliar.
 - Agrega **Pacing: Steady / Smooth / Motion**. Motion inserta en GPU un cuadro
   intermedio mezclado cuando detecta una fuente de 30 fps; es interpolación
   experimental, no generación por flujo óptico ni inteligencia artificial.
-- Agrega **Calidad de consola 1080p** experimental para Remote Play. Si no
-  llega video en 15 segundos, la aplicación abre automáticamente una sesión
+- Agrega **Calidad de consola 1080p** experimental para Remote Play. Si falla
+  la negociación o no llega el primer video, la aplicación abre una sesión
   nueva con el perfil estable de 720p.
+- Beta 2 separa los reintentos de encendido/registro de los reintentos WebRTC,
+  agrega espera progresiva entre sesiones, renueva periódicamente la ruta
+  xHome y concede más tiempo a la negociación ICE/DTLS remota.
 - Mantiene Remote Play fuera de casa mediante el servicio xHome de Xbox. Su
   funcionamiento depende de Remote Features, NAT, IPv6/Teredo y conectividad
   UDP.
