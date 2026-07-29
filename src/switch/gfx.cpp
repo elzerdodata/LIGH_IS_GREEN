@@ -68,10 +68,13 @@ bool Gfx::create_window_renderer() {
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
 #ifdef __SWITCH__
     background_ = IMG_LoadTexture(renderer_, "romfs:/ui/light_is_green_bg.png");
+    brand_icon_ = IMG_LoadTexture(renderer_, "romfs:/ui/app_icon.png");
 #else
     background_ = IMG_LoadTexture(renderer_, "romfs/ui/light_is_green_bg.png");
+    brand_icon_ = IMG_LoadTexture(renderer_, "romfs/ui/app_icon.png");
 #endif
     if (background_) SDL_SetTextureBlendMode(background_, SDL_BLENDMODE_BLEND);
+    if (brand_icon_) SDL_SetTextureBlendMode(brand_icon_, SDL_BLENDMODE_BLEND);
     return true;
 }
 
@@ -190,6 +193,34 @@ void Gfx::draw_texture(SDL_Texture* texture, const SDL_Rect& destination) {
     SDL_RenderCopy(renderer_, texture, nullptr, &destination);
 }
 
+void Gfx::draw_texture_cover(SDL_Texture* texture,
+                             const SDL_Rect& destination) {
+    if (!texture || destination.w <= 0 || destination.h <= 0) return;
+    int width = 0, height = 0;
+    if (SDL_QueryTexture(texture, nullptr, nullptr, &width, &height) != 0 ||
+        width <= 0 || height <= 0) {
+        SDL_RenderCopy(renderer_, texture, nullptr, &destination);
+        return;
+    }
+    const float source_aspect = static_cast<float>(width) / height;
+    const float target_aspect =
+        static_cast<float>(destination.w) / destination.h;
+    SDL_Rect source = {0, 0, width, height};
+    if (source_aspect > target_aspect) {
+        source.w = static_cast<int>(height * target_aspect);
+        source.x = (width - source.w) / 2;
+    } else {
+        source.h = static_cast<int>(width / target_aspect);
+        source.y = (height - source.h) / 2;
+    }
+    SDL_RenderCopy(renderer_, texture, &source, &destination);
+}
+
+void Gfx::draw_brand_icon(const SDL_Rect& destination) {
+    if (brand_icon_)
+        SDL_RenderCopy(renderer_, brand_icon_, nullptr, &destination);
+}
+
 void Gfx::spinner(int cx, int y, Uint32 ticks) {
     // 3 pulsing 14x14 squares, 30px apart (redesign card 1c).
     for (int i = 0; i < 3; ++i) {
@@ -218,6 +249,7 @@ void Gfx::destroy_renderer_textures() {
         SDL_DestroyTexture(cached.texture);
     text_cache_.clear();
     if (background_) SDL_DestroyTexture(background_), background_ = nullptr;
+    if (brand_icon_) SDL_DestroyTexture(brand_icon_), brand_icon_ = nullptr;
 }
 
 }  // namespace gnx::gfx

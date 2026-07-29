@@ -14,9 +14,12 @@ struct QuickRect {
     int h;
 };
 
-inline constexpr QuickRect kQuickTextureRect{1160, 48, 512, 720};
-inline constexpr QuickRect kQuickToggleRect{1596, 48, 72, 72};
-inline constexpr QuickRect kGuideButtonRect{1676, 48, 72, 72};
+// The glyphs live in the very top safe strip so they no longer collide with
+// the Switch status clock.  Their 72x72 hit areas remain comfortable to tap,
+// while the rasterized artwork inside them is deliberately much smaller.
+inline constexpr QuickRect kQuickTextureRect{1160, 8, 672, 724};
+inline constexpr QuickRect kQuickToggleRect{1760, 8, 72, 72};
+inline constexpr QuickRect kGuideButtonRect{1840, 8, 72, 72};
 inline constexpr QuickRect kQuickPanelRect{1160, 136, 508, 596};
 
 inline constexpr int kQuickRowCount = 6;

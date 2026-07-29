@@ -59,22 +59,22 @@ constexpr Vertex kHudQuad[] = {
     {{-0.40f, +0.98f, 0.0f}, {1.0f, 0.0f}},
 };
 
-// Compact Xbox symbol beside the two-dot handle: 1676,48,72,72 in the shared
-// 1920x1080 design space. The eight-pixel gap reads as one control cluster.
+// Invisible 72x72 touch target at 1840,8; the texture itself only paints a
+// compact Xbox glyph in its centre.  The top strip clears the status clock.
 constexpr Vertex kGuideQuad[] = {
-    {{+0.7458f, +0.9111f, 0.0f}, {0.0f, 0.0f}},
-    {{+0.7458f, +0.7778f, 0.0f}, {0.0f, 1.0f}},
-    {{+0.8208f, +0.7778f, 0.0f}, {1.0f, 1.0f}},
-    {{+0.8208f, +0.9111f, 0.0f}, {1.0f, 0.0f}},
+    {{+0.9167f, +0.9852f, 0.0f}, {0.0f, 0.0f}},
+    {{+0.9167f, +0.8519f, 0.0f}, {0.0f, 1.0f}},
+    {{+0.9917f, +0.8519f, 0.0f}, {1.0f, 1.0f}},
+    {{+0.9917f, +0.9852f, 0.0f}, {1.0f, 0.0f}},
 };
 
-// Transparent 512x720 quick-menu texture in shared 1920x1080 design space.
-// It contains the small handle at the top-right and expands left/down.
+// Transparent 672x724 quick-menu texture in shared 1920x1080 design space.
+// It spans from the panel to the relocated two-dot handle.
 constexpr Vertex kQuickQuad[] = {
-    {{+0.2083f, +0.9111f, 0.0f}, {0.0f, 0.0f}},
-    {{+0.2083f, -0.4222f, 0.0f}, {0.0f, 1.0f}},
-    {{+0.7417f, -0.4222f, 0.0f}, {1.0f, 1.0f}},
-    {{+0.7417f, +0.9111f, 0.0f}, {1.0f, 0.0f}},
+    {{+0.2083f, +0.9852f, 0.0f}, {0.0f, 0.0f}},
+    {{+0.2083f, -0.3556f, 0.0f}, {0.0f, 1.0f}},
+    {{+0.9083f, -0.3556f, 0.0f}, {1.0f, 1.0f}},
+    {{+0.9083f, +0.9852f, 0.0f}, {1.0f, 0.0f}},
 };
 
 // std140 layout for the fragment shader's video conversion and controls.
@@ -645,25 +645,22 @@ void DkVideoRenderer::rasterize_guide() {
                (static_cast<uint32_t>(b) << 16) |
                (static_cast<uint32_t>(a) << 24);
     };
-    const uint32_t panel = guide_pressed_ ? rgba(16, 124, 16, 235)
-                                          : rgba(10, 13, 18, 190);
-    const uint32_t edge = guide_pressed_ ? rgba(255, 255, 255, 255)
-                                         : rgba(47, 191, 47, 255);
+    const uint32_t shadow = rgba(0, 0, 0, guide_pressed_ ? 180 : 125);
     const uint32_t icon = guide_pressed_ ? rgba(255, 255, 255, 255)
-                                         : rgba(16, 124, 16, 255);
+                                          : rgba(16, 124, 16, 255);
     const uint32_t mark = guide_pressed_ ? rgba(16, 124, 16, 255)
                                          : rgba(255, 255, 255, 255);
     std::fill(guide_pixels_.begin(), guide_pixels_.end(), 0);
 
-    // Compact glass tile, circular Xbox badge and high-contrast X.
-    for (int y = 4; y < static_cast<int>(kGuideTexH) - 4; ++y) {
-        for (int x = 4; x < static_cast<int>(kGuideTexW) - 4; ++x) {
-            bool border = x < 8 || x >= static_cast<int>(kGuideTexW) - 8 ||
-                          y < 8 || y >= static_cast<int>(kGuideTexH) - 8;
-            guide_pixels_[y * kGuideTexW + x] = border ? edge : panel;
+    // Symbol only: a soft circular shadow replaces the old green square tile.
+    constexpr int cx = 48, cy = 48, shadow_radius = 26, radius = 22;
+    for (int y = cy - shadow_radius; y <= cy + shadow_radius; ++y) {
+        for (int x = cx - shadow_radius; x <= cx + shadow_radius; ++x) {
+            int dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy <= shadow_radius * shadow_radius)
+                guide_pixels_[y * kGuideTexW + x] = shadow;
         }
     }
-    constexpr int cx = 48, cy = 48, radius = 32;
     for (int y = cy - radius; y <= cy + radius; ++y) {
         for (int x = cx - radius; x <= cx + radius; ++x) {
             int dx = x - cx, dy = y - cy;
@@ -672,8 +669,8 @@ void DkVideoRenderer::rasterize_guide() {
         }
     }
     // A high-contrast X inside the circular Xbox badge.
-    for (int y = cy - 18; y <= cy + 18; ++y) {
-        for (int x = cx - 18; x <= cx + 18; ++x) {
+    for (int y = cy - 12; y <= cy + 12; ++y) {
+        for (int x = cx - 12; x <= cx + 12; ++x) {
             int dx = x - cx, dy = y - cy;
             if (std::abs(std::abs(dx) - std::abs(dy)) <= 2)
                 guide_pixels_[y * kGuideTexW + x] = mark;
@@ -728,16 +725,19 @@ void DkVideoRenderer::rasterize_quick_menu() {
     const uint32_t edge = rgba(42, 74, 72, 255);
     const uint32_t accent = rgba(57, 224, 103, 255);
     const uint32_t active = rgba(16, 124, 16, 240);
+    const uint32_t glyph_shadow = rgba(0, 0, 0, 150);
     const uint32_t text = rgba(255, 255, 255, 255);
 
     std::fill(quick_pixels_.begin(), quick_pixels_.end(), transparent);
 
     QuickRect toggle = local(kQuickToggleRect);
-    fill(toggle.x, toggle.y, toggle.w, toggle.h,
-         quick_state_.open ? active : panel);
-    frame(toggle.x, toggle.y, toggle.w, toggle.h, 3, accent);
-    circle(toggle.x + 23, toggle.y + toggle.h / 2, 6, text);
-    circle(toggle.x + 49, toggle.y + toggle.h / 2, 6, text);
+    // Keep the full 72x72 hit target transparent. Only two compact glyph dots
+    // are visible; active state is conveyed by color, never by a square frame.
+    circle(toggle.x + 23, toggle.y + toggle.h / 2 + 2, 9, glyph_shadow);
+    circle(toggle.x + 49, toggle.y + toggle.h / 2 + 2, 9, glyph_shadow);
+    const uint32_t dot = quick_state_.open ? accent : text;
+    circle(toggle.x + 23, toggle.y + toggle.h / 2, 6, dot);
+    circle(toggle.x + 49, toggle.y + toggle.h / 2, 6, dot);
 
     if (quick_state_.open) {
         QuickRect menu = local(kQuickPanelRect);

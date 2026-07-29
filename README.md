@@ -1,6 +1,6 @@
 # Light is Green
 
-> **Preliminary v0.4.0-pre / Versión preliminar v0.4.0-pre**
+> **Current release v0.5.1 / Versión actual v0.5.1**
 
 English | [Español](#español)
 
@@ -13,15 +13,19 @@ Nintendo Switch** homebrew. Authentication, WebRTC, hardware H.264 decoding,
 GPU rendering, audio, and controller input all run on the console; no companion
 PC is required.
 
-## What's new in v0.4
+## What's new in v0.5.1
 
-- Redesigned dark interface with emerald accents and a new original background.
-- Small Xbox Guide symbol placed directly beside the **••** quick-menu button;
-  the oversized `HOME` tile has been removed.
-- **Gamma** control added to Settings and the in-stream quick menu.
-- Gamma, brightness, contrast, saturation, and sharpness changes are applied
-  live during playback and can be reset together.
-- Refined in-stream panel spacing and visual hierarchy for handheld use.
+- Fixes the startup `json.exception.type_error.302` regression in v0.5.0-pre.
+- Restores the stable v0.4 catalog path: only game names and cover art are read;
+  no extra nullable xCloud/Microsoft Store metadata is requested or cached.
+- Replaces the unused selected-game hero with a content-first 8×3 library
+  grid, showing up to 24 games on each page.
+- Removes the non-functional **In-stream** header tab; streaming controls remain
+  available only while a stream is active.
+- Adds the new Joy-Con/Xbox artwork as both the Homebrew Menu icon and the
+  in-app brand icon.
+- Keeps the 220 ms selection animation, compact frameless stream controls,
+  Gamma, and all live image controls from v0.5/v0.4.
 
 ## Features
 
@@ -54,7 +58,7 @@ PC is required.
 
 | Context | Controls |
 | --- | --- |
-| Library | Left stick / d-pad: move · **A**: open/play · **Y**: search · **X**: refresh · **ZL**: settings · **+**: exit |
+| Library | Left stick / d-pad: move · **A**: open/play · **Y**: search · **X**: favorite · **ZR**: refresh · **ZL**: settings · **+**: exit |
 | Settings | Left/right: change · **A**: open/confirm · **B**: back |
 | In stream | Switch pad: Xbox controls · tap **••**: image/stats panel · tap the small **Xbox symbol** or press **L3 + R3**: Guide · hold **-** + **+**: quit |
 
@@ -81,7 +85,7 @@ src/switch/          SDL2 interface, covers, and input
 src/switch/stream/   WebRTC, RTP, NVDEC, deko3d, and Opus streaming engine
 shaders/             deko3d video shaders
 deps/                Switch dependency build scripts and patches
-romfs/ui/            v0.4 interface artwork
+romfs/ui/            interface artwork
 ```
 
 ## Third-party software
@@ -113,7 +117,7 @@ valid subscription and hardware.
 - License: [GPL-3.0](LICENSE)
 - Original project and core implementation: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Light is Green fork and v0.2–v0.4 work: **elzerdodata**
+- Light is Green fork and v0.2–v0.5 work: **elzerdodata**
 
 ---
 
@@ -128,15 +132,20 @@ Gaming (xCloud) para Nintendo Switch**. La autenticación, WebRTC, decodificaci�
 H.264 por hardware, renderizado en GPU, audio y controles funcionan en la
 consola; no requiere una PC auxiliar.
 
-## Novedades de v0.4
+## Novedades de v0.5.1
 
-- Interfaz oscura rediseñada con acentos esmeralda y un nuevo fondo original.
-- Símbolo pequeño de Xbox Guide ubicado directamente junto al botón rápido
-  **••**; se eliminó el recuadro `HOME` grande.
-- Control de **Gamma** agregado a Ajustes y al menú rápido durante la partida.
-- Gamma, brillo, contraste, saturación y nitidez se aplican en tiempo real y se
-  pueden restablecer juntos.
-- Espaciado y jerarquía visual mejorados para uso portátil.
+- Corrige la regresión `json.exception.type_error.302` de v0.5.0-pre al iniciar.
+- Restaura la ruta estable del catálogo de v0.4: solo se leen nombres y
+  carátulas; no se solicitan ni guardan metadatos adicionales anulables de
+  xCloud/Microsoft Store.
+- Reemplaza el hero sin información por una cuadrícula de biblioteca 8×3 que
+  muestra hasta 24 juegos en cada página.
+- Elimina la pestaña **In-stream** del encabezado porque no tenía función; los
+  controles de streaming siguen disponibles durante una partida activa.
+- Agrega el nuevo arte Joy-Con/Xbox como icono del Homebrew Menu y dentro de la
+  aplicación.
+- Conserva la animación de selección de 220 ms, los controles compactos sin
+  recuadros, Gamma y todos los ajustes de imagen de v0.5/v0.4.
 
 ## Funciones
 
@@ -171,7 +180,7 @@ consola; no requiere una PC auxiliar.
 
 | Contexto | Controles |
 | --- | --- |
-| Biblioteca | Stick izquierdo / cruceta: mover · **A**: abrir/jugar · **Y**: buscar · **X**: actualizar · **ZL**: ajustes · **+**: salir |
+| Biblioteca | Stick izquierdo / cruceta: mover · **A**: abrir/jugar · **Y**: buscar · **X**: favorito · **ZR**: actualizar · **ZL**: ajustes · **+**: salir |
 | Ajustes | Izquierda/derecha: cambiar · **A**: abrir/confirmar · **B**: volver |
 | En partida | Controles de Switch: controles Xbox · tocar **••**: panel de imagen/datos · tocar el **símbolo pequeño de Xbox** o pulsar **L3 + R3**: Guide · mantener **-** + **+**: salir |
 
@@ -198,7 +207,7 @@ src/switch/          interfaz SDL2, carátulas y controles
 src/switch/stream/   WebRTC, RTP, NVDEC, deko3d y motor de audio Opus
 shaders/             shaders de video para deko3d
 deps/                scripts y parches de dependencias para Switch
-romfs/ui/            arte de interfaz de v0.4
+romfs/ui/            arte de interfaz
 ```
 
 ## Software de terceros
@@ -230,4 +239,4 @@ propia suscripción válida y tu hardware.
 - Licencia: [GPL-3.0](LICENSE)
 - Proyecto original e implementación base: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Fork Light is Green y trabajo de v0.2–v0.4: **elzerdodata**
+- Fork Light is Green y trabajo de v0.2–v0.5: **elzerdodata**

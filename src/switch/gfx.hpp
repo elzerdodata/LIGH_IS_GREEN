@@ -61,6 +61,8 @@ public:
 
     SDL_Texture* texture_from_memory(const void* data, size_t size);
     void draw_texture(SDL_Texture* texture, const SDL_Rect& destination);
+    void draw_texture_cover(SDL_Texture* texture, const SDL_Rect& destination);
+    void draw_brand_icon(const SDL_Rect& destination);
 
     // Simple pulsing loading dot row.
     void spinner(int cx, int y, Uint32 ticks);
@@ -75,6 +77,7 @@ private:
     SDL_Window* window_ = nullptr;
     SDL_Renderer* renderer_ = nullptr;
     SDL_Texture* background_ = nullptr;
+    SDL_Texture* brand_icon_ = nullptr;
     TTF_Font* fonts_[5] = {};
     void* font_data_ = nullptr;  // shared system font blob (not owned)
 
