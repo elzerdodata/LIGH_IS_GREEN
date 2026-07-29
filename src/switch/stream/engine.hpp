@@ -73,9 +73,10 @@ public:
     // from the "volume" setting before each stream start; 1.0 = unchanged.
     void set_audio_gain(float gain) { audio_gain_ = gain; }
 
-    // Video pacing mode (see VideoPacing). Set before each stream start;
-    // default Steady.
-    void set_pacing(VideoPacing pacing) { pacing_ = pacing; }
+    // Video pacing mode (see VideoPacing). Safe before startup and while a
+    // stream is running; a live change releases queued/interpolation surfaces
+    // before the next present so old-mode frames can never leak across modes.
+    void set_pacing(VideoPacing pacing);
 
     // In-stream performance/picture quick menu. The state is retained before
     // startup and can also be changed live while deko3d owns the display.
@@ -88,6 +89,9 @@ public:
     EngineState state() const { return state_; }
     std::string status() const;
     std::string error() const;
+    // Actual region selected by Xbox after streaming login. Empty while login
+    // is still pending and for the xHome Remote Play path.
+    std::string selected_region() const;
 
     // Render-thread pump: decodes queued video. On Switch it presents each
     // frame through the deko3d renderer (returns nullptr); on PC it returns the
@@ -160,6 +164,7 @@ private:
     mutable std::mutex status_mutex_;
     std::string status_;
     std::string error_;
+    std::string selected_region_;
 
     EndpointCredentials cloud_;
     std::string title_id_;

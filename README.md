@@ -1,6 +1,6 @@
 # Light is Green
 
-> **Stable v0.6.0 · Beta v0.6.1-beta.2 / Estable v0.6.0 · Beta v0.6.1-beta.2**
+> **Stable v0.6.0 · Preview v0.7.0 / Estable v0.6.0 · Preliminar v0.7.0**
 
 English | [Español](#español)
 
@@ -13,11 +13,20 @@ Nintendo Switch** homebrew. Authentication, WebRTC, hardware H.264 decoding,
 GPU rendering, audio, and controller input all run on the console; no companion
 PC is required.
 
-## v0.6.1 beta preview
+## v0.7.0 preview
 
-- Adds **Pacing: Steady / Smooth / Motion**. Motion inserts a GPU-blended
-  midpoint for detected 30 fps sources; it is experimental interpolation, not
-  optical-flow or AI frame generation.
+- Fixes the thin green/magenta corruption stripe at the bottom/right video
+  edge by sampling the visible luma and chroma texel centres independently,
+  never NVDEC's uninitialized alignment padding.
+- Adds live **Pacing: Steady / Smooth / Motion** controls to the in-stream
+  two-dot touch panel. Changing mode releases old queued/interpolation surfaces
+  without restarting WebRTC.
+- **Motion is 100% experimental and may cause rapid green flashing.** It now
+  rejects unproven or incompatible secondary decoder surfaces and uses a normal
+  Smooth refresh instead, but users should immediately switch back if flashing
+  is observed. Motion is never restored automatically after restarting the app.
+- Shows the selected server region throughout the xCloud sign-in and connection
+  screen, updating to Xbox's actual region as soon as login completes.
 - Adds an experimental **1080p Console quality** option for Remote Play. If
   negotiation or first video fails, the app starts a fresh session
   automatically with the stable 720p profile.
@@ -29,7 +38,7 @@ PC is required.
   Success depends on Remote Features, NAT, IPv6/Teredo and UDP connectivity.
 - Expands the performance overlay with source, output and generated FPS.
 
-The beta is published separately. **v0.6.0 remains the recommended stable
+The v0.7 preview is published separately. **v0.6.0 remains the recommended stable
 release.** Do not publish `stream-log.txt`: connection diagnostics can include
 IP candidates.
 
@@ -135,7 +144,7 @@ valid subscription and hardware.
 - License: [GPL-3.0](LICENSE)
 - Original project and core implementation: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Light is Green fork and v0.2–v0.6.1 beta work: **elzerdodata**
+- Light is Green fork and v0.2–v0.7 work: **elzerdodata**
 
 ---
 
@@ -150,11 +159,21 @@ Gaming (xCloud) para Nintendo Switch**. La autenticación, WebRTC, decodificaci�
 H.264 por hardware, renderizado en GPU, audio y controles funcionan en la
 consola; no requiere una PC auxiliar.
 
-## Avance de v0.6.1 beta
+## Avance de v0.7.0
 
-- Agrega **Pacing: Steady / Smooth / Motion**. Motion inserta en GPU un cuadro
-  intermedio mezclado cuando detecta una fuente de 30 fps; es interpolación
-  experimental, no generación por flujo óptico ni inteligencia artificial.
+- Corrige la franja fina verde/magenta del borde inferior/derecho del video:
+  luma y croma ahora se muestrean desde sus texeles visibles y nunca desde el
+  relleno de alineación sin inicializar de NVDEC.
+- Agrega **Pacing: Steady / Smooth / Motion** al panel táctil de los dos puntos
+  dentro del juego. El cambio se aplica en caliente, libera las superficies del
+  modo anterior y no reinicia WebRTC.
+- **Motion es 100% experimental y podría causar pantalla verde parpadeante.**
+  Ahora rechaza superficies secundarias no comprobadas o incompatibles y usa
+  un refresco Smooth normal, pero se debe volver inmediatamente a Smooth o
+  Steady si aparece parpadeo. Motion nunca se restaura automáticamente al
+  reiniciar la aplicación.
+- Muestra la región del servidor durante el inicio de sesión y la conexión a
+  xCloud, y cambia a la región real elegida por Xbox al terminar el login.
 - Agrega **Calidad de consola 1080p** experimental para Remote Play. Si falla
   la negociación o no llega el primer video, la aplicación abre una sesión
   nueva con el perfil estable de 720p.
@@ -167,8 +186,8 @@ consola; no requiere una PC auxiliar.
   UDP.
 - Amplía el overlay de rendimiento con FPS de origen, salida y generados.
 
-La beta se publica por separado. **v0.6.0 sigue siendo la versión estable
-recomendada.** No publiques `stream-log.txt`: el diagnóstico puede incluir
+La versión preliminar v0.7 se publica por separado. **v0.6.0 sigue siendo la
+versión estable recomendada.** No publiques `stream-log.txt`: el diagnóstico puede incluir
 candidatos de direcciones IP.
 
 ## Novedades de v0.6.0
@@ -276,4 +295,4 @@ propia suscripción válida y tu hardware.
 - Licencia: [GPL-3.0](LICENSE)
 - Proyecto original e implementación base: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Fork Light is Green y trabajo de v0.2–v0.6.1 beta: **elzerdodata**
+- Fork Light is Green y trabajo de v0.2–v0.7: **elzerdodata**

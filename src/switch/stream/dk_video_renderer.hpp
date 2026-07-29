@@ -109,6 +109,9 @@ private:
         uint32_t size = 0;
         uint32_t luma_offset = 0;
         uint32_t chroma_offset = 0;
+        // Motion may sample a surface as its second input only after the same
+        // imported mapping has completed at least one ordinary primary draw.
+        bool primary_ready = false;
         dk::UniqueMemBlock memblock;
         dk::Image luma;
         dk::Image chroma;
@@ -226,7 +229,7 @@ private:
     // One transparent RGBA texture covers both shapes and costs one overlay
     // draw call regardless of whether the panel is open.
     static constexpr uint32_t kQuickTexW = 672;
-    static constexpr uint32_t kQuickTexH = 724;
+    static constexpr uint32_t kQuickTexH = 812;
     dk::UniqueMemBlock quick_memblock_;
     dk::Image quick_image_;
     dk::ImageDescriptor quick_desc_;

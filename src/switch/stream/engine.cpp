@@ -161,6 +161,10 @@ void Engine::start_home(const std::string& server_id, QualityTier tier,
 void Engine::start_common(const std::string& title_id, QualityTier tier,
                           const std::string& locale) {
     stop();
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        selected_region_.clear();
+    }
     title_id_ = title_id;
     tier_ = tier;
     // Console Remote Play uses the proven Android fingerprint to create the
@@ -297,6 +301,11 @@ std::string Engine::status() const {
 std::string Engine::error() const {
     std::lock_guard<std::mutex> lock(status_mutex_);
     return error_;
+}
+
+std::string Engine::selected_region() const {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    return selected_region_;
 }
 
 void Engine::set_status(const std::string& status) {
@@ -653,9 +662,14 @@ void Engine::worker() {
         log("fetching streaming credentials");
         StreamingCredentials creds = auth_.fetch_streaming_credentials();
         cloud_ = home ? creds.home : creds.cloud;
-        if (!home)
+        if (!home) {
+            {
+                std::lock_guard<std::mutex> lock(status_mutex_);
+                selected_region_ = cloud_.selected_region;
+            }
             log("server region: " + cloud_.selected_region + " | " +
                 cloud_.host);
+        }
         // Without a host every request goes out as a bare path, which curl
         // rejects as a malformed URL -- a useless error for the one thing that
         // actually went wrong: the remote-play login did not come back.
@@ -669,7 +683,8 @@ void Engine::worker() {
             return;
         }
 
-        set_status("Cleaning up old sessions...");
+        set_status(home ? "Preparing Xbox Remote Play route..."
+                        : "Connecting to " + cloud_.selected_region + "...");
         GssvSession::cleanup_stale_sessions(http_, cloud_,
                                             home ? "home" : "cloud");
         log("stale-session cleanup done");
@@ -1674,10 +1689,54 @@ bool Engine::begin_deko_output() {
 }
 
 void Engine::set_quick_menu_state(const QuickMenuState& state) {
-    quick_menu_state_ = normalized_quick_menu(state);
+    QuickMenuState next = normalized_quick_menu(state);
+    set_pacing(static_cast<VideoPacing>(next.pacing));
+    quick_menu_state_ = next;
 #ifdef __SWITCH__
     dk_video_.set_quick_menu_state(quick_menu_state_);
 #endif
+}
+
+void Engine::set_pacing(VideoPacing pacing) {
+    if (pacing != VideoPacing::Steady && pacing != VideoPacing::Smooth &&
+        pacing != VideoPacing::Motion)
+        pacing = VideoPacing::Steady;
+#ifdef __SWITCH__
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    if (pacing_ == pacing) return;
+
+    // Preserve the frame currently on screen, but release every queued or
+    // generated surface owned by the old mode. This is especially important
+    // when leaving Motion: retaining its second NVDEC surface can make the next
+    // shader pass sample a recycled buffer and flash green.
+    if (motion_frame_) av_frame_unref(motion_frame_);
+    for (SmoothFrame& queued : smooth_frames_)
+        if (queued.frame) av_frame_free(&queued.frame);
+    smooth_frames_.clear();
+    smooth_refresh_phase_ = 0;
+
+    if (pacing == VideoPacing::Steady) {
+        shared_frame_valid_ = false;
+        if (shared_frame_) av_frame_unref(shared_frame_);
+        if (shared_frame_ && present_frame_ && present_frame_->data[0] &&
+            av_frame_ref(shared_frame_, present_frame_) == 0) {
+            shared_frame_valid_ = true;
+            shared_frame_seq_ = last_present_seq_;
+        }
+        smooth_have_present_ = false;
+    } else {
+        // Smooth/Motion may keep displaying the stable current frame while the
+        // decode thread builds a fresh two-frame reserve for the new mode.
+        smooth_have_present_ =
+            present_frame_ && present_frame_->data[0] != nullptr;
+        if (shared_frame_) av_frame_unref(shared_frame_);
+        shared_frame_valid_ = false;
+    }
+    pacing_ = pacing;
+#else
+    pacing_ = pacing;
+#endif
+    log(std::string("pacing changed live: ") + pacing_name(pacing));
 }
 
 void Engine::set_sharpness(int level) {
