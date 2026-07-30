@@ -25,17 +25,24 @@ namespace gnx::stream {
 namespace {
 
 constexpr uint32_t kCodeSize = 96 * 1024;  // video vsh + video fsh + hud fsh
-constexpr uint32_t kCmdSize = 64 * 1024;
+constexpr uint32_t kCmdPerFrameSize = 64 * 1024;
+constexpr uint32_t kFrameSlots = 3;
+constexpr uint32_t kCmdSize = kFrameSlots * kCmdPerFrameSize;
 constexpr uint32_t kDataSize = 0x1000;
 
 // data_memblock_ layout (all offsets aligned for their use):
-constexpr uint32_t kUniformOff = 0x000;   // Transformation UBO (256B aligned)
-constexpr uint32_t kSamplerOff = 0x100;   // sampler descriptor set
-constexpr uint32_t kImageOff = 0x200;     // image descriptor set (luma, chroma)
-constexpr uint32_t kVtxOff = 0x300;       // quad vertex buffer
-constexpr uint32_t kHudVtxOff = 0x380;    // HUD overlay corner quad
-constexpr uint32_t kGuideVtxOff = 0x400;  // top-right Guide/Home touch button
-constexpr uint32_t kQuickVtxOff = 0x480;  // two-dot handle + quick panel
+// The canonical transform is CPU-only; each framebuffer has its own GPU UBO so
+// a later frame never overwrites values an earlier queued draw still uses.
+constexpr uint32_t kUniformTemplateOff = 0x000;
+constexpr uint32_t kUniformSlotOff = 0x100;
+constexpr uint32_t kUniformSlotStride = 0x100;
+constexpr uint32_t kSamplerOff = 0x400;       // sampler descriptor set
+constexpr uint32_t kImageSlotOff = 0x500;     // per-slot image descriptor set
+constexpr uint32_t kImageSlotStride = 0x100;  // 256 bytes stride per slot (7 * 32 = 224 bytes)
+constexpr uint32_t kVtxOff = 0x800;           // quad vertex buffer
+constexpr uint32_t kHudVtxOff = 0x880;        // HUD overlay corner quad
+constexpr uint32_t kGuideVtxOff = 0x900;      // top-right Guide/Home touch button
+constexpr uint32_t kQuickVtxOff = 0x980;      // two-dot handle + quick panel
 
 struct Vertex {
     float position[3];
@@ -59,23 +66,22 @@ constexpr Vertex kHudQuad[] = {
     {{-0.40f, +0.98f, 0.0f}, {1.0f, 0.0f}},
 };
 
-// Top-right overlay matching main.cpp's 1692,32,196,116 touch target in the
-// shared 1920x1080 design space. Clip-space geometry scales with docked and
-// handheld output while the touch coordinates stay in the same design space.
+// Invisible 72x72 touch target at 1840,8; the texture itself only paints a
+// compact Xbox glyph in its centre.  The top strip clears the status clock.
 constexpr Vertex kGuideQuad[] = {
-    {{+0.7625f, +0.9407f, 0.0f}, {0.0f, 0.0f}},
-    {{+0.7625f, +0.7259f, 0.0f}, {0.0f, 1.0f}},
-    {{+0.9667f, +0.7259f, 0.0f}, {1.0f, 1.0f}},
-    {{+0.9667f, +0.9407f, 0.0f}, {1.0f, 0.0f}},
+    {{+0.9167f, +0.9852f, 0.0f}, {0.0f, 0.0f}},
+    {{+0.9167f, +0.8519f, 0.0f}, {0.0f, 1.0f}},
+    {{+0.9917f, +0.8519f, 0.0f}, {1.0f, 1.0f}},
+    {{+0.9917f, +0.9852f, 0.0f}, {1.0f, 0.0f}},
 };
 
-// Transparent 512x640 quick-menu texture in shared 1920x1080 design space.
-// It contains the small handle at the top-right and expands left/down.
+// Transparent 672x812 quick-menu texture in shared 1920x1080 design space.
+// It spans from the panel to the relocated two-dot handle.
 constexpr Vertex kQuickQuad[] = {
-    {{+0.2083f, +0.9111f, 0.0f}, {0.0f, 0.0f}},
-    {{+0.2083f, -0.2741f, 0.0f}, {0.0f, 1.0f}},
-    {{+0.7417f, -0.2741f, 0.0f}, {1.0f, 1.0f}},
-    {{+0.7417f, +0.9111f, 0.0f}, {1.0f, 0.0f}},
+    {{+0.2083f, +0.9852f, 0.0f}, {0.0f, 0.0f}},
+    {{+0.2083f, -0.5185f, 0.0f}, {0.0f, 1.0f}},
+    {{+0.9083f, -0.5185f, 0.0f}, {1.0f, 1.0f}},
+    {{+0.9083f, +0.9852f, 0.0f}, {1.0f, 0.0f}},
 };
 
 // std140 layout for the fragment shader's video conversion and controls.
@@ -84,11 +90,20 @@ struct Transformation {
     alignas(16) float yuvmat_col1[4];
     alignas(16) float yuvmat_col2[4];
     alignas(16) float offset[4];
-    alignas(16) float uv_data[4];
+    // Visible texel-centre transforms for the separately aligned NV12 planes.
+    // Keeping luma/chroma independent prevents the bottom/right padding from
+    // bleeding into the image under linear filtering.
+    alignas(16) float luma_uv_data[4];
+    alignas(16) float chroma_uv_data[4];
     alignas(16) float sharp_data[4];  // x=strength, y=overshoot allowance
-    alignas(16) float picture_data[4];  // brightness, contrast, saturation
+    alignas(16) float picture_data[4];  // brightness, contrast, saturation, gamma
+    alignas(16) float motion_data[4];  // x=blend factor, y=enabled
 };
-static_assert(sizeof(Transformation) == 112, "std140 Transformation");
+
+static_assert(7 * sizeof(DkImageDescriptor) <= kImageSlotStride,
+              "image descriptors overlap image slot stride");
+static_assert(sizeof(Transformation) == 144, "std140 Transformation");
+static_assert(kFrameSlots == 3, "renderer slot count must match kFbNum");
 
 // Column-major YUV->RGB matrices (matching Moonlight-Switch / BT.xxx).
 const float kBt601Lim[9] = {1.1644f, 1.1644f, 1.1644f, 0.0f,    -0.3917f,
@@ -129,10 +144,12 @@ void DkVideoRenderer::set_quick_menu_state(const QuickMenuState& state) {
         next.brightness != quick_state_.brightness ||
         next.contrast != quick_state_.contrast ||
         next.saturation != quick_state_.saturation ||
+        next.gamma != quick_state_.gamma ||
         next.sharpness != quick_state_.sharpness;
     bool menu_changed =
         next.open != quick_state_.open ||
-        next.performance != quick_state_.performance || picture_changed;
+        next.performance != quick_state_.performance ||
+        next.pacing != quick_state_.pacing || picture_changed;
     quick_state_ = next;
     hud_enabled_ = next.performance;
     if (picture_changed) transform_dirty_ = true;
@@ -181,9 +198,20 @@ bool DkVideoRenderer::create_swapchain() {
 }
 
 void DkVideoRenderer::destroy_swapchain() {
-    if (dev_ && queue_) queue_.waitIdle();
+    if (dev_ && queue_) {
+        queue_.waitIdle();
+        release_in_flight_frames();
+    }
     swapchain_ = nullptr;
     fb_memblock_ = nullptr;
+}
+
+void DkVideoRenderer::release_in_flight_frames() {
+    for (unsigned i = 0; i < kFbNum; ++i) {
+        if (in_flight_frames_[i]) av_frame_unref(in_flight_frames_[i]);
+        if (in_flight_motion_frames_[i])
+            av_frame_unref(in_flight_motion_frames_[i]);
+    }
 }
 
 void DkVideoRenderer::maybe_rebuild_swapchain() {
@@ -222,6 +250,16 @@ bool DkVideoRenderer::init() {
         fb_height_ = 720;
     }
     if (!create_swapchain()) return false;
+
+    for (unsigned i = 0; i < kFbNum; ++i) {
+        in_flight_frames_[i] = av_frame_alloc();
+        in_flight_motion_frames_[i] = av_frame_alloc();
+        if (!in_flight_frames_[i] || !in_flight_motion_frames_[i]) {
+            logf("deko3d: could not allocate in-flight frame references");
+            shutdown();
+            return false;
+        }
+    }
 
     // Command + data memory.
     cmd_memblock_ = dk::MemBlockMaker{dev_, kCmdSize}
@@ -295,6 +333,11 @@ bool DkVideoRenderer::init() {
     hud_text_cache_.clear();
     fps_tick_ = 0;
     fps_frames_ = 0;
+    output_frames_ = 0;
+    generated_frames_ = 0;
+    fps_ = 0.0f;
+    output_fps_ = 0.0f;
+    generated_fps_ = 0.0f;
     fps_last_data_ = nullptr;
     net_valid_ = false;  // don't show the previous stream's numbers
     {
@@ -387,6 +430,12 @@ bool DkVideoRenderer::init() {
 
 void DkVideoRenderer::shutdown() {
     if (dev_ && queue_) queue_.waitIdle();
+    release_in_flight_frames();
+    for (unsigned i = 0; i < kFbNum; ++i) {
+        if (in_flight_frames_[i]) av_frame_free(&in_flight_frames_[i]);
+        if (in_flight_motion_frames_[i])
+            av_frame_free(&in_flight_motion_frames_[i]);
+    }
     if (hud_font_) {
         TTF_CloseFont(hud_font_);  // also frees the RWops (opened with freesrc=1)
         hud_font_ = nullptr;
@@ -431,6 +480,7 @@ bool DkVideoRenderer::ensure_layouts(AVFrame* frame, bool is_linear) {
         return true;
 
     queue_.waitIdle();
+    release_in_flight_frames();
     frame_w_ = frame->width;
     frame_h_ = frame->height;
     luma_w_ = yw;
@@ -498,13 +548,29 @@ void DkVideoRenderer::update_transform(AVFrame* frame) {
     t.offset[0] = full ? 0.0f : 16.0f / 255.0f;
     t.offset[1] = 128.0f / 255.0f;
     t.offset[2] = 128.0f / 255.0f;
-    // Crop the aligned surface to the visible area: uv = vTex * (vis/aligned).
-    // The luma and chroma ratios are identical (chroma dims are exactly half),
-    // so one scale serves both planes.
-    t.uv_data[0] = 0.0f;
-    t.uv_data[1] = 0.0f;
-    t.uv_data[2] = luma_w_ ? (float)frame_w_ / (float)luma_w_ : 1.0f;
-    t.uv_data[3] = luma_h_ ? (float)frame_h_ / (float)luma_h_ : 1.0f;
+    // Map the quad to texel centres, not the visible/padding boundary. Sampling
+    // exactly at vis/aligned linearly blends the last video row with NVDEC's
+    // uninitialised alignment rows -- seen on hardware as the green/magenta
+    // stripe at the bottom of the display. NV12 chroma has its own dimensions,
+    // so it needs a separate transform rather than reusing the luma ratio.
+    const uint32_t visible_cw = (static_cast<uint32_t>(frame_w_) + 1) / 2;
+    const uint32_t visible_ch = (static_cast<uint32_t>(frame_h_) + 1) / 2;
+    t.luma_uv_data[0] = luma_w_ ? 0.5f / luma_w_ : 0.0f;
+    t.luma_uv_data[1] = luma_h_ ? 0.5f / luma_h_ : 0.0f;
+    t.luma_uv_data[2] = luma_w_ && frame_w_ > 1
+                            ? static_cast<float>(frame_w_ - 1) / luma_w_
+                            : 0.0f;
+    t.luma_uv_data[3] = luma_h_ && frame_h_ > 1
+                            ? static_cast<float>(frame_h_ - 1) / luma_h_
+                            : 0.0f;
+    t.chroma_uv_data[0] = chroma_w_ ? 0.5f / chroma_w_ : 0.0f;
+    t.chroma_uv_data[1] = chroma_h_ ? 0.5f / chroma_h_ : 0.0f;
+    t.chroma_uv_data[2] = chroma_w_ && visible_cw > 1
+                              ? static_cast<float>(visible_cw - 1) / chroma_w_
+                              : 0.0f;
+    t.chroma_uv_data[3] = chroma_h_ && visible_ch > 1
+                              ? static_cast<float>(visible_ch - 1) / chroma_h_
+                              : 0.0f;
     // Off / Low / Medium / High. Strength scales the unsharp mask; overshoot
     // is how far past the local min/max an edge may ring before it clamps.
     static constexpr float kSharpStrength[4] = {0.0f, 0.60f, 1.20f, 2.0f};
@@ -514,11 +580,14 @@ void DkVideoRenderer::update_transform(AVFrame* frame) {
     t.picture_data[0] = static_cast<float>(quick_state_.brightness) / 100.0f;
     t.picture_data[1] = static_cast<float>(quick_state_.contrast) / 100.0f;
     t.picture_data[2] = static_cast<float>(quick_state_.saturation) / 100.0f;
-    std::memcpy(static_cast<uint8_t*>(data_cpu_) + kUniformOff, &t, sizeof(t));
-    logf("deko3d: color=%d full=%d crop=%.4fx%.4f picture=%+d/%d/%d sharp=%d",
-         space, (int)full, t.uv_data[2], t.uv_data[3],
+    t.picture_data[3] = static_cast<float>(quick_state_.gamma) / 100.0f;
+    std::memcpy(static_cast<uint8_t*>(data_cpu_) + kUniformTemplateOff, &t,
+                sizeof(t));
+    logf("deko3d: color=%d full=%d cropY=%.4fx%.4f cropUV=%.4fx%.4f picture=%+d/%d/%d gamma=%.2f sharp=%d",
+         space, (int)full, t.luma_uv_data[2], t.luma_uv_data[3],
+         t.chroma_uv_data[2], t.chroma_uv_data[3],
          quick_state_.brightness, quick_state_.contrast,
-         quick_state_.saturation, quick_state_.sharpness);
+         quick_state_.saturation, t.picture_data[3], quick_state_.sharpness);
 }
 
 DkVideoRenderer::FrameMapping* DkVideoRenderer::map_frame(AVFrame* frame,
@@ -536,6 +605,15 @@ DkVideoRenderer::FrameMapping* DkVideoRenderer::map_frame(AVFrame* frame,
     }
     uint32_t luma_off = static_cast<uint32_t>(y_addr - base_addr);
     uint32_t chroma_off = static_cast<uint32_t>(uv_addr - base_addr);
+    uint64_t luma_end = static_cast<uint64_t>(luma_off) + luma_layout_.getSize();
+    uint64_t chroma_end =
+        static_cast<uint64_t>(chroma_off) + chroma_layout_.getSize();
+    if (luma_end > size || chroma_end > size) {
+        logf("deko3d: plane layout exceeds backing map (Y=%llu UV=%llu size=%u)",
+             static_cast<unsigned long long>(luma_end),
+             static_cast<unsigned long long>(chroma_end), size);
+        return nullptr;
+    }
 
     for (auto& m : mappings_) {
         if (m.handle == handle && m.cpu_addr == base && m.size == size &&
@@ -603,41 +681,6 @@ void DkVideoRenderer::blit_text(const char* s, int x, int y) {
     SDL_FreeSurface(surf);
 }
 
-void DkVideoRenderer::blit_guide_text(const char* s, int x, int y) {
-    if (!hud_font_ || !s || !*s) return;
-    SDL_Color white{255, 255, 255, 255};
-    SDL_Surface* surf = TTF_RenderUTF8_Blended(hud_font_, s, white);
-    if (!surf) return;
-    SDL_LockSurface(surf);
-    int bpp = surf->format->BytesPerPixel;
-    for (int j = 0; j < surf->h; ++j) {
-        int ty = y + j;
-        if (ty < 0 || ty >= static_cast<int>(kGuideTexH)) continue;
-        auto* rowp = static_cast<uint8_t*>(surf->pixels) + j * surf->pitch;
-        for (int i = 0; i < surf->w; ++i) {
-            int tx = x + i;
-            if (tx < 0 || tx >= static_cast<int>(kGuideTexW)) continue;
-            uint32_t p = 0;
-            std::memcpy(&p, rowp + i * bpp, bpp < 4 ? bpp : 4);
-            uint8_t r, g, b, a;
-            SDL_GetRGBA(p, surf->format, &r, &g, &b, &a);
-            if (a == 0) continue;
-            uint32_t& dst = guide_pixels_[ty * kGuideTexW + tx];
-            uint8_t dr = dst & 0xFF, dg = (dst >> 8) & 0xFF,
-                    db = (dst >> 16) & 0xFF, da = (dst >> 24) & 0xFF;
-            float af = a / 255.0f, ia = 1.0f - af;
-            uint8_t nr = static_cast<uint8_t>(r * af + dr * ia);
-            uint8_t ng = static_cast<uint8_t>(g * af + dg * ia);
-            uint8_t nb = static_cast<uint8_t>(b * af + db * ia);
-            uint8_t na = static_cast<uint8_t>(a + da * ia);
-            dst = nr | (ng << 8) | (nb << 16) |
-                  (static_cast<uint32_t>(na) << 24);
-        }
-    }
-    SDL_UnlockSurface(surf);
-    SDL_FreeSurface(surf);
-}
-
 void DkVideoRenderer::blit_quick_text(const char* s, int x, int y) {
     if (!hud_font_ || !s || !*s) return;
     SDL_Color white{255, 255, 255, 255};
@@ -679,26 +722,22 @@ void DkVideoRenderer::rasterize_guide() {
                (static_cast<uint32_t>(b) << 16) |
                (static_cast<uint32_t>(a) << 24);
     };
-    const uint32_t panel = guide_pressed_ ? rgba(16, 124, 16, 235)
-                                          : rgba(10, 13, 18, 190);
-    const uint32_t edge = guide_pressed_ ? rgba(255, 255, 255, 255)
-                                         : rgba(47, 191, 47, 255);
+    const uint32_t shadow = rgba(0, 0, 0, guide_pressed_ ? 180 : 125);
     const uint32_t icon = guide_pressed_ ? rgba(255, 255, 255, 255)
-                                         : rgba(16, 124, 16, 255);
+                                          : rgba(16, 124, 16, 255);
     const uint32_t mark = guide_pressed_ ? rgba(16, 124, 16, 255)
                                          : rgba(255, 255, 255, 255);
     std::fill(guide_pixels_.begin(), guide_pixels_.end(), 0);
 
-    // Four transparent pixels around the panel soften the screen edge. The
-    // remaining panel, border, circular Xbox badge and X are CPU-rasterized.
-    for (int y = 4; y < static_cast<int>(kGuideTexH) - 4; ++y) {
-        for (int x = 4; x < static_cast<int>(kGuideTexW) - 4; ++x) {
-            bool border = x < 8 || x >= static_cast<int>(kGuideTexW) - 8 ||
-                          y < 8 || y >= static_cast<int>(kGuideTexH) - 8;
-            guide_pixels_[y * kGuideTexW + x] = border ? edge : panel;
+    // Symbol only: a soft circular shadow replaces the old green square tile.
+    constexpr int cx = 48, cy = 48, shadow_radius = 26, radius = 22;
+    for (int y = cy - shadow_radius; y <= cy + shadow_radius; ++y) {
+        for (int x = cx - shadow_radius; x <= cx + shadow_radius; ++x) {
+            int dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy <= shadow_radius * shadow_radius)
+                guide_pixels_[y * kGuideTexW + x] = shadow;
         }
     }
-    constexpr int cx = 48, cy = 56, radius = 30;
     for (int y = cy - radius; y <= cy + radius; ++y) {
         for (int x = cx - radius; x <= cx + radius; ++x) {
             int dx = x - cx, dy = y - cy;
@@ -707,14 +746,13 @@ void DkVideoRenderer::rasterize_guide() {
         }
     }
     // A high-contrast X inside the circular Xbox badge.
-    for (int y = cy - 17; y <= cy + 17; ++y) {
-        for (int x = cx - 17; x <= cx + 17; ++x) {
+    for (int y = cy - 12; y <= cy + 12; ++y) {
+        for (int x = cx - 12; x <= cx + 12; ++x) {
             int dx = x - cx, dy = y - cy;
             if (std::abs(std::abs(dx) - std::abs(dy)) <= 2)
                 guide_pixels_[y * kGuideTexW + x] = mark;
         }
     }
-    blit_guide_text("HOME", 92, 38);
     if (guide_cpu_)
         std::memcpy(guide_cpu_, guide_pixels_.data(), guide_pixels_.size() * 4);
     guide_rasterized_pressed_ = guide_pressed_;
@@ -759,36 +797,42 @@ void DkVideoRenderer::rasterize_quick_menu() {
     };
 
     const uint32_t transparent = 0;
-    const uint32_t panel = rgba(10, 13, 18, 232);
-    const uint32_t surface = rgba(24, 30, 40, 224);
-    const uint32_t edge = rgba(73, 87, 105, 255);
-    const uint32_t accent = rgba(47, 191, 47, 255);
+    const uint32_t panel = rgba(5, 12, 17, 240);
+    const uint32_t surface = rgba(12, 25, 30, 226);
+    const uint32_t edge = rgba(42, 74, 72, 255);
+    const uint32_t accent = rgba(57, 224, 103, 255);
     const uint32_t active = rgba(16, 124, 16, 240);
+    const uint32_t warning = rgba(168, 92, 8, 245);
+    const uint32_t glyph_shadow = rgba(0, 0, 0, 150);
     const uint32_t text = rgba(255, 255, 255, 255);
 
     std::fill(quick_pixels_.begin(), quick_pixels_.end(), transparent);
 
     QuickRect toggle = local(kQuickToggleRect);
-    fill(toggle.x, toggle.y, toggle.w, toggle.h,
-         quick_state_.open ? active : panel);
-    frame(toggle.x, toggle.y, toggle.w, toggle.h, 3, accent);
-    circle(toggle.x + 23, toggle.y + toggle.h / 2, 6, text);
-    circle(toggle.x + 49, toggle.y + toggle.h / 2, 6, text);
+    // Keep the full 72x72 hit target transparent. Only two compact glyph dots
+    // are visible; active state is conveyed by color, never by a square frame.
+    circle(toggle.x + 23, toggle.y + toggle.h / 2 + 2, 9, glyph_shadow);
+    circle(toggle.x + 49, toggle.y + toggle.h / 2 + 2, 9, glyph_shadow);
+    const uint32_t dot = quick_state_.open ? accent : text;
+    circle(toggle.x + 23, toggle.y + toggle.h / 2, 6, dot);
+    circle(toggle.x + 49, toggle.y + toggle.h / 2, 6, dot);
 
     if (quick_state_.open) {
         QuickRect menu = local(kQuickPanelRect);
         fill(menu.x, menu.y, menu.w, menu.h, panel);
         frame(menu.x, menu.y, menu.w, menu.h, 3, accent);
-        blit_quick_text("IMAGE & STATS", menu.x + 20, menu.y + 16);
+        blit_quick_text("STREAM CONTROLS", menu.x + 20, menu.y + 16);
 
         const char* labels[kQuickRowCount] = {
-            "Performance", "Brightness", "Contrast", "Saturation", "Sharpness"};
+            "Performance", "Pacing", "Brightness", "Contrast", "Saturation",
+            "Gamma", "Sharpness"};
+        const char* pacing_labels[3] = {"Steady", "Smooth", "Motion"};
         const char* sharp_labels[4] = {"Off", "Low", "Medium", "High"};
 
         for (int row = 0; row < kQuickRowCount; ++row) {
             QuickRect rr = local(quick_row_rect(row));
             fill(rr.x, rr.y, rr.w, rr.h, surface);
-            frame(rr.x, rr.y, rr.w, rr.h, 2, edge);
+            fill(rr.x + 14, rr.y + rr.h - 1, rr.w - 28, 1, edge);
             blit_quick_text(labels[row], rr.x + 14, rr.y + 12);
 
             if (row == QuickPerformance) {
@@ -811,20 +855,38 @@ void DkVideoRenderer::rasterize_quick_menu() {
             blit_quick_text("+", plus.x + 22, plus.y + 10);
 
             char value[24];
-            if (row == QuickBrightness)
+            if (row == QuickPacing)
+                std::snprintf(value, sizeof(value), "%s",
+                              pacing_labels[quick_state_.pacing]);
+            else if (row == QuickBrightness)
                 std::snprintf(value, sizeof(value), "%+d", quick_state_.brightness);
             else if (row == QuickContrast)
                 std::snprintf(value, sizeof(value), "%d%%", quick_state_.contrast);
             else if (row == QuickSaturation)
                 std::snprintf(value, sizeof(value), "%d%%", quick_state_.saturation);
+            else if (row == QuickGamma)
+                std::snprintf(value, sizeof(value), "%.2f",
+                              quick_state_.gamma / 100.0f);
             else
                 std::snprintf(value, sizeof(value), "%s",
                               sharp_labels[quick_state_.sharpness]);
             blit_quick_text(value, rr.x + 300, rr.y + 12);
         }
 
+        // Motion remains available for testing, but never hide its risk: the
+        // warning is visible before the user taps either pacing arrow.
+        QuickRect warning_box = local({1180, 632, 468, 88});
+        fill(warning_box.x, warning_box.y, warning_box.w, warning_box.h,
+             warning);
+        frame(warning_box.x, warning_box.y, warning_box.w, warning_box.h, 2,
+              quick_state_.pacing == 2 ? accent : edge);
+        blit_quick_text("MOTION: 100% EXPERIMENTAL", warning_box.x + 14,
+                        warning_box.y + 6);
+        blit_quick_text("May cause rapid green flashing", warning_box.x + 14,
+                        warning_box.y + 44);
+
         QuickRect reset = local(kQuickResetRect);
-        fill(reset.x, reset.y, reset.w, reset.h, active);
+        fill(reset.x, reset.y, reset.w, reset.h, surface);
         frame(reset.x, reset.y, reset.w, reset.h, 2, accent);
         blit_quick_text("RESET IMAGE", reset.x + 55, reset.y + 10);
     }
@@ -874,27 +936,38 @@ void DkVideoRenderer::update_hud(AVFrame* frame) {
     if (dt >= freq / 2) {  // recompute FPS over ~0.5 s windows
         fps_ = static_cast<float>(fps_frames_) * static_cast<float>(freq) /
                static_cast<float>(dt);
+        output_fps_ = static_cast<float>(output_frames_) *
+                      static_cast<float>(freq) / static_cast<float>(dt);
+        generated_fps_ = static_cast<float>(generated_frames_) *
+                         static_cast<float>(freq) / static_cast<float>(dt);
         fps_frames_ = 0;
+        output_frames_ = 0;
+        generated_frames_ = 0;
         fps_tick_ = now;
     }
-    char buf[160];
+    char buf[220];
     if (net_valid_.load(std::memory_order_relaxed)) {
         std::snprintf(buf, sizeof(buf),
-                      "%dx%d\n%.0f fps  %.1f Mbps\nloss %.1f%%  buf %dms",
-                      frame->width, frame->height, fps_,
+                      "%dx%d\nsrc %.0f  out %.0f  gen %.0f fps\n"
+                      "%.1f Mbps  loss %.1f%%\nbuf %dms",
+                      frame->width, frame->height, fps_, output_fps_,
+                      generated_fps_,
                       net_mbps_.load(std::memory_order_relaxed),
                       net_loss_.load(std::memory_order_relaxed),
                       net_buffer_ms_.load(std::memory_order_relaxed));
     } else {
-        std::snprintf(buf, sizeof(buf), "%dx%d\n%.0f fps", frame->width,
-                      frame->height, fps_);
+        std::snprintf(buf, sizeof(buf),
+                      "%dx%d\nsrc %.0f  out %.0f  gen %.0f fps",
+                      frame->width, frame->height, fps_, output_fps_,
+                      generated_fps_);
     }
     if (hud_text_cache_ == buf) return;  // unchanged -> keep the current texture
     hud_text_cache_ = buf;
     rasterize_hud();
 }
 
-bool DkVideoRenderer::render(AVFrame* frame) {
+bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
+                             float motion_blend) {
     if (!initialized_) return false;
     maybe_rebuild_swapchain();  // follow dock/undock (720p <-> 1080p)
     if (!swapchain_) return false;
@@ -944,35 +1017,103 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     update_transform(frame);
     FrameMapping* fm = map_frame(frame, base, handle, size);
     if (!fm) return false;
+    // Reaching this point proves that this imported mapping is valid as the
+    // normal video source. Motion may reuse it on a later decoder-pool cycle.
+    fm->primary_ready = true;
 
-    // Recompute HUD stats + re-rasterize the text texture now, while the GPU is
-    // idle (render() ends with waitIdle) and before we record any commands.
-    if (hud_enabled_) update_hud(frame);
+    // Motion mode presents a lightweight midpoint between consecutive decoded
+    // surfaces. It intentionally reuses the same zero-copy mapping path: no CPU
+    // readback and no extra decoded-frame upload are introduced.
+    FrameMapping* motion_fm = nullptr;
+    if (motion_frame && motion_blend > 0.0f &&
+        motion_frame->format == AV_PIX_FMT_NVTEGRA &&
+        motion_frame->width == frame->width &&
+        motion_frame->height == frame->height) {
+        AVNVTegraMap* motion_map = av_nvtegra_frame_get_fbuf_map(motion_frame);
+        if (motion_map && motion_map->is_linear == map->is_linear &&
+            motion_frame->linesize[0] == frame->linesize[0] &&
+            motion_frame->linesize[1] == frame->linesize[1]) {
+            void* motion_base = av_nvtegra_map_get_addr(motion_map);
+            uint32_t motion_handle = av_nvtegra_map_get_handle(motion_map);
+            uint32_t motion_size = av_nvtegra_map_get_size(motion_map);
+            if (motion_base && motion_size) {
+                FrameMapping* candidate =
+                    map_frame(motion_frame, motion_base, motion_handle,
+                              motion_size);
+                if (candidate && candidate != fm && candidate->primary_ready)
+                    motion_fm = candidate;
+            }
+        }
+    }
+    const float blend = motion_fm ? std::clamp(motion_blend, 0.0f, 1.0f) : 0.0f;
+    auto* transform_template = reinterpret_cast<Transformation*>(
+        static_cast<uint8_t*>(data_cpu_) + kUniformTemplateOff);
+    transform_template->motion_data[0] = blend;
+    transform_template->motion_data[1] = motion_fm ? 1.0f : 0.0f;
+    transform_template->motion_data[2] = 0.0f;
+    transform_template->motion_data[3] = 0.0f;
+
+    // Recompute HUD stats before recording this frame. The video path itself is
+    // fully asynchronous; the optional diagnostic texture can tolerate one
+    // frame of overlap while its text changes.
+    if (hud_enabled_) {
+        ++output_frames_;
+        if (motion_fm) ++generated_frames_;
+        update_hud(frame);
+    }
     if (guide_pressed_ != guide_rasterized_pressed_) rasterize_guide();
     if (quick_dirty_) rasterize_quick_menu();
 
     int slot = queue_.acquireImage(swapchain_);
 
+    // Reacquiring a framebuffer slot means every prior command that sampled
+    // that slot's NVDEC surfaces has completed. Release those refs, then pin
+    // the surfaces used by the command list we are about to submit.
+    av_frame_unref(in_flight_frames_[slot]);
+    av_frame_unref(in_flight_motion_frames_[slot]);
+    bool refs_held = av_frame_ref(in_flight_frames_[slot], frame) == 0;
+    if (refs_held && motion_fm)
+        refs_held = av_frame_ref(in_flight_motion_frames_[slot], motion_frame) ==
+                    0;
+
+    const uint32_t uniform_off =
+        kUniformSlotOff + static_cast<uint32_t>(slot) * kUniformSlotStride;
+    std::memcpy(static_cast<uint8_t*>(data_cpu_) + uniform_off,
+                transform_template, sizeof(*transform_template));
+
     cmdbuf_.clear();
-    cmdbuf_.addMemory(cmd_memblock_, 0, kCmdSize);
+    cmdbuf_.addMemory(cmd_memblock_,
+                      static_cast<uint32_t>(slot) * kCmdPerFrameSize,
+                      kCmdPerFrameSize);
+
+    const uint32_t image_off =
+        kImageSlotOff + static_cast<uint32_t>(slot) * kImageSlotStride;
 
     // Write sampler + image descriptors through the command buffer (canonical
     // deko3d path) so the writes are ordered on the GPU timeline before use.
     cmdbuf_.pushData(data_gpu_ + kSamplerOff, &sampler_desc_,
                      sizeof(DkSamplerDescriptor));
-    cmdbuf_.pushData(data_gpu_ + kImageOff, &fm->luma_desc,
+    cmdbuf_.pushData(data_gpu_ + image_off, &fm->luma_desc,
                      sizeof(DkImageDescriptor));
-    cmdbuf_.pushData(data_gpu_ + kImageOff + sizeof(DkImageDescriptor),
+    cmdbuf_.pushData(data_gpu_ + image_off + sizeof(DkImageDescriptor),
                      &fm->chroma_desc, sizeof(DkImageDescriptor));
     // Image descriptor #2 = the HUD text texture (sampled by the overlay pass).
-    cmdbuf_.pushData(data_gpu_ + kImageOff + 2 * sizeof(DkImageDescriptor),
+    cmdbuf_.pushData(data_gpu_ + image_off + 2 * sizeof(DkImageDescriptor),
                      &hud_desc_, sizeof(DkImageDescriptor));
     // Image descriptor #3 = the always-on Xbox Guide/Home touch overlay.
-    cmdbuf_.pushData(data_gpu_ + kImageOff + 3 * sizeof(DkImageDescriptor),
+    cmdbuf_.pushData(data_gpu_ + image_off + 3 * sizeof(DkImageDescriptor),
                      &guide_desc_, sizeof(DkImageDescriptor));
     // Image descriptor #4 = two-dot quick menu handle + optional panel.
-    cmdbuf_.pushData(data_gpu_ + kImageOff + 4 * sizeof(DkImageDescriptor),
+    cmdbuf_.pushData(data_gpu_ + image_off + 4 * sizeof(DkImageDescriptor),
                      &quick_desc_, sizeof(DkImageDescriptor));
+    // Image descriptors #5/#6 = the next decoded frame used by Motion. When
+    // Motion is inactive they alias the current frame, keeping all samplers
+    // valid without requiring a separate shader variant.
+    FrameMapping* next = motion_fm ? motion_fm : fm;
+    cmdbuf_.pushData(data_gpu_ + image_off + 5 * sizeof(DkImageDescriptor),
+                     &next->luma_desc, sizeof(DkImageDescriptor));
+    cmdbuf_.pushData(data_gpu_ + image_off + 6 * sizeof(DkImageDescriptor),
+                     &next->chroma_desc, sizeof(DkImageDescriptor));
 
     dk::ImageView view{framebuffers_[slot]};
     cmdbuf_.bindRenderTargets({&view});
@@ -997,13 +1138,14 @@ bool DkVideoRenderer::render(AVFrame* frame) {
     cmdbuf_.bindDepthStencilState(depth_stencil);
 
     cmdbuf_.bindSamplerDescriptorSet(data_gpu_ + kSamplerOff, 1);
-    cmdbuf_.bindImageDescriptorSet(data_gpu_ + kImageOff, 5);
+    cmdbuf_.bindImageDescriptorSet(data_gpu_ + image_off, 7);
     cmdbuf_.barrier(DkBarrier_None,
                     DkInvalidateFlags_Image | DkInvalidateFlags_Descriptors);
 
     cmdbuf_.bindTextures(DkStage_Fragment, 0,
-                         {dkMakeTextureHandle(0, 0), dkMakeTextureHandle(1, 0)});
-    cmdbuf_.bindUniformBuffer(DkStage_Fragment, 0, data_gpu_ + kUniformOff, 256);
+                         {dkMakeTextureHandle(0, 0), dkMakeTextureHandle(1, 0),
+                          dkMakeTextureHandle(5, 0), dkMakeTextureHandle(6, 0)});
+    cmdbuf_.bindUniformBuffer(DkStage_Fragment, 0, data_gpu_ + uniform_off, 256);
 
     cmdbuf_.bindVtxAttribState(
         {DkVtxAttribState{0, 0, offsetof(Vertex, position), DkVtxAttribSize_3x32,
@@ -1044,7 +1186,10 @@ bool DkVideoRenderer::render(AVFrame* frame) {
 
     queue_.submitCommands(cmdbuf_.finishList());
     queue_.presentImage(swapchain_, slot);
-    queue_.waitIdle();
+    // Allocation failure is exceptionally unlikely, but without our own ref
+    // the caller may recycle the decoder surface as soon as render() returns.
+    // Fall back to the old synchronous safety path for this one frame.
+    if (!refs_held) queue_.waitIdle();
     return true;
 }
 

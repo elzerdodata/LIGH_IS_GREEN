@@ -10,9 +10,9 @@ endif
 
 include $(DEVKITPRO)/libnx/switch_rules
 
-APP_TITLE   := Light_is_Green
+APP_TITLE   := Light is Green
 APP_AUTHOR  := rmrf404 (original) / elzerdodata
-APP_VERSION := 0.3.0-pre
+APP_VERSION := 0.8.0
 APP_ICON    := icon.jpg
 
 TARGET   := Light_is_Green

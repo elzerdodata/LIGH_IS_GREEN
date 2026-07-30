@@ -11,8 +11,11 @@ namespace gnx {
 
 // Stream quality tier, selected via the device fingerprint the GSSV backend
 // uses to pick resolution/bitrate caps (finding from better-xcloud):
-//   android -> 720p, windows -> 1080p, tizen (Samsung TV) -> 1080p high-bitrate.
-enum class QualityTier { P720, P1080, P1080HQ };
+//   android -> 720p; windows -> the most compatible 1080p pool; tizen can
+//   expose a higher TV bitrate but may use a slower allocation pool. v0.6 keeps
+//   the Tizen fingerprint as an explicit experiment instead of using it for
+//   the normal high-bitrate preset.
+enum class QualityTier { P720, P1080, P1080HQ, P1080HQTizen };
 
 enum class SessionState {
     New,
@@ -32,7 +35,7 @@ public:
                 std::string locale = "en-US");
 
     // POST /v5/sessions/cloud/play for a title.
-    void start_cloud(const std::string& title_id);
+    void start_cloud(const std::string& title_id, bool force_region = true);
 
     // POST /v5/sessions/home/play against your own console (remote play).
     // Use with the xhome offering's credentials, not the cloud ones.
@@ -52,7 +55,7 @@ public:
     void connect(const std::string& passport_token);
 
     // Sends our SDP offer, blocks (polling) until the server's answer arrives.
-    std::string exchange_sdp(const std::string& offer_sdp);
+    std::string exchange_sdp(const std::string& offer_sdp, int max_bitrate_kbps = 0);
 
     // candidates: raw "candidate:..." strings; ufrag is our local ice-ufrag.
     void send_ice_candidates(const std::vector<std::string>& candidates,

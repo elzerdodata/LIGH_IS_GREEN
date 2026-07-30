@@ -63,8 +63,18 @@ TierProfile tier_profile(QualityTier tier) {
         case QualityTier::P720: return {1280, 720, 10000, 60};
         case QualityTier::P1080: return {1920, 1080, 20000, 60};
         case QualityTier::P1080HQ: return {1920, 1080, 30000, 60};
+        case QualityTier::P1080HQTizen: return {1920, 1080, 30000, 60};
     }
     return {1920, 1080, 20000, 60};
+}
+
+const char* pacing_name(VideoPacing pacing) {
+    switch (pacing) {
+        case VideoPacing::Steady: return "steady";
+        case VideoPacing::Smooth: return "smooth";
+        case VideoPacing::Motion: return "motion";
+    }
+    return "steady";
 }
 
 // Extract "candidate:..." lines from a local SDP for the /ice POST.
@@ -85,6 +95,18 @@ std::string ufrag_from_sdp(const std::string& sdp) {
     at += std::strlen("a=ice-ufrag:");
     size_t end = sdp.find_first_of("\r\n", at);
     return sdp.substr(at, end - at);
+}
+
+unsigned long candidate_priority(const std::string& candidate) {
+    // candidate:<foundation> <component> <protocol> <priority> ...
+    std::istringstream fields(candidate);
+    std::string token;
+    for (int field = 0; field <= 3; ++field) {
+        if (!(fields >> token)) return 0;
+    }
+    char* end = nullptr;
+    unsigned long priority = std::strtoul(token.c_str(), &end, 10);
+    return end && *end == '\0' ? priority : 0;
 }
 
 }  // namespace
@@ -139,8 +161,19 @@ void Engine::start_home(const std::string& server_id, QualityTier tier,
 void Engine::start_common(const std::string& title_id, QualityTier tier,
                           const std::string& locale) {
     stop();
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        selected_region_.clear();
+    }
     title_id_ = title_id;
     tier_ = tier;
+    // Console Remote Play uses the proven Android fingerprint to create the
+    // session, but can request 1080p media after WebRTC connects. Keep that
+    // experimental request at the conservative 20 Mbps tier.
+    media_tier_ = !home_server_id_.empty() && tier != QualityTier::P720
+                      ? QualityTier::P1080
+                      : tier;
+    home_720_fallback_pending_ = false;
     locale_ = locale;
     {
         std::lock_guard<std::mutex> lock(log_mutex_);
@@ -165,12 +198,12 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
     gnx_peer_log_set([](const char* line) {
         if (g_log_engine) g_log_engine->log(std::string("  peer| ") + line);
     });
-    const char* tier_name = tier == QualityTier::P720      ? "720p/android"
-                            : tier == QualityTier::P1080   ? "1080p/windows"
-                                                           : "1080pHQ/tizen";
-    log("Light_is_Green v" GNX_VERSION " | stream start: " + title_id + " | tier " +
-        tier_name +
-        (pacing_ == VideoPacing::Smooth ? " | pacing smooth" : ""));
+    const char* tier_name = tier == QualityTier::P720        ? "720p/android"
+                            : tier == QualityTier::P1080     ? "1080p/windows"
+                            : tier == QualityTier::P1080HQ   ? "1080pHQ/windows"
+                                                             : "1080pHQ/tizen-experimental";
+    log("Light_is_Green v" GNX_VERSION " | stream start: " + title_id +
+        " | tier " + tier_name + " | pacing " + pacing_name(pacing_));
     quit_ = false;
     got_frame_ = false;
     channels_open_ = false;
@@ -192,6 +225,8 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
 #ifdef __SWITCH__
     shared_frame_ = av_frame_alloc();
     present_frame_ = av_frame_alloc();
+    prev_frame_ = av_frame_alloc();
+    motion_frame_ = av_frame_alloc();
     shared_frame_valid_ = false;
     shared_frame_seq_ = 0;
     last_present_seq_ = 0;
@@ -200,10 +235,11 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
     smooth_refresh_phase_ = 0;
     source_refresh_period_ = 1;
     source_fast_streak_ = source_slow_streak_ = 0;
-    last_decode_ticks_ = 0;
+    last_rtp_timestamp_ = 0;
+    have_rtp_timestamp_ = false;
     pace_new_ = pace_repeat_ = 0;
     pace_hold1_ = pace_hold2_ = pace_hold3_ = pace_hold4p_ = 0;
-    pace_skip_ = 0;
+    pace_skip_ = pace_generated_ = 0;
 #endif
     stream_epoch_ = SDL_GetTicks64();
     thread_ = std::thread(&Engine::worker, this);
@@ -249,6 +285,8 @@ void Engine::stop() {
         std::lock_guard<std::mutex> lock(frame_mutex_);
         if (shared_frame_) av_frame_free(&shared_frame_);
         if (present_frame_) av_frame_free(&present_frame_);
+        if (prev_frame_) av_frame_free(&prev_frame_);
+        if (motion_frame_) av_frame_free(&motion_frame_);
         for (SmoothFrame& queued : smooth_frames_)
             if (queued.frame) av_frame_free(&queued.frame);
         smooth_frames_.clear();
@@ -266,6 +304,11 @@ std::string Engine::status() const {
 std::string Engine::error() const {
     std::lock_guard<std::mutex> lock(status_mutex_);
     return error_;
+}
+
+std::string Engine::selected_region() const {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    return selected_region_;
 }
 
 void Engine::set_status(const std::string& status) {
@@ -313,12 +356,15 @@ void Engine::on_video(uint8_t* data, size_t size, void* user) {
     bool want_keyframe = false;
     self->jitter_.receive(
         data, size, SDL_GetTicks64(),
-        [self](const uint8_t* au, size_t au_size) {
+        [self](const uint8_t* au, size_t au_size, uint32_t rtp_timestamp) {
             {
                 std::lock_guard<std::mutex> lock(self->video_mutex_);
                 if (self->video_queue_.size() >= kMaxQueuedVideo)
                     self->video_queue_.clear();
-                self->video_queue_.emplace_back(au, au + au_size);
+                VideoAccessUnit unit;
+                unit.data.assign(au, au + au_size);
+                unit.rtp_timestamp = rtp_timestamp;
+                self->video_queue_.push_back(std::move(unit));
             }
             self->video_cv_.notify_one();  // wake the decode thread (Switch)
         },
@@ -506,7 +552,7 @@ void Engine::handle_channel_message(uint16_t sid, const char* data,
             // gamepad, then declare client capabilities (our quality lever).
             send_on_channel_locked("control", xcloud::authorization_request());
             send_on_channel_locked("control", xcloud::gamepad_changed(0, true));
-            TierProfile profile = tier_profile(tier_);
+            TierProfile profile = tier_profile(media_tier_);
             for (const std::string& message : xcloud::startup_messages(
                      profile.width, profile.height, profile.bitrate_kbps,
                      profile.fps))
@@ -622,6 +668,14 @@ void Engine::worker() {
         log("fetching streaming credentials");
         StreamingCredentials creds = auth_.fetch_streaming_credentials();
         cloud_ = home ? creds.home : creds.cloud;
+        if (!home) {
+            {
+                std::lock_guard<std::mutex> lock(status_mutex_);
+                selected_region_ = cloud_.selected_region;
+            }
+            log("server region: " + cloud_.selected_region + " | " +
+                cloud_.host);
+        }
         // Without a host every request goes out as a bare path, which curl
         // rejects as a malformed URL -- a useless error for the one thing that
         // actually went wrong: the remote-play login did not come back.
@@ -635,7 +689,8 @@ void Engine::worker() {
             return;
         }
 
-        set_status("Cleaning up old sessions...");
+        set_status(home ? "Preparing Xbox Remote Play route..."
+                        : "Connecting to " + cloud_.selected_region + "...");
         GssvSession::cleanup_stale_sessions(http_, cloud_,
                                             home ? "home" : "cloud");
         log("stale-session cleanup done");
@@ -647,29 +702,54 @@ void Engine::worker() {
         // Cloud gets one retry too: a session can come up with a dead media
         // path (ICE connects, DTLS never answers) -- a fresh session
         // re-rolls that server-side fault.
-        // Registration can take well over a minute on a console that just
-        // came back up, so home gets more tries than a wake-up alone needs.
-        int attempts = home ? 6 : 2;
-        bool registering = false;  // last failure was "still registering"
-        for (int attempt = 0; attempt < attempts && !quit_; ++attempt) {
-            if (attempt > 0) {
-                std::string of = " (attempt " + std::to_string(attempt + 1) +
-                                 " of " + std::to_string(attempts) + ")";
+        // Console readiness and WebRTC transport are independent failure
+        // domains. A slow wake/register cycle must not consume the budget for
+        // fresh ICE/DTLS sessions (the old shared six-attempt counter did).
+        const int max_readiness_retries = home ? 10 : 1;
+        const int max_transport_retries = home ? 8 : 2;
+        int readiness_retries = 0;
+        int transport_retries = 0;
+        int total_attempts = 0;
+        bool registering = false;       // console is still registering
+        bool retrying_transport = false;  // previous session reached WebRTC
+        while (!quit_) {
+            ++total_attempts;
+            if (total_attempts > 1) {
+                int retry_number = retrying_transport ? transport_retries
+                                                       : readiness_retries;
+                int retry_limit = retrying_transport ? max_transport_retries
+                                                      : max_readiness_retries;
+                std::string of = " (retry " + std::to_string(retry_number) +
+                                 " of " + std::to_string(retry_limit) + ")";
                 set_status(registering
                                ? "Your console is still registering..." + of
+                           : retrying_transport
+                               ? "Rebuilding the media connection..." + of
                            : home ? "Waking your console..." + of
-                                  : "Retrying the connection...");
-                // Home consoles need ~5 s to boot streaming. Cloud needs the
-                // dead session's teardown to release the account's slot, or
-                // the fresh request queues in "waiting for resources".
-                for (int i = 0; i < (home ? 50 : 30) && !quit_; ++i)
+                                  : "Retrying the connection..." + of);
+
+                // A stopped xHome session can remain reserved server-side for
+                // several seconds. Progressive backoff gives it time to tear
+                // down before asking the console for another ICE/DTLS route.
+                int wait_seconds = home
+                    ? (retrying_transport
+                           ? std::min(20, 8 + transport_retries * 2)
+                           : std::min(15, 5 + readiness_retries * 2))
+                    : 3;
+                log("retry backoff: " + std::to_string(wait_seconds) +
+                    "s | readiness=" + std::to_string(readiness_retries) +
+                    "/" + std::to_string(max_readiness_retries) +
+                    " transport=" + std::to_string(transport_retries) +
+                    "/" + std::to_string(max_transport_retries));
+                for (int i = 0; i < wait_seconds * 10 && !quit_; ++i)
                     std::this_thread::sleep_for(
                         std::chrono::milliseconds(100));
                 if (quit_) break;
             }
             set_status("Requesting a session...");
-            log("requesting session (attempt " + std::to_string(attempt + 1) +
-                " of " + std::to_string(attempts) + ")");
+            log("requesting session #" + std::to_string(total_attempts) +
+                " | readiness=" + std::to_string(readiness_retries) +
+                " transport=" + std::to_string(transport_retries));
             // Home: the console agent only accepts the android fingerprint
             // (green-vita, the working reference, always sends it) -- the
             // windows/tizen quality-tier fingerprints get AgentCommandError.
@@ -678,7 +758,7 @@ void Engine::worker() {
             if (home)
                 session.start_home(home_server_id_);
             else
-                session.start_cloud(title_id_);
+                session.start_cloud(title_id_, force_region_);
             log("session created, polling state");
 
             set_status("Waiting for a server...");
@@ -739,8 +819,8 @@ void Engine::worker() {
                         session.stop();
                         return;
                     }
-                    // Dead media path: retry with a fresh session; only the
-                    // last attempt surfaces a failure to the user.
+                    // Dead media path: retry with a fresh session; only an
+                    // exhausted transport budget surfaces a final failure.
                     retry_transport = true;
                     break;
                 } else if (state == SessionState::Failed) {
@@ -752,13 +832,34 @@ void Engine::worker() {
             session.stop();
             if (quit_) return;
             if (retry_transport) {
-                if (attempt == attempts - 1) {
-                    fail("The server's media connection never came up");
+                ++transport_retries;
+                bool home_720_fallback = home_720_fallback_pending_;
+                home_720_fallback_pending_ = false;
+
+                // If the experimental offer never even reaches a usable
+                // transport, do not burn every retry at 1080p. The next fresh
+                // xHome session uses the proven 720p profile immediately.
+                if (home && media_tier_ != QualityTier::P720) {
+                    media_tier_ = QualityTier::P720;
+                    home_720_fallback = true;
+                    log("media negotiation failed at 1080p; forcing 720p "
+                        "for all remaining retries");
+                }
+                if (transport_retries > max_transport_retries) {
+                    fail(home
+                         ? "Remote Play could not establish a media path after "
+                           "several fresh sessions. Leave the Xbox on for a "
+                           "minute, then check NAT/IPv6/UDP or restart Remote "
+                           "Features."
+                         : "xCloud could not establish a media path after "
+                           "several fresh sessions.");
                     return;
                 }
-                log("retrying with a fresh session (dead media path)");
+                log(home_720_fallback
+                        ? "retrying Remote Play with 720p stable capabilities"
+                        : "retrying with a fresh session (dead media path)");
                 {
-                    // Dispose of the dead attempt's peer (normally stop()'s
+                    // Dispose of the dead session's peer (normally stop()'s
                     // job) so the next run_peer starts from scratch.
                     std::lock_guard<std::mutex> lock(peer_mutex_);
                     if (peer_) {
@@ -770,7 +871,49 @@ void Engine::worker() {
                 peer_state_ = PEER_CONNECTION_NEW;
                 channels_open_ = false;
                 handshake_done_ = false;
+                server_ended_ = false;
+                last_media_ticks_ = 0;
+                pli_sent_ = 0;
+                video_bytes_ = 0;
+                jitter_.reset();
+                {
+                    std::lock_guard<std::mutex> lock(video_mutex_);
+                    video_queue_.clear();
+                }
+                audio_.shutdown();
+                audio_.init();
+                audio_.set_gain(audio_gain_);
                 state_ = EngineState::StartingSession;  // back to connect UI
+                registering = false;
+                retrying_transport = true;
+
+                // A stale xHome route or short-lived token can survive a few
+                // otherwise fresh sessions. Refresh the endpoint every third
+                // transport failure while retaining the last known-good route
+                // if Xbox's credential service is temporarily unavailable.
+                if (home && transport_retries % 3 == 0) {
+                    set_status("Refreshing the Xbox route...");
+                    try {
+                        StreamingCredentials refreshed =
+                            auth_.fetch_streaming_credentials();
+                        if (!refreshed.home.host.empty()) {
+                            cloud_ = refreshed.home;
+                            log("xhome endpoint credentials refreshed after " +
+                                std::to_string(transport_retries) +
+                                " media failures");
+                        } else {
+                            log("xhome credential refresh returned no host; "
+                                "keeping the previous endpoint");
+                        }
+                        GssvSession::cleanup_stale_sessions(http_, cloud_,
+                                                            "home");
+                        log("stale xhome sessions cleaned during route refresh");
+                    } catch (const std::exception& error) {
+                        log(std::string("xhome route refresh/cleanup failed; "
+                                        "keeping the previous endpoint: ") +
+                            error.what());
+                    }
+                }
                 continue;
             }
             // Both of these mean "the console is not ready yet, ask again":
@@ -778,8 +921,8 @@ void Engine::worker() {
             // WaitingForServerToRegister while that service registers with
             // Microsoft (an awake console that was just rebooted, or one whose
             // remote features were re-enabled, sits there for a while). The
-            // second one used to fall through to a hard failure on the very
-            // first attempt, so remote play looked broken when it only needed
+            // second one used to fall through to a hard failure immediately,
+            // so remote play looked broken when it only needed
             // another try.
             registering = session_error.find("WaitingForServerToRegister") !=
                           std::string::npos;
@@ -787,12 +930,22 @@ void Engine::worker() {
                 registering ||
                 session_error.find("AgentCommandError") != std::string::npos;
             if (session_error.empty()) {
-                fail("Timed out waiting for a session");
-                return;
+                if (!home || ++readiness_retries > max_readiness_retries) {
+                    fail("Timed out waiting for a session");
+                    return;
+                }
+                registering = true;
+                retrying_transport = false;
+                log("xhome session polling timed out; retrying readiness " +
+                    std::to_string(readiness_retries) + "/" +
+                    std::to_string(max_readiness_retries));
+                continue;
             }
-            log("session attempt " + std::to_string(attempt + 1) +
+            log("session #" + std::to_string(total_attempts) +
                 " failed: " + session_error);
-            if (!console_not_ready || attempt == attempts - 1) {
+            if (console_not_ready) ++readiness_retries;
+            if (!console_not_ready ||
+                readiness_retries > max_readiness_retries) {
                 fail(console_not_ready
                          ? "Your console never finished registering for remote "
                            "play. Turn Remote Features off and on, or restart "
@@ -800,6 +953,7 @@ void Engine::worker() {
                          : "Session failed: " + session_error);
                 return;
             }
+            retrying_transport = false;
         }
     } catch (const std::exception& error) {
         fail(error.what());
@@ -823,8 +977,9 @@ bool Engine::run_peer(GssvSession& session) {
         std::lock_guard<std::mutex> lock(peer_mutex_);
         peer_ = peer_connection_create(&config);
         if (!peer_) {
-            fail("Failed to create peer connection");
-            return true;
+            log("peer connection allocation failed; requesting a fresh session");
+            set_status("Media setup failed - retrying...");
+            return false;
         }
         peer_connection_oniceconnectionstatechange(peer_,
                                                    &Engine::on_state_change);
@@ -842,8 +997,9 @@ bool Engine::run_peer(GssvSession& session) {
         offer = peer_connection_create_offer(peer_);
     }
     if (!offer) {
-        fail("Failed to create SDP offer");
-        return true;
+        log("SDP offer creation failed; requesting a fresh session");
+        set_status("Video negotiation failed - retrying...");
+        return false;
     }
     log("local offer created (" + std::to_string(std::strlen(offer)) +
         " bytes)");
@@ -855,13 +1011,22 @@ bool Engine::run_peer(GssvSession& session) {
     std::string munged = sdp_force_stereo(offer);  // no-op safety net
     bool home = !home_server_id_.empty();
     if (home) {
-        // Home offer mirrors green-vita (the working reference) exactly:
-        // 720p caps verbatim and H264 level 3.2 (42e020) instead of 3.1 --
-        // the console agent is stricter than the xCloud servers.
+        // Keep the known-good Remote Play offer at 720p by default. The beta
+        // 1080p path changes only media capabilities after the Android session
+        // was accepted: 8160 macroblocks, 1080p60 throughput and H.264 level
+        // 4.2. If no video arrives, the worker recreates the session at 720p.
+        if (media_tier_ != QualityTier::P720)
+            munged = sdp_scale_video_caps_1080(munged);
         size_t at = munged.find("profile-level-id=42e01f");
-        if (at != std::string::npos) munged.replace(at + 17, 6, "42e020");
+        if (at != std::string::npos)
+            munged.replace(at + 17, 6,
+                           media_tier_ == QualityTier::P720 ? "42e020"
+                                                            : "42e02a");
+        log(std::string("home media request: ") +
+            (media_tier_ == QualityTier::P720 ? "1280x720 stable"
+                                               : "1920x1080 experimental"));
         log("home offer sdp:\n" + munged);
-    } else if (tier_ != QualityTier::P720) {
+    } else if (media_tier_ != QualityTier::P720) {
         // 720p tier ships the template verbatim (proven accepted); 1080p
         // tiers scale the declared decode capability to 1080p60.
         munged = sdp_scale_video_caps_1080(munged);
@@ -871,7 +1036,15 @@ bool Engine::run_peer(GssvSession& session) {
     // CRLF line endings, which would make libpeer parse the ICE ufrag/pwd with
     // a stray '\r' and send STUN checks with a wrong integrity key (silently
     // dropped by the server -> connection never completes).
-    std::string answer = session.exchange_sdp(munged);
+    std::string answer;
+    try {
+        answer = session.exchange_sdp(munged, max_bitrate_kbps_);
+    } catch (const std::exception& error) {
+        log(std::string("SDP exchange failed; requesting a fresh session: ") +
+            error.what());
+        set_status("Xbox signaling failed - retrying...");
+        return false;
+    }
     log("answer received (" + std::to_string(answer.size()) + " bytes)");
     // Dump both SDPs for offline inspection of ICE/setup/codec lines.
     {
@@ -898,8 +1071,13 @@ bool Engine::run_peer(GssvSession& session) {
     // SDP — and libpeer builds candidate pairs exactly once, inside
     // set_remote_description. So collect the server's candidates FIRST.
     std::vector<std::string> remote;
+    bool remote_has_real_candidate = false;
     {
-        Uint64 gather_deadline = SDL_GetTicks64() + 15000;
+        // xHome's useful Teredo/relay candidate can arrive well after the
+        // priority-100 placeholder. Give consoles outside the LAN ten extra
+        // seconds before declaring that no route exists.
+        Uint64 gather_deadline =
+            SDL_GetTicks64() + (home ? 25000 : 15000);
         bool done = false;
         int quiet_polls = 0;
         // xCloud first returns a placeholder front candidate (priority 100 on
@@ -907,20 +1085,8 @@ bool Engine::run_peer(GssvSession& session) {
         // trickle in seconds later. Settling for the placeholder alone makes
         // ICE fail, so keep polling until a real candidate shows up.
         auto has_real_candidate = [&remote]() {
-            for (const std::string& c : remote) {
-                // candidate:<found> <comp> UDP <priority> ...
-                size_t sp = 0;
-                int field = 0;
-                unsigned long prio = 0;
-                std::istringstream ss(c);
-                std::string tok;
-                while (ss >> tok && field < 4) {
-                    if (field == 3) prio = std::strtoul(tok.c_str(), nullptr, 10);
-                    field++;
-                }
-                (void)sp;
-                if (prio > 1000) return true;
-            }
+            for (const std::string& candidate : remote)
+                if (candidate_priority(candidate) > 1000) return true;
             return false;
         };
         while (!quit_ && !done && SDL_GetTicks64() < gather_deadline) {
@@ -940,14 +1106,29 @@ bool Engine::run_peer(GssvSession& session) {
             if (!done)
                 std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
+        remote_has_real_candidate = has_real_candidate();
     }
+    // libpeer checks pairs in insertion order. Put the public/Teredo route
+    // before xHome's priority-100 placeholder so an Internet connection does
+    // not burn several STUN timeouts on a known dead endpoint first.
+    std::stable_sort(remote.begin(), remote.end(),
+                     [](const std::string& a, const std::string& b) {
+                         return candidate_priority(a) > candidate_priority(b);
+                     });
     log("collected " + std::to_string(remote.size()) + " remote candidates");
     for (const std::string& candidate : remote) log("  remote cand: " + candidate);
     for (const std::string& candidate : local_candidates_from_sdp(munged))
         log("  local  cand: " + candidate);
-    if (remote.empty()) {
-        fail("Server sent no ICE candidates");
-        return true;
+    if (remote.empty() || (home && !remote_has_real_candidate)) {
+        log(remote.empty()
+                ? (home
+                       ? "xhome returned no remote ICE candidates; fresh route needed"
+                       : "xCloud returned no remote ICE candidates")
+                : "xhome returned only the non-routable placeholder candidate; "
+                  "fresh route needed");
+        set_status(home ? "No Xbox route yet - retrying..."
+                        : "No server route yet - retrying...");
+        return false;
     }
 
     {
@@ -1069,6 +1250,11 @@ bool Engine::run_peer(GssvSession& session) {
         }
 
         if (peer_state_ == PEER_CONNECTION_FAILED) {
+            if (!got_frame_) {
+                log("WebRTC failed during negotiation; requesting a fresh session");
+                set_status("WebRTC route failed - retrying...");
+                return false;
+            }
             fail("WebRTC connection failed");
             return true;
         }
@@ -1077,6 +1263,11 @@ bool Engine::run_peer(GssvSession& session) {
         // this the loop kept running against a dead peer: the last decoded
         // frame stayed on screen forever and the app never left the stream.
         if (server_ended_) {
+            if (!got_frame_) {
+                log("server ended the session before media started; retrying");
+                set_status("Xbox ended setup early - retrying...");
+                return false;
+            }
             log("session ended by the server -- returning to the library");
             end_session();
             return true;
@@ -1084,21 +1275,47 @@ bool Engine::run_peer(GssvSession& session) {
         // Dead media path: ICE is up (the front-door placeholder answers
         // STUN) but DTLS/SCTP never completes -- the handshake starves on
         // CONN_EOF because nothing behind the front door talks back. Healthy
-        // sessions open their channels ~1-2 s after connecting, so 12 s means
-        // never. Hand the decision to worker(): one fresh session re-rolls
-        // it, instead of grinding out the full 45 s timeout below.
+        // sessions open their channels ~1-2 s after connecting. xHome can be
+        // substantially slower across NAT/Teredo, so Remote Play gets 25 s;
+        // cloud keeps the tighter 12 s window.
         if (!ice_connected_at && (current == PEER_CONNECTION_CONNECTED ||
                                   current == PEER_CONNECTION_COMPLETED))
             ice_connected_at = now;
+        Uint64 dtls_timeout = home ? 25000 : 12000;
         if (ice_connected_at && !channels_open_ &&
-            now - ice_connected_at > 12000) {
+            now - ice_connected_at > dtls_timeout) {
             log("ICE connected but DTLS/SCTP never completed -- dead media path");
+            set_status("Secure media channel stalled - retrying...");
             return false;
         }
+        // The console accepted the Android/xhome session but did not start a
+        // video track for the experimental 1080p capability set. Retry once
+        // with the proven 720p media offer instead of making the user leave
+        // the stream and change Settings manually.
+        if (!home_server_id_.empty() &&
+            media_tier_ != QualityTier::P720 && handshake_done_ &&
+            !got_frame_ && now - negotiation_started > 25000) {
+            log("home 1080p produced no video after 25s; falling back to 720p");
+            set_status("1080p unavailable - retrying at 720p...");
+            media_tier_ = QualityTier::P720;
+            home_720_fallback_pending_ = true;
+            return false;
+        }
+        if (home && media_tier_ == QualityTier::P720 && handshake_done_ &&
+            !got_frame_ && now - negotiation_started > 60000) {
+            log("home 720p handshake completed but no video arrived after "
+                "60s; requesting another fresh session");
+            set_status("Xbox sent no video - retrying...");
+            return false;
+        }
+        Uint64 negotiation_timeout = home ? 75000 : 45000;
         if (state_ == EngineState::Negotiating &&
-            SDL_GetTicks64() - negotiation_started > 45000) {
-            fail("Connection timed out");
-            return true;
+            SDL_GetTicks64() - negotiation_started > negotiation_timeout) {
+            log("negotiation timed out after " +
+                std::to_string(negotiation_timeout / 1000) +
+                "s; requesting a fresh session");
+            set_status("Negotiation timed out - retrying...");
+            return false;
         }
         // Peer gone after it was up: libpeer's consent check timed out (the
         // console dropped off the network or was switched off without telling
@@ -1106,6 +1323,11 @@ bool Engine::run_peer(GssvSession& session) {
         // zero value, so an unconnected peer must not trip this.
         if (ice_connected_at && (current == PEER_CONNECTION_CLOSED ||
                                  current == PEER_CONNECTION_DISCONNECTED)) {
+            if (!got_frame_) {
+                log("peer disconnected before media started; retrying");
+                set_status("Xbox media route disconnected - retrying...");
+                return false;
+            }
             fail("Connection to the console was lost");
             return true;
         }
@@ -1165,7 +1387,8 @@ bool Engine::run_peer(GssvSession& session) {
                             peer_, fraction, cumulative, highest_ext, 0);
                         peer_connection_send_remb(
                             peer_,
-                            static_cast<uint32_t>(tier_profile(tier_).bitrate_kbps) *
+                            static_cast<uint32_t>(
+                                tier_profile(media_tier_).bitrate_kbps) *
                                 1000u);
                     }
                 }
@@ -1203,6 +1426,19 @@ bool Engine::run_peer(GssvSession& session) {
             prev_audio_time = now;
             last_audio_stats = now;
             if (got_frame_) {
+                size_t decode_q;
+                {
+                    std::lock_guard<std::mutex> lock(video_mutex_);
+                    decode_q = video_queue_.size();
+                }
+                const auto video_stats = jitter_.stats();
+                log("video| pkt=" + std::to_string(video_stats.packets) +
+                    " frame=" + std::to_string(video_stats.frames) +
+                    " drop=" + std::to_string(video_stats.dropped) +
+                    " nack=" + std::to_string(video_stats.nacks) +
+                    " resync=" + std::to_string(video_stats.resyncs) +
+                    " au=" + std::to_string(video_stats.last_frame_bytes) +
+                    "B decodeq=" + std::to_string(decode_q));
                 log("audio| rx=" + std::to_string(a.received) +
                     " play=" + std::to_string(a.played) +
                     " fail=" + std::to_string(a.failed) +
@@ -1224,6 +1460,8 @@ bool Engine::run_peer(GssvSession& session) {
                     smooth_q = smooth_frames_.size();
                 }
                 log("pace| new=" + std::to_string(pace_new_.exchange(0)) +
+                    " gen=" +
+                    std::to_string(pace_generated_.exchange(0)) +
                     " rep=" + std::to_string(pace_repeat_.exchange(0)) +
                     " hold=" + std::to_string(pace_hold1_.exchange(0)) + "/" +
                     std::to_string(pace_hold2_.exchange(0)) + "/" +
@@ -1264,7 +1502,7 @@ bool Engine::run_peer(GssvSession& session) {
 // never skipped at decode time.
 void Engine::decode_loop() {
     while (!quit_) {
-        std::vector<uint8_t> unit;
+        VideoAccessUnit unit;
         {
             std::unique_lock<std::mutex> lock(video_mutex_);
             video_cv_.wait_for(lock, std::chrono::milliseconds(20), [this] {
@@ -1275,33 +1513,37 @@ void Engine::decode_loop() {
             unit = std::move(video_queue_.front());
             video_queue_.pop_front();
         }
-        if (video_.decode(unit.data(), unit.size())) {
-            // Detect the source cadence from decode spacing: ~16 ms gaps mean
-            // a 60 fps stream (present every refresh), ~33 ms mean 30 fps
-            // (present every other refresh). Streaks of 8 debounce the flips
-            // xCloud makes mid-stream. Only Smooth pacing consumes this.
-            Uint64 decoded_at = SDL_GetTicks64();
-            if (last_decode_ticks_) {
-                Uint64 gap = decoded_at - last_decode_ticks_;
-                if (gap < 25) {
+        if (video_.decode(unit.data.data(), unit.data.size())) {
+            // H.264's RTP clock is fixed at 90 kHz: a frame delta is ~1500
+            // ticks at 60 fps and ~3000 at 30 fps. Unlike packet arrival or
+            // decode spacing, this value is not distorted when Wi-Fi delivers
+            // several frames as a burst. Streaks debounce real source changes.
+            if (have_rtp_timestamp_) {
+                const uint32_t delta = unit.rtp_timestamp - last_rtp_timestamp_;
+                if (delta >= 900 && delta <= 2200) {
                     ++source_fast_streak_;
                     source_slow_streak_ = 0;
                     if (source_fast_streak_ >= 8)
                         source_refresh_period_.store(1,
                                                      std::memory_order_relaxed);
-                } else if (gap < 55) {
+                } else if (delta > 2200 && delta <= 4200) {
                     ++source_slow_streak_;
                     source_fast_streak_ = 0;
                     if (source_slow_streak_ >= 8)
                         source_refresh_period_.store(2,
                                                      std::memory_order_relaxed);
+                } else {
+                    // A source pause, timestamp discontinuity, or skipped
+                    // encoder frame is not evidence of a cadence switch.
+                    source_fast_streak_ = source_slow_streak_ = 0;
                 }
             }
-            last_decode_ticks_ = decoded_at;
+            last_rtp_timestamp_ = unit.rtp_timestamp;
+            have_rtp_timestamp_ = true;
             {
                 std::lock_guard<std::mutex> lock(frame_mutex_);
                 ++shared_frame_seq_;
-                if (pacing_ == VideoPacing::Smooth) {
+                if (pacing_ != VideoPacing::Steady) {
                     // Source order, not newest-wins: the clone refs the same
                     // NVTEGRA surface, so the hard cap below is what keeps the
                     // decoder's surface pool from starving.
@@ -1355,19 +1597,41 @@ SDL_Texture* Engine::pump_video() {
     double now = static_cast<double>(SDL_GetPerformanceCounter());
     if (dk_video_.initialized() && got_frame_ && now >= next_present_counter_) {
         AVFrame* frame = nullptr;
+        AVFrame* motion_frame = nullptr;
+        float motion_blend = 0.0f;
         uint64_t frame_seq = 0;
         {
             std::lock_guard<std::mutex> lock(frame_mutex_);
-            if (pacing_ == VideoPacing::Smooth) {
+            if (motion_frame_) av_frame_unref(motion_frame_);
+            if (pacing_ != VideoPacing::Steady) {
                 uint32_t period =
-                    source_refresh_period_.load(std::memory_order_relaxed);
+                    (pacing_ == VideoPacing::Motion)
+                        ? 2
+                        : source_refresh_period_.load(std::memory_order_relaxed);
                 bool due = !smooth_have_present_ ||
                            ++smooth_refresh_phase_ >= period;
                 // >= 2 keeps one decoded frame in reserve so a late arrival
-                // becomes a queue dip, not a visible repeat.
+                // becomes a queue dip, not a visible repeat. If a network
+                // burst left more than that reserve behind, discard one stale
+                // presentation frame now; otherwise the extra latency would
+                // remain for the rest of the session because source and panel
+                // normally advance at the same average rate.
                 if (due && smooth_frames_.size() >= 2) {
+                    if (smooth_frames_.size() >= 3) {
+                        SmoothFrame stale = smooth_frames_.front();
+                        smooth_frames_.pop_front();
+                        if (stale.frame) av_frame_free(&stale.frame);
+                        pace_skip_.fetch_add(1, std::memory_order_relaxed);
+                    }
                     SmoothFrame next = smooth_frames_.front();
                     smooth_frames_.pop_front();
+
+                    // Shift present_frame_ into prev_frame_ (both are fully rendered/flushed primary frames)
+                    if (prev_frame_) av_frame_unref(prev_frame_);
+                    if (present_frame_ && present_frame_->data[0]) {
+                        av_frame_move_ref(prev_frame_, present_frame_);
+                    }
+
                     av_frame_unref(present_frame_);
                     av_frame_move_ref(present_frame_, next.frame);
                     av_frame_free(&next.frame);
@@ -1377,7 +1641,22 @@ SDL_Texture* Engine::pump_video() {
                 } else if (smooth_have_present_) {
                     frame_seq = last_present_seq_;  // hold the current frame
                 }
-                if (smooth_have_present_) frame = present_frame_;
+
+                if (pacing_ == VideoPacing::Motion && smooth_have_present_) {
+                    if (prev_frame_ && prev_frame_->data[0] && present_frame_ && present_frame_->data[0]) {
+                        frame = prev_frame_;
+                        if (smooth_refresh_phase_ == 1) {
+                            if (motion_frame_ && av_frame_ref(motion_frame_, present_frame_) == 0) {
+                                motion_frame = motion_frame_;
+                                motion_blend = 0.5f;
+                            }
+                        }
+                    } else {
+                        frame = present_frame_;
+                    }
+                } else if (smooth_have_present_) {
+                    frame = present_frame_;
+                }
             } else if (shared_frame_valid_) {
                 av_frame_unref(present_frame_);
                 if (av_frame_ref(present_frame_, shared_frame_) == 0)
@@ -1407,11 +1686,14 @@ SDL_Texture* Engine::pump_video() {
                 }
                 last_present_seq_ = frame_seq;
                 present_hold_refreshes_ = 1;
+            } else if (motion_frame) {
+                pace_generated_.fetch_add(1, std::memory_order_relaxed);
+                ++present_hold_refreshes_;
             } else {
                 pace_repeat_.fetch_add(1, std::memory_order_relaxed);
                 ++present_hold_refreshes_;
             }
-            dk_video_.render(frame);
+            dk_video_.render(frame, motion_frame, motion_blend);
         }
         next_present_counter_ += interval;
         if (next_present_counter_ < now)
@@ -1422,14 +1704,14 @@ SDL_Texture* Engine::pump_video() {
     // PC: no decode thread (SDL texture upload must stay on this render thread),
     // so decode inline and hand back the SDL texture.
     for (;;) {
-        std::vector<uint8_t> unit;
+        VideoAccessUnit unit;
         {
             std::lock_guard<std::mutex> lock(video_mutex_);
             if (video_queue_.empty()) break;
             unit = std::move(video_queue_.front());
             video_queue_.pop_front();
         }
-        if (video_.decode(unit.data(), unit.size()) && !got_frame_) {
+        if (video_.decode(unit.data.data(), unit.data.size()) && !got_frame_) {
             got_frame_ = true;
             state_ = EngineState::Streaming;
         }
@@ -1452,10 +1734,55 @@ bool Engine::begin_deko_output() {
 }
 
 void Engine::set_quick_menu_state(const QuickMenuState& state) {
-    quick_menu_state_ = normalized_quick_menu(state);
+    QuickMenuState next = normalized_quick_menu(state);
+    set_pacing(static_cast<VideoPacing>(next.pacing));
+    quick_menu_state_ = next;
 #ifdef __SWITCH__
     dk_video_.set_quick_menu_state(quick_menu_state_);
 #endif
+}
+
+void Engine::set_pacing(VideoPacing pacing) {
+    if (pacing != VideoPacing::Steady && pacing != VideoPacing::Smooth &&
+        pacing != VideoPacing::Motion)
+        pacing = VideoPacing::Steady;
+#ifdef __SWITCH__
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    if (pacing_ == pacing) return;
+
+    // Preserve the frame currently on screen, but release every queued or
+    // generated surface owned by the old mode. This is especially important
+    // when leaving Motion: retaining its second NVDEC surface can make the next
+    // shader pass sample a recycled buffer and flash green.
+    if (prev_frame_) av_frame_unref(prev_frame_);
+    if (motion_frame_) av_frame_unref(motion_frame_);
+    for (SmoothFrame& queued : smooth_frames_)
+        if (queued.frame) av_frame_free(&queued.frame);
+    smooth_frames_.clear();
+    smooth_refresh_phase_ = 0;
+
+    if (pacing == VideoPacing::Steady) {
+        shared_frame_valid_ = false;
+        if (shared_frame_) av_frame_unref(shared_frame_);
+        if (shared_frame_ && present_frame_ && present_frame_->data[0] &&
+            av_frame_ref(shared_frame_, present_frame_) == 0) {
+            shared_frame_valid_ = true;
+            shared_frame_seq_ = last_present_seq_;
+        }
+        smooth_have_present_ = false;
+    } else {
+        // Smooth/Motion may keep displaying the stable current frame while the
+        // decode thread builds a fresh two-frame reserve for the new mode.
+        smooth_have_present_ =
+            present_frame_ && present_frame_->data[0] != nullptr;
+        if (shared_frame_) av_frame_unref(shared_frame_);
+        shared_frame_valid_ = false;
+    }
+    pacing_ = pacing;
+#else
+    pacing_ = pacing;
+#endif
+    log(std::string("pacing changed live: ") + pacing_name(pacing));
 }
 
 void Engine::set_sharpness(int level) {

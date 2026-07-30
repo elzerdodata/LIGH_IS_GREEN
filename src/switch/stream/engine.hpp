@@ -45,7 +45,9 @@ enum class EngineState {
 //   Smooth: keep one decoded frame in reserve and present in source order on
 //           a detected 30/60 Hz cadence -- steadier motion at the cost of
 //           about one source frame (~33 ms at 30 fps) of extra latency.
-enum class VideoPacing { Steady = 0, Smooth = 1 };
+//   Motion: Smooth plus a generated midpoint between adjacent 30 fps source
+//           frames. This is image interpolation, not game-engine motion data.
+enum class VideoPacing { Steady = 0, Smooth = 1, Motion = 2 };
 
 // Native xCloud streaming session: GSSV signaling + libpeer WebRTC +
 // NVDEC/SDL video + Opus audio + gamepad input channel.
@@ -71,9 +73,10 @@ public:
     // from the "volume" setting before each stream start; 1.0 = unchanged.
     void set_audio_gain(float gain) { audio_gain_ = gain; }
 
-    // Video pacing mode (see VideoPacing). Set from the "smooth" setting
-    // before each stream start; default Steady.
-    void set_pacing(VideoPacing pacing) { pacing_ = pacing; }
+    // Video pacing mode (see VideoPacing). Safe before startup and while a
+    // stream is running; a live change releases queued/interpolation surfaces
+    // before the next present so old-mode frames can never leak across modes.
+    void set_pacing(VideoPacing pacing);
 
     // In-stream performance/picture quick menu. The state is retained before
     // startup and can also be changed live while deko3d owns the display.
@@ -86,6 +89,9 @@ public:
     EngineState state() const { return state_; }
     std::string status() const;
     std::string error() const;
+    // Actual region selected by Xbox after streaming login. Empty while login
+    // is still pending and for the xHome Remote Play path.
+    std::string selected_region() const;
 
     // Render-thread pump: decodes queued video. On Switch it presents each
     // frame through the deko3d renderer (returns nullptr); on PC it returns the
@@ -158,16 +164,27 @@ private:
     mutable std::mutex status_mutex_;
     std::string status_;
     std::string error_;
+    std::string selected_region_;
 
     EndpointCredentials cloud_;
     std::string title_id_;
     std::string home_server_id_;  // non-empty selects the home (xhome) path
     QualityTier tier_ = QualityTier::P1080HQ;
+    // The media request may fall back independently of the user's saved tier.
+    // Remote Play always starts with an Android session fingerprint, while
+    // media_tier_ controls the capabilities announced after connection.
+    QualityTier media_tier_ = QualityTier::P1080HQ;
+    bool home_720_fallback_pending_ = false;  // worker thread only
     std::string locale_ = "en-US";  // streamed console's system language
     float audio_gain_ = 1.0f;       // forwarded to AudioPlayer::set_gain
     VideoPacing pacing_ = VideoPacing::Steady;  // set before start()
+    bool force_region_ = true;
+    int max_bitrate_kbps_ = 0;
     QuickMenuState quick_menu_state_;
+
 public:
+    void set_force_region(bool force) { force_region_ = force; }
+    void set_max_bitrate_kbps(int kbps) { max_bitrate_kbps_ = kbps; }
     void log(const std::string& line);  // also used by the libpeer log sink
 
 private:
@@ -195,7 +212,11 @@ private:
     AudioPlayer audio_;
     std::mutex video_mutex_;
     std::condition_variable video_cv_;  // wakes decode_loop when an AU arrives
-    std::deque<std::vector<uint8_t>> video_queue_;
+    struct VideoAccessUnit {
+        std::vector<uint8_t> data;
+        uint32_t rtp_timestamp = 0;  // H.264 90 kHz clock, decode-order frame ts
+    };
+    std::deque<VideoAccessUnit> video_queue_;
     std::atomic<bool> got_frame_{false};
     std::atomic<uint64_t> video_bytes_{0};  // RTP video bytes rx (HUD bitrate)
 
@@ -207,6 +228,8 @@ private:
     std::mutex frame_mutex_;
     AVFrame* shared_frame_ = nullptr;   // latest decoded (decode thread writes)
     AVFrame* present_frame_ = nullptr;  // render thread's stable ref
+    AVFrame* prev_frame_ = nullptr;     // previous presented frame for safe motion blending
+    AVFrame* motion_frame_ = nullptr;   // next/current source frame for midpoint pass
     bool shared_frame_valid_ = false;
     uint64_t shared_frame_seq_ = 0;     // protected by frame_mutex_
 
@@ -225,7 +248,8 @@ private:
     std::atomic<uint32_t> source_refresh_period_{1};  // 1=60fps, 2=30fps
     uint32_t source_fast_streak_ = 0;  // decode thread only
     uint32_t source_slow_streak_ = 0;  // decode thread only
-    Uint64 last_decode_ticks_ = 0;     // decode thread only
+    uint32_t last_rtp_timestamp_ = 0;  // decode thread only
+    bool have_rtp_timestamp_ = false;  // decode thread only
 
     // Pacing telemetry, logged once per second from run_peer (pace| line):
     // new/repeated presents, how many refreshes each frame stayed up, and
@@ -236,6 +260,7 @@ private:
     std::atomic<uint32_t> pace_hold1_{0}, pace_hold2_{0};
     std::atomic<uint32_t> pace_hold3_{0}, pace_hold4p_{0};
     std::atomic<uint32_t> pace_skip_{0};
+    std::atomic<uint32_t> pace_generated_{0};
 
     xcloud::InputSerializer input_;
     std::mutex input_mutex_;

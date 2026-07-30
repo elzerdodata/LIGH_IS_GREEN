@@ -36,6 +36,10 @@
 using nlohmann::json;
 using namespace gnx;
 
+#ifndef GNX_VERSION
+#define GNX_VERSION "dev"
+#endif
+
 namespace {
 
 #ifdef __SWITCH__
@@ -274,25 +278,37 @@ struct SwitchRumble {
 #endif
 
 struct Settings {
-    int quality = 2;    // 0=720p, 1=1080p, 2=1080p HQ
+    int quality = 2;    // 0=720p, 1=1080p, 2=HQ Windows, 3=HQ Tizen test
     int mapping = 0;    // 0=positional, 1=match labels
     int vibration = 2;  // rumble intensity: 0=Off, 1=Low, 2=Medium, 3=High
     int region = 0;     // region-bypass IP: 0=Off, else index into kRegion*
+    // Empty = Xbox automatic. Otherwise the stable region.name returned by
+    // offeringSettings.regions, e.g. "ChileCentral" or "BrazilSouth".
+    std::string server_region;
+    int force_region = 1; // 0=Off (Allow Fallback), 1=On (Strict Selected Region Only)
+    int max_bitrate = 0;  // 0=Auto, 1=7Mbps, 2=14Mbps, 3=20Mbps, 4=30Mbps
     int language = 0;   // index into kLanguage* (0 = English US)
     int source = 0;     // 0=ask every time, 1=xCloud, 2=your Xbox
     float volume = 1.0f;  // output gain for streamed audio (0.5-4.0); tune in settings.json
-    // Smooth video pacing: steadier motion for about one source frame of
-    // extra latency ("Video pacing" row / "smooth" in settings.json).
-    bool smooth = false;
+    // Presentation pacing: 0=Steady (lowest latency), 1=Smooth (one-frame
+    // reserve), 2=Motion (30->60 cross-frame interpolation, experimental).
+    int pacing = 0;
+    // Remote Play media request. The session fingerprint stays on the proven
+    // Android path; this only changes the post-connect video capabilities.
+    int console_quality = 0;  // 0=720p stable, 1=1080p experimental
     int brightness = 0;    // post-process offset: -20..+20
     int contrast = 100;    // post-process multiplier: 70..130 percent
     int saturation = 100;  // post-process multiplier: 0..150 percent
+    int gamma = 100;       // midtone curve: 50..200 percent; 100 = 1.00
     int sharpness = 0;  // luma sharpening: 0=Off, 1=Low, 2=Medium, 3=High
     int debug_hud = 0;  // 0=off, 1=on: on-screen debug overlay while streaming
 };
 
 constexpr int kLanguageCount = 14;
 constexpr int kVibrationLevels = 4;
+constexpr int kQualityLevels = 4;
+constexpr int kPacingLevels = 3;
+constexpr int kConsoleQualityLevels = 2;
 
 Settings load_settings();
 void save_settings(const Settings& settings);
@@ -371,6 +387,7 @@ struct App {
     std::vector<int> visible;  // indices into games for the active tab + search
     std::string query;
     int cursor = 0;
+    Uint32 library_focus_started = 0;  // v0.5 card-selection motion
     LibraryTab tab = LibraryTab::All;
     std::vector<std::string> favorites;  // title_ids, marked by the user
     std::vector<std::string> history;    // title_ids, most-recent first
@@ -387,6 +404,7 @@ struct App {
     int detail_index = -1;   // games[] index shown in Scene::Detail
     int detail_cursor = 0;   // 0 = Play, 1 = favorite, 2 = Play on... (if any)
     std::vector<HomeConsole> consoles;  // linked Xboxes; empty = hide feature
+    std::vector<ServerRegion> server_regions;  // live xCloud datacenters
     bool launching_home = false;        // what the current stream targets
     int console_cursor = 0;             // selected console (list + launches)
     int pick_cursor = 0;                // SourcePicker: 0 xCloud, 1 your Xbox
@@ -413,7 +431,8 @@ Settings load_settings() {
     if (!in) return settings;
     json data = json::parse(in, nullptr, false);
     if (data.is_discarded()) return settings;
-    settings.quality = std::clamp(data.value("quality", 2), 0, 2);
+    settings.quality =
+        std::clamp(data.value("quality", 2), 0, kQualityLevels - 1);
     settings.mapping = std::clamp(data.value("mapping", 0), 0, 1);
     // "vibration" was an on/off bool before intensity levels existed; migrate.
     if (data.contains("vibration") && data["vibration"].is_boolean())
@@ -422,14 +441,27 @@ Settings load_settings() {
         settings.vibration =
             std::clamp(data.value("vibration", 2), 0, kVibrationLevels - 1);
     settings.region = std::clamp(data.value("region", 0), 0, 5);
+    settings.server_region = data.value("server_region", "");
+    settings.force_region = std::clamp(data.value("force_region", 1), 0, 1);
+    settings.max_bitrate = std::clamp(data.value("max_bitrate", 0), 0, 4);
     settings.language =
         std::clamp(data.value("language", 0), 0, kLanguageCount - 1);
     settings.source = std::clamp(data.value("source", 0), 0, 2);
     settings.volume = std::clamp(data.value("volume", 1.0f), 0.5f, 4.0f);
-    settings.smooth = data.value("smooth", false);
+    // v0.6 stored a bool named "smooth". Prefer the new three-state value,
+    // but migrate the old key so users keep their existing choice.
+    if (data.contains("pacing"))
+        settings.pacing =
+            std::clamp(data.value("pacing", 0), 0, kPacingLevels - 1);
+    else
+        settings.pacing = data.value("smooth", false) ? 1 : 0;
+    // Motion mode setting is preserved if set by the user.
+    settings.console_quality = std::clamp(
+        data.value("console_quality", 0), 0, kConsoleQualityLevels - 1);
     settings.brightness = std::clamp(data.value("brightness", 0), -20, 20);
     settings.contrast = std::clamp(data.value("contrast", 100), 70, 130);
     settings.saturation = std::clamp(data.value("saturation", 100), 0, 150);
+    settings.gamma = std::clamp(data.value("gamma", 100), 50, 200);
     settings.sharpness = std::clamp(data.value("sharpness", 0), 0, 3);
     settings.debug_hud = std::clamp(data.value("debug_hud", 0), 0, 1);
     return settings;
@@ -441,13 +473,21 @@ void save_settings(const Settings& settings) {
                 {"mapping", settings.mapping},
                 {"vibration", settings.vibration},
                 {"region", settings.region},
+                {"server_region", settings.server_region},
+                {"force_region", settings.force_region},
+                {"max_bitrate", settings.max_bitrate},
                 {"language", settings.language},
                 {"source", settings.source},
                 {"volume", settings.volume},
-                {"smooth", settings.smooth},
+                {"pacing", settings.pacing},
+                // Keep the legacy key so switching back to stable v0.6 does
+                // not silently reset Smooth/Motion to Steady.
+                {"smooth", settings.pacing != 0},
+                {"console_quality", settings.console_quality},
                 {"brightness", settings.brightness},
                 {"contrast", settings.contrast},
                 {"saturation", settings.saturation},
+                {"gamma", settings.gamma},
                 {"sharpness", settings.sharpness},
                 {"debug_hud", settings.debug_hud}}.dump(2);
 }
@@ -480,13 +520,205 @@ const char* kRegionIps[6] = {"", "143.244.47.65", "169.150.198.66",
                              "138.199.21.239", "121.125.60.151",
                              "45.134.212.66"};
 
+std::string normalized_server_region(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (unsigned char ch : value)
+        if (std::isalnum(ch))
+            out.push_back(static_cast<char>(std::toupper(ch)));
+    return out;
+}
+
 void apply_region(const Settings& settings) {
-    Http::set_forwarded_for(kRegionIps[std::clamp(settings.region, 0, 5)]);
+    if (settings.region > 0 && settings.region < 6) {
+        Http::set_forwarded_for(kRegionIps[settings.region]);
+    } else if (!settings.server_region.empty()) {
+        std::string key = normalized_server_region(settings.server_region);
+        if (key.find("US") != std::string::npos) {
+            Http::set_forwarded_for(kRegionIps[1]);  // United States
+        } else if (key.find("BRAZIL") != std::string::npos || key.find("CHILE") != std::string::npos || key.find("ARGENTINA") != std::string::npos) {
+            Http::set_forwarded_for(kRegionIps[2]);  // South America / Brazil
+        } else if (key.find("JAPAN") != std::string::npos) {
+            Http::set_forwarded_for(kRegionIps[3]);  // Japan
+        } else if (key.find("KOREA") != std::string::npos) {
+            Http::set_forwarded_for(kRegionIps[4]);  // Korea
+        } else if (key.find("EUROPE") != std::string::npos || key.find("UK") != std::string::npos || key.find("SWEDEN") != std::string::npos || key.find("GERMANY") != std::string::npos || key.find("POLAND") != std::string::npos) {
+            Http::set_forwarded_for(kRegionIps[5]);  // Europe / Poland
+        } else {
+            Http::set_forwarded_for("");
+        }
+    } else {
+        Http::set_forwarded_for("");
+    }
+}
+
+std::string pretty_server_region(const std::string& name) {
+    struct KnownRegion {
+        const char* id;
+        const char* country;
+        const char* label;
+    };
+    static const KnownRegion known[] = {
+        {"EASTUS", "US", "East US"},
+        {"EASTUS2", "US", "East US 2"},
+        {"NORTHCENTRALUS", "US", "North Central US"},
+        {"SOUTHCENTRALUS", "US", "South Central US"},
+        {"WESTUS", "US", "West US"},
+        {"WESTUS2", "US", "West US 2"},
+        {"WESTUS3", "US", "West US 3"},
+        {"MEXICOCENTRAL", "MX", "Mexico Central"},
+        {"BRAZILSOUTH", "BR", "Brazil South"},
+        {"CHILECENTRAL", "CL", "Chile Central"},
+        {"JAPANEAST", "JP", "Japan East"},
+        {"KOREACENTRAL", "KR", "Korea Central"},
+        {"CENTRALINDIA", "IN", "Central India"},
+        {"SOUTHINDIA", "IN", "South India"},
+        {"AUSTRALIAEAST", "AU", "Australia East"},
+        {"AUSTRALIASOUTHEAST", "AU", "Australia Southeast"},
+        {"SWEDENCENTRAL", "SE", "Sweden Central"},
+        {"UKSOUTH", "GB", "UK South"},
+        {"WESTEUROPE", "NL", "West Europe"},
+    };
+    std::string key = normalized_server_region(name);
+    for (const KnownRegion& region : known)
+        if (key == region.id)
+            return std::string(region.country) + " · " + region.label;
+
+    // Future Xbox regions still remain readable without waiting for an app
+    // update: turn CamelCase into words and keep the stable name as a fallback.
+    std::string label;
+    for (size_t i = 0; i < name.size(); ++i) {
+        unsigned char ch = static_cast<unsigned char>(name[i]);
+        if (i > 0 && std::isupper(ch) &&
+            std::islower(static_cast<unsigned char>(name[i - 1])))
+            label.push_back(' ');
+        label.push_back(static_cast<char>(ch));
+    }
+    return label.empty() ? "Unknown region" : label;
+}
+
+std::string server_host_code(const std::string& base_uri) {
+    size_t start = base_uri.find("://");
+    start = start == std::string::npos ? 0 : start + 3;
+    size_t end = base_uri.find('.', start);
+    if (end == std::string::npos || end <= start) return "";
+    std::string code = base_uri.substr(start, end - start);
+    for (char& ch : code)
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    return code;
+}
+
+std::string server_region_label(const ServerRegion& region) {
+    std::string label = pretty_server_region(region.name);
+    std::string host = server_host_code(region.base_uri);
+    if (host.empty()) {
+        if (normalized_server_region(region.name) == "CHILECENTRAL") host = "CLC";
+        else if (normalized_server_region(region.name) == "BRAZILSOUTH")
+            host = "BRS";
+    }
+    return host.empty() ? label : host + " · " + label;
+}
+
+std::vector<ServerRegion> load_server_regions() {
+    std::ifstream in(data_path("server-regions.json"));
+    if (!in) return {};
+    json data = json::parse(in, nullptr, false);
+    if (!data.is_array()) return {};
+
+    std::vector<ServerRegion> regions;
+    for (const json& item : data) {
+        ServerRegion region;
+        region.name = item.value("name", "");
+        region.base_uri = item.value("base_uri", "");
+        region.is_default = item.value("is_default", false);
+        if (!region.name.empty()) regions.push_back(std::move(region));
+    }
+    return regions;
+}
+
+void save_server_regions(const std::vector<ServerRegion>& regions) {
+    json data = json::array();
+    for (const ServerRegion& region : regions)
+        data.push_back({{"name", region.name},
+                        {"base_uri", region.base_uri},
+                        {"is_default", region.is_default}});
+    std::ofstream out(data_path("server-regions.json"), std::ios::trunc);
+    out << data.dump(2);
+}
+
+bool same_server_regions(const std::vector<ServerRegion>& left,
+                         const std::vector<ServerRegion>& right) {
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); ++i)
+        if (left[i].name != right[i].name ||
+            left[i].base_uri != right[i].base_uri ||
+            left[i].is_default != right[i].is_default)
+            return false;
+    return true;
+}
+
+void sync_server_regions(App& app) {
+    std::vector<ServerRegion> live = app.auth->available_cloud_regions();
+    if (live.empty() || same_server_regions(live, app.server_regions)) return;
+    app.server_regions = std::move(live);
+    save_server_regions(app.server_regions);
+}
+
+std::vector<ServerRegion> server_region_choices(const App& app) {
+    // Keep the two useful South-American choices visible even before the first
+    // online refresh. Their endpoints are never guessed: the auth response
+    // still has to contain the matching stable name before it can be selected.
+    std::vector<ServerRegion> choices = {
+        {"ChileCentral", "", false}, {"BrazilSouth", "", false}};
+    auto merge = [&choices](const ServerRegion& incoming) {
+        const std::string key = normalized_server_region(incoming.name);
+        for (ServerRegion& existing : choices)
+            if (normalized_server_region(existing.name) == key) {
+                if (!incoming.base_uri.empty()) existing = incoming;
+                return;
+            }
+        choices.push_back(incoming);
+    };
+    for (const ServerRegion& region : app.server_regions) merge(region);
+    if (!app.settings.server_region.empty())
+        merge({app.settings.server_region, "", false});
+    return choices;
+}
+
+std::string selected_server_region_label(const App& app) {
+    if (app.settings.server_region.empty()) {
+        for (const ServerRegion& region : app.server_regions)
+            if (region.is_default) {
+                return "Auto · " + server_region_label(region);
+            }
+        return "Auto";
+    }
+    for (const ServerRegion& region : server_region_choices(app))
+        if (normalized_server_region(region.name) ==
+            normalized_server_region(app.settings.server_region))
+            return server_region_label(region);
+    return pretty_server_region(app.settings.server_region);
+}
+
+void cycle_server_region(App& app, int direction) {
+    std::vector<ServerRegion> choices = server_region_choices(app);
+    int current = 0;  // 0 = Auto; returned regions start at 1.
+    for (size_t i = 0; i < choices.size(); ++i)
+        if (normalized_server_region(choices[i].name) ==
+            normalized_server_region(app.settings.server_region)) {
+            current = static_cast<int>(i) + 1;
+            break;
+        }
+    const int count = static_cast<int>(choices.size()) + 1;
+    current = (current + direction + count) % count;
+    app.settings.server_region =
+        current == 0 ? "" : choices[static_cast<size_t>(current - 1)].name;
+    app.auth->set_preferred_server_region(app.settings.server_region);
 }
 
 // ---- persistence ----------------------------------------------------------
 
-constexpr int kGamesCacheVersion = 2;  // v1 lacked boxArt: force a refresh
+constexpr int kGamesCacheVersion = 2;  // same stable format used by v0.4
 
 void save_games_cache(const std::vector<Game>& games) {
     json list = json::array();
@@ -642,6 +874,8 @@ void start_library_load(App& app, bool force_refresh) {
             app.status = "Fetching streaming credentials...";
             StreamingCredentials credentials =
                 app.auth->fetch_streaming_credentials();
+            app.server_regions = credentials.cloud.regions;
+            save_server_regions(app.server_regions);
             app.status = "Loading your library...";
             Http http;
             // Linked consoles for xHome remote play. Non-fatal: no consoles
@@ -808,9 +1042,11 @@ constexpr int kMargin = 60;    // TV-safe margin on all edges
 constexpr int kFooterH = 84;
 constexpr int kFooterY = gfx::kHeight - kFooterH;
 #ifdef GNX_NATIVE_STREAM
-// Touch target and deko3d overlay share this 1920x1080 design-space rectangle.
-// At the Switch's 1280x720 handheld output it remains a comfortable 131x77 px.
-constexpr SDL_Rect kXboxHomeRect = {1692, 32, 196, 116};
+// Compact 48x48 physical-pixel touch target in handheld mode. It sits eight
+// design pixels from the two-dot control and contains only the Xbox symbol.
+constexpr SDL_Rect kXboxHomeRect = {
+    stream::kGuideButtonRect.x, stream::kGuideButtonRect.y,
+    stream::kGuideButtonRect.w, stream::kGuideButtonRect.h};
 
 bool point_in_rect(int x, int y, const SDL_Rect& rect) {
     return x >= rect.x && x < rect.x + rect.w && y >= rect.y &&
@@ -828,17 +1064,34 @@ bool xbox_home_active(const App& app) {
 
 void draw_xbox_home_button(App& app) {
     const bool pressed = xbox_home_active(app);
-    app.gfx.fill(kXboxHomeRect,
-                 pressed ? gfx::Color{16, 124, 16, 235}
-                         : gfx::Color{10, 13, 18, 190});
-    app.gfx.frame(kXboxHomeRect, pressed ? gfx::kText : gfx::kFocus, 4);
-    SDL_Rect icon = {kXboxHomeRect.x + 18, kXboxHomeRect.y + 22, 70, 70};
-    app.gfx.fill(icon, pressed ? gfx::kText : gfx::kAccent);
-    app.gfx.text_centered("X", icon.x + icon.w / 2, icon.y + 13,
-                          gfx::FontSize::Body,
-                          pressed ? gfx::kAccent : gfx::kText);
-    app.gfx.text("HOME", kXboxHomeRect.x + 105, kXboxHomeRect.y + 39,
-                 gfx::FontSize::Small, gfx::kText);
+    SDL_Renderer* renderer = app.gfx.renderer();
+    const int cx = kXboxHomeRect.x + kXboxHomeRect.w / 2;
+    const int cy = kXboxHomeRect.y + kXboxHomeRect.h / 2;
+    auto circle = [&](int radius, gfx::Color color, int y_offset = 0) {
+        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+        for (int dy = -radius; dy <= radius; ++dy) {
+            int half = static_cast<int>(
+                std::sqrt(radius * radius - dy * dy));
+            SDL_RenderDrawLine(renderer, cx - half, cy + y_offset + dy,
+                               cx + half, cy + y_offset + dy);
+        }
+    };
+
+    // Symbol only. The 72x72 rect remains the touch target, but the old green
+    // square and border are intentionally not painted.
+    circle(22, {0, 0, 0,
+                static_cast<Uint8>(pressed ? 180 : 125)}, 2);
+    const int radius = pressed ? 20 : 18;
+    gfx::Color sphere = pressed ? gfx::kText : gfx::kAccent;
+    circle(radius, sphere);
+    gfx::Color mark = pressed ? gfx::kAccent : gfx::kText;
+    SDL_SetRenderDrawColor(renderer, mark.r, mark.g, mark.b, mark.a);
+    for (int t = -2; t <= 2; ++t) {
+        SDL_RenderDrawLine(renderer, cx - 10, cy - 11 + t, cx + 10,
+                           cy + 11 + t);
+        SDL_RenderDrawLine(renderer, cx + 10, cy - 11 + t, cx - 10,
+                           cy + 11 + t);
+    }
 }
 #endif
 
@@ -897,15 +1150,17 @@ void draw_focus_frames(App& app, const SDL_Rect& r) {
                   {gfx::kFocus.r, gfx::kFocus.g, gfx::kFocus.b, 38}, 8);
 }
 
-// Header: 44x44 accent square with "nx" + wordmark, top-left inside margins.
+// Compact cinematic header shared by the library and secondary screens.
 void draw_header(App& app) {
-    SDL_Rect logo = {kMargin, 48, 44, 44};
-    app.gfx.fill(logo, gfx::kAccent);
-    app.gfx.text_centered("nx", logo.x + 22, logo.y + 6, gfx::FontSize::Small,
-                          gfx::kText);
-    app.gfx.text("Light_is_Green", logo.x + 64, logo.y + 4,
-                 gfx::FontSize::Note,
+    app.gfx.fill({0, 0, gfx::kWidth, 108}, gfx::kBar);
+    app.gfx.fill({0, 106, gfx::kWidth, 2}, {34, 67, 70, 170});
+    SDL_Rect icon = {kMargin, 18, 72, 72};
+    app.gfx.draw_brand_icon(icon);
+    app.gfx.text("Light is Green", kMargin + 92, 23, gfx::FontSize::Body,
                  gfx::kText);
+    app.gfx.text(std::string("v") + GNX_VERSION, kMargin + 92, 65,
+                 gfx::FontSize::Small,
+                 gfx::kFocus);
 }
 
 // Fallback cover: per-title dark hue + big translucent initials, so a grid
@@ -945,17 +1200,14 @@ void draw_cover_fallback(App& app, const Game& game, const SDL_Rect& rect,
 void draw_splash(App& app) {
     Uint32 elapsed = SDL_GetTicks() - app.scene_started;
     int logo_w = static_cast<int>(120 * std::min(elapsed / 300.0f, 1.0f));
-    int word_w = app.gfx.text_width("Light_is_Green", gfx::FontSize::Huge);
+    int word_w = app.gfx.text_width("Light is Green", gfx::FontSize::Huge);
     int row_w = 120 + 36 + word_w;
     int x0 = (gfx::kWidth - row_w) / 2;
     if (logo_w > 0) {
-        app.gfx.fill({x0, 400, logo_w, 120}, gfx::kAccent);
-        if (logo_w == 120)
-            app.gfx.text_centered("LiG", x0 + 60, 428, gfx::FontSize::Title,
-                                  gfx::kText);
+        app.gfx.draw_brand_icon({x0, 400, logo_w, 120});
     }
     if (elapsed > 300) {
-        app.gfx.text("Light_is_Green", x0 + 156, 408, gfx::FontSize::Huge,
+        app.gfx.text("Light is Green", x0 + 156, 408, gfx::FontSize::Huge,
                      gfx::kText);
         app.gfx.text_centered("Xbox Cloud Gaming for Nintendo Switch",
                               gfx::kWidth / 2, 548, gfx::FontSize::Note,
@@ -1059,24 +1311,61 @@ void draw_signin(App& app) {
     draw_hints(app, {{"ZL", "Settings · region bypass"}, {"B", "Exit"}});
 }
 
-// Grid geometry (card 1e): 6 columns of 230x345 covers from (170,220),
-// 40px column gap, 72px row gap (room for the focused card's name plate).
-constexpr int kColumns = 6;
-constexpr int kCardW = 230;
-constexpr int kCardH = 345;
-constexpr int kGapX = 40;
-constexpr int kGapY = 72;
-constexpr int kGridX = 170;
-constexpr int kGridY = 220;
-constexpr int kRowsVisible = 2;
+// v0.5.1 library geometry: 24 games per page in an 8-by-3 grid.
+constexpr int kColumns = 8;
+constexpr int kCardW = 196;
+constexpr int kCardH = 205;
+constexpr int kGapX = 28;
+constexpr int kGapY = 24;
+constexpr int kGridX = 60;
+constexpr int kGridY = 276;
+constexpr int kRowsVisible = 3;
+constexpr int kPageSize = kColumns * kRowsVisible;
+constexpr int kFilterTabsX = 560;
+constexpr int kFilterTabsY = 126;
+constexpr SDL_Rect kLibraryHero{60, 196, 1800, 450};
+constexpr SDL_Rect kLibraryPanel{60, 196, 1800, 768};
+constexpr SDL_Rect kLibraryNav{798, 18, 324, 72};
+constexpr SDL_Rect kLibrarySettingsTab{960, 24, 152, 60};
+constexpr Uint32 kLibraryFocusMotionMs = 220;
+
+float library_focus_motion(const App& app) {
+    if (app.library_focus_started == 0) return 1.0f;
+    float t = std::clamp(
+        (SDL_GetTicks() - app.library_focus_started) /
+            static_cast<float>(kLibraryFocusMotionMs),
+        0.0f, 1.0f);
+    // Ease-out-back gives selection a brief, restrained spring without ever
+    // blocking input or changing the grid's layout bounds.
+    float u = t - 1.0f;
+    return 1.0f + 2.70158f * u * u * u + 1.70158f * u * u;
+}
+
+SDL_Rect scale_about_center(const SDL_Rect& rect, float scale) {
+    int w = static_cast<int>(std::lround(rect.w * scale));
+    int h = static_cast<int>(std::lround(rect.h * scale));
+    return {rect.x - (w - rect.w) / 2, rect.y - (h - rect.h) / 2, w, h};
+}
 
 const char* kTabNames[kTabCount] = {"All games", "Favorites", "History",
                                     "Consoles"};
 
-const char* kQualityLabels[3] = {"720p", "1080p", "1080p high bitrate"};
+const char* kQualityLabels[kQualityLevels] = {
+    "720p", "1080p", "1080p HQ · Windows", "1080p HQ · Tizen test"};
+const char* kConsoleQualityLabels[kConsoleQualityLevels] = {
+    "720p · Stable", "1080p · Experimental"};
+const char* kPacingLabels[kPacingLevels] = {
+    "Steady", "Smooth", "Motion · EXPERIMENTAL"};
 const char* kMappingLabels[2] = {"Positional (Switch A = Xbox B)",
                                  "Match labels (Switch A = Xbox A)"};
 const char* kSharpnessLabels[4] = {"Off", "Low", "Medium", "High"};
+
+std::string selected_game_meta(const App& app, const Game& game) {
+    std::string meta = "Xbox Cloud Gaming · ";
+    meta += kQualityLabels[app.settings.quality];
+    if (is_favorite(app, game.title_id)) meta += " · Favorite";
+    return meta;
+}
 
 const HomeConsole& selected_console(const App& app) {
     return app.consoles[std::clamp(
@@ -1090,13 +1379,25 @@ std::string console_label(const App& app) {
 }
 
 #ifdef GNX_NATIVE_STREAM
+std::string active_stream_region_label(const App& app) {
+    std::string actual = app.engine->selected_region();
+    if (actual.empty()) return selected_server_region_label(app);
+    for (const ServerRegion& region : app.server_regions)
+        if (normalized_server_region(region.name) ==
+            normalized_server_region(actual))
+            return server_region_label(region);
+    return pretty_server_region(actual);
+}
+
 stream::QuickMenuState quick_menu_state(const App& app) {
     stream::QuickMenuState state;
     state.open = app.quick_menu_open;
     state.performance = app.settings.debug_hud != 0;
+    state.pacing = app.settings.pacing;
     state.brightness = app.settings.brightness;
     state.contrast = app.settings.contrast;
     state.saturation = app.settings.saturation;
+    state.gamma = app.settings.gamma;
     state.sharpness = app.settings.sharpness;
     return state;
 }
@@ -1107,7 +1408,7 @@ void push_quick_menu_state(App& app, bool persist) {
 }
 
 // Returns true when the touch belongs to the quick menu. A tap outside closes
-// an open panel but remains available to the independent HOME touch target.
+// an open panel but remains available to the independent Xbox touch target.
 bool handle_quick_menu_touch(App& app, int x, int y) {
     if (point_in_rect(x, y, stream::kQuickToggleRect)) {
         app.quick_menu_open = !app.quick_menu_open;
@@ -1132,10 +1433,11 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
         app.settings.brightness = 0;
         app.settings.contrast = 100;
         app.settings.saturation = 100;
+        app.settings.gamma = 100;
         app.settings.sharpness = 0;
         changed = true;
     } else {
-        for (int row = stream::QuickBrightness;
+        for (int row = stream::QuickPacing;
              row <= stream::QuickSharpness; ++row) {
             int direction = 0;
             if (point_in_rect(x, y, stream::quick_minus_rect(row)))
@@ -1144,7 +1446,11 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
                 direction = 1;
             if (direction == 0) continue;
 
-            if (row == stream::QuickBrightness)
+            if (row == stream::QuickPacing)
+                app.settings.pacing =
+                    (app.settings.pacing + direction + kPacingLevels) %
+                    kPacingLevels;
+            else if (row == stream::QuickBrightness)
                 app.settings.brightness = std::clamp(
                     app.settings.brightness + direction * 5, -20, 20);
             else if (row == stream::QuickContrast)
@@ -1153,6 +1459,9 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
             else if (row == stream::QuickSaturation)
                 app.settings.saturation = std::clamp(
                     app.settings.saturation + direction * 10, 0, 150);
+            else if (row == stream::QuickGamma)
+                app.settings.gamma = std::clamp(
+                    app.settings.gamma + direction * 5, 50, 200);
             else
                 app.settings.sharpness =
                     (app.settings.sharpness + direction + 4) % 4;
@@ -1174,11 +1483,19 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
 void launch_stream(App& app, bool home) {
     app.launching_home = home && !app.consoles.empty();
 #ifdef GNX_NATIVE_STREAM
-    QualityTier tier = static_cast<QualityTier>(app.settings.quality);
+    QualityTier tier = app.launching_home
+                           ? (app.settings.console_quality == 1
+                                  ? QualityTier::P1080
+                                  : QualityTier::P720)
+                           : static_cast<QualityTier>(app.settings.quality);
     const char* locale = kLanguageCodes[app.settings.language];
     app.engine->set_audio_gain(app.settings.volume);
-    app.engine->set_pacing(app.settings.smooth ? stream::VideoPacing::Smooth
-                                               : stream::VideoPacing::Steady);
+    app.engine->set_pacing(
+        static_cast<stream::VideoPacing>(app.settings.pacing));
+    app.engine->set_force_region(app.settings.force_region != 0);
+    const int kBitrateKbps[5] = {0, 7000, 14000, 20000, 30000};
+    app.engine->set_max_bitrate_kbps(
+        kBitrateKbps[std::clamp(app.settings.max_bitrate, 0, 4)]);
     app.quick_menu_open = false;
     push_quick_menu_state(app, false);
     if (app.launching_home)
@@ -1196,44 +1513,106 @@ const gfx::Color kSkeleton[6] = {{22, 27, 36}, {20, 24, 33}, {18, 21, 29},
 
 void draw_loading(App& app) {
     draw_header(app);
-    app.gfx.fill({kGridX, 124, 220, 38}, gfx::kSurface);
-    for (int i = 0; i < 6; ++i)
-        app.gfx.fill({kGridX + i * (kCardW + kGapX), kGridY, kCardW, kCardH},
-                     kSkeleton[i]);
-    app.gfx.spinner(gfx::kWidth / 2, 700, SDL_GetTicks());
-    app.gfx.text_centered(app.status, gfx::kWidth / 2, 744,
+    app.gfx.fill({kMargin, 124, 420, 54}, gfx::kSurface);
+    app.gfx.fill(kLibraryPanel, {7, 19, 23, 220});
+    app.gfx.frame(kLibraryPanel, {35, 91, 82, 120}, 2);
+    for (int slot = 0; slot < kPageSize; ++slot) {
+        int column = slot % kColumns;
+        int row = slot / kColumns;
+        app.gfx.fill({kGridX + column * (kCardW + kGapX),
+                      kGridY + row * (kCardH + kGapY), kCardW, kCardH},
+                     kSkeleton[slot % 6]);
+    }
+    app.gfx.spinner(gfx::kWidth - kMargin - 20, 216, SDL_GetTicks());
+    app.gfx.text_centered(app.status, gfx::kWidth / 2, 210,
                           gfx::FontSize::Note, gfx::kTextDim);
 }
 
-// One library card. The focused card scales 1.08x (230x345 -> 248x372,
-// centered), gets border+glow and a name plate under it (card 1a layer 1+4).
+// One library card. Focus grows from 1.00x to 1.05x over 220 ms; only the
+// drawn destination changes, so neighbours never reflow and input stays live.
 void draw_card(App& app, const Game& game, const SDL_Rect& card,
                bool focused) {
     SDL_Rect dst = card;
-    if (focused) dst = {card.x - 9, card.y - 13, kCardW + 18, kCardH + 27};
+    if (focused) {
+        float scale = 1.0f + 0.05f * library_focus_motion(app);
+        dst = scale_about_center(card, scale);
+    }
 
+    app.gfx.fill(dst, gfx::kSurface);
+    SDL_Rect artwork = {dst.x, dst.y, dst.w, dst.h - 44};
     SDL_Texture* cover = app.covers->get(game.title_id, game.box_art_url);
     if (cover)
-        app.gfx.draw_texture(cover, dst);
+        app.gfx.draw_texture_cover(cover, artwork);
     else
-        draw_cover_fallback(app, game, dst, gfx::FontSize::Huge);
+        draw_cover_fallback(app, game, artwork, gfx::FontSize::Title);
+    app.gfx.fill({dst.x, dst.y + dst.h - 44, dst.w, 44},
+                 focused ? gfx::kSurfaceHi : gfx::kSurface);
+    const std::string& label = game.name.empty() ? game.title_id : game.name;
+    app.gfx.text(label.substr(0, 13), dst.x + 12, dst.y + dst.h - 35,
+                 gfx::FontSize::Small, gfx::kText);
 
     if (is_favorite(app, game.title_id)) {
-        SDL_Rect badge = {dst.x + 8, dst.y + 8, 44, 44};
+        SDL_Rect badge = {dst.x + 8, dst.y + 8, 36, 36};
         app.gfx.fill(badge, gfx::kWarn);
-        app.gfx.text_centered("★", badge.x + 22, badge.y + 6,
+        app.gfx.text_centered("★", badge.x + 18, badge.y + 2,
                               gfx::FontSize::Small, gfx::kBg);
     }
 
     if (focused) {
         draw_focus_frames(app, dst);
-        SDL_Rect plate = {card.x - 18, card.y + kCardH + 14, kCardW + 36, 44};
-        app.gfx.fill(plate, gfx::kSurface);
-        const std::string& label =
-            game.name.empty() ? game.title_id : game.name;
-        app.gfx.text_centered(label.substr(0, 24), plate.x + plate.w / 2,
-                              plate.y + 8, gfx::FontSize::Small, gfx::kText);
     }
+}
+
+void draw_selected_game_info(App& app, const Game& game) {
+    float motion = std::clamp(library_focus_motion(app), 0.0f, 1.0f);
+    int slide = static_cast<int>(12.0f * (1.0f - motion));
+    // Layered bands create the left-to-right emerald hero gradient using the
+    // native SDL renderer; no network hero artwork is required.
+    app.gfx.fill(kLibraryHero, {3, 13, 17, 238});
+    constexpr int kBands = 18;
+    for (int band = 0; band < kBands; ++band) {
+        int x = kLibraryHero.x + band * kLibraryHero.w / kBands;
+        int next = kLibraryHero.x + (band + 1) * kLibraryHero.w / kBands;
+        Uint8 green = static_cast<Uint8>(20 + band * 4);
+        Uint8 alpha = static_cast<Uint8>(22 + band * 5);
+        app.gfx.fill({x, kLibraryHero.y, next - x, kLibraryHero.h},
+                     {5, green, 35, alpha});
+    }
+    app.gfx.frame(kLibraryHero, {35, 91, 82, 185}, 2);
+
+    SDL_Rect cover_rect = {kLibraryHero.x + kLibraryHero.w - 340,
+                           kLibraryHero.y + 24, 268, 402};
+    SDL_Texture* cover = app.covers->get(game.title_id, game.box_art_url);
+    if (cover)
+        app.gfx.draw_texture_cover(cover, cover_rect);
+    else
+        draw_cover_fallback(app, game, cover_rect, gfx::FontSize::Huge);
+    app.gfx.frame(cover_rect, {57, 224, 103, 120}, 2);
+
+    const std::string& raw_title =
+        game.name.empty() ? game.title_id : game.name;
+    std::string title = raw_title.substr(0, 40);
+    std::string meta = selected_game_meta(app, game);
+    int text_x = kLibraryHero.x + 42;
+    app.gfx.text("FEATURED", text_x, kLibraryHero.y + 190 + slide,
+                 gfx::FontSize::Small, gfx::kFocus);
+    app.gfx.text(title, text_x, kLibraryHero.y + 228 + slide,
+                 gfx::FontSize::Title, gfx::kText);
+    app.gfx.text(meta, text_x, kLibraryHero.y + 292 + slide,
+                 gfx::FontSize::Small, gfx::kTextDim);
+
+    SDL_Rect primary = {text_x, kLibraryHero.y + 340, 206, 68};
+    app.gfx.fill(primary, gfx::kFocus);
+    app.gfx.text_centered("A  Details", primary.x + primary.w / 2,
+                          primary.y + 14, gfx::FontSize::Small, gfx::kBg);
+    SDL_Rect secondary = {primary.x + primary.w + 18, primary.y, 238, 68};
+    app.gfx.fill(secondary, gfx::kSurface);
+    app.gfx.frame(secondary, gfx::kChipEdge, 2);
+    app.gfx.text_centered(is_favorite(app, game.title_id)
+                              ? "X  Remove favorite"
+                              : "X  Add favorite",
+                          secondary.x + secondary.w / 2, secondary.y + 14,
+                          gfx::FontSize::Small, gfx::kText);
 }
 
 // Empty-state pattern (card 1l): big glyph box + title + instruction with
@@ -1262,7 +1641,7 @@ void draw_empty_state(App& app, const std::string& glyph, gfx::Color glyph_col,
     app.gfx.text(post, x, 616, gfx::FontSize::Note, gfx::kTextDim);
 }
 
-void draw_library(App& app) {
+[[maybe_unused]] void draw_library_legacy(App& app) {
     // Row 1: identity (logo left, gamertag + source chip right). The source
     // chip only exists when a console is linked (card 1e visibility rule).
     draw_header(app);
@@ -1286,6 +1665,12 @@ void draw_library(App& app) {
         app.gfx.text(label, chip.x + 44, chip.y + 6, gfx::FontSize::Small,
                      gfx::kText);
     }
+
+    // A translucent stage groups navigation and covers while allowing the new
+    // illustrated v0.4 background to remain visible around the edges.
+    SDL_Rect stage = {120, 108, gfx::kWidth - 240, kFooterY - 132};
+    app.gfx.fill(stage, {4, 10, 14, 96});
+    app.gfx.frame(stage, {42, 74, 72, 150}, 2);
 
     // Consoles tab: one card per linked Xbox — pick one to stream.
     auto draw_console_cards = [&app]() {
@@ -1326,9 +1711,14 @@ void draw_library(App& app) {
     int tabs = app.consoles.empty() ? 3 : kTabCount;
     for (int t = 0; t < tabs; ++t) {
         bool active = static_cast<int>(app.tab) == t;
-        int w = app.gfx.text(kTabNames[t], tx, 124, gfx::FontSize::Body,
-                             active ? gfx::kText : gfx::kFaint);
-        if (active) app.gfx.fill({tx, 176, w, 5}, gfx::kAccent);
+        int w = app.gfx.text_width(kTabNames[t], gfx::FontSize::Body);
+        if (active) {
+            SDL_Rect pill = {tx - 18, 116, w + 36, 60};
+            app.gfx.fill(pill, {16, 124, 16, 92});
+            app.gfx.frame(pill, {57, 224, 103, 150}, 2);
+        }
+        app.gfx.text(kTabNames[t], tx, 124, gfx::FontSize::Body,
+                     active ? gfx::kText : gfx::kFaint);
         tx += w + 44;
     }
     draw_chip(app, "R", tx, 128, false);
@@ -1372,6 +1762,10 @@ void draw_library(App& app) {
             draw_empty_state(app, "", gfx::kText,
                              "No games available for this account",
                              "Press", "ZR", "to refresh your library");
+    } else {
+        draw_selected_game_info(
+            app, app.games[app.visible[std::clamp(
+                     app.cursor, 0, static_cast<int>(app.visible.size()) - 1)]]);
     }
 
     // Draw the focused card last so its scale/glow overlaps neighbours.
@@ -1407,8 +1801,185 @@ void draw_library(App& app) {
                      {"+", "Exit"}});
 }
 
-// Game detail (card 1f): big cover left, title + meta chips + action buttons
-// right. Play is focused on entry, so A-A launches as fast as before.
+// v0.5.1 library: content-first 8-by-3 grid using only the stable v0.4
+// catalog fields (name and cover). A opens the existing detail screen.
+void draw_library(App& app) {
+    draw_header(app);
+
+    app.gfx.fill(kLibraryNav, {10, 20, 27, 238});
+    const char* primary_labels[2] = {"Library", "Settings"};
+    for (int i = 0; i < 2; ++i) {
+        SDL_Rect item = {kLibraryNav.x + 6 + i * 156,
+                         kLibraryNav.y + 6, 152, 60};
+        if (i == 0) {
+            app.gfx.fill(item, {16, 124, 93, 104});
+            app.gfx.frame(item, {57, 224, 160, 150}, 2);
+        }
+        app.gfx.text_centered(primary_labels[i], item.x + item.w / 2,
+                              item.y + 13, gfx::FontSize::Small,
+                              i == 0 ? gfx::kFocus : gfx::kTextDim);
+    }
+
+    std::string player = app.gamertag.empty() ? "Player" : app.gamertag;
+    int player_right = gfx::kWidth - kMargin - 54;
+    app.gfx.text(player,
+                 player_right -
+                     app.gfx.text_width(player, gfx::FontSize::Small),
+                 21, gfx::FontSize::Small, gfx::kText);
+    const std::string ready = "CLOUD READY";
+    app.gfx.text(ready,
+                 player_right -
+                     app.gfx.text_width(ready, gfx::FontSize::Small),
+                 56, gfx::FontSize::Small, gfx::kFocus);
+    app.gfx.fill({gfx::kWidth - kMargin - 38, 28, 38, 38}, gfx::kAccent);
+    app.gfx.frame({gfx::kWidth - kMargin - 42, 24, 46, 46},
+                  {57, 224, 160, 110}, 3);
+
+    SDL_Rect search = {kMargin, 124, 420, 54};
+    app.gfx.fill(search, {18, 31, 38, 232});
+    app.gfx.frame(search, {49, 69, 77, 180}, 2);
+    app.gfx.text("Y", search.x + 20, search.y + 10,
+                 gfx::FontSize::Small, gfx::kFocus);
+    app.gfx.text(app.query.empty() ? "Search your library" : app.query,
+                 search.x + 58, search.y + 10, gfx::FontSize::Small,
+                 app.query.empty() ? gfx::kTextDim : gfx::kText);
+
+    int tabs = app.consoles.empty() ? 3 : kTabCount;
+    int tx = kFilterTabsX;
+    app.gfx.text("L/R", tx - 76, kFilterTabsY + 8,
+                 gfx::FontSize::Small, gfx::kFaint);
+    for (int t = 0; t < tabs; ++t) {
+        bool active = static_cast<int>(app.tab) == t;
+        int width = app.gfx.text_width(kTabNames[t], gfx::FontSize::Small);
+        SDL_Rect pill = {tx - 16, kFilterTabsY, width + 32, 48};
+        if (active) {
+            app.gfx.fill(pill, {16, 124, 93, 92});
+            app.gfx.frame(pill, {57, 224, 160, 140}, 2);
+        }
+        app.gfx.text(kTabNames[t], tx, kFilterTabsY + 8,
+                     gfx::FontSize::Small,
+                     active ? gfx::kText : gfx::kFaint);
+        tx += width + 50;
+    }
+
+    std::string cloud = "xCloud · ";
+    cloud += kQualityLabels[app.settings.quality];
+    int cloud_width = app.gfx.text_width(cloud, gfx::FontSize::Small);
+    int cloud_x = gfx::kWidth - kMargin - cloud_width;
+    app.gfx.fill({cloud_x - 22, 145, 10, 10}, gfx::kFocus);
+    app.gfx.text(cloud, cloud_x, 133, gfx::FontSize::Small,
+                 gfx::kTextDim);
+
+    if (app.tab == LibraryTab::Consoles) {
+        for (int i = 0; i < static_cast<int>(app.consoles.size()) && i < 3;
+             ++i) {
+            const HomeConsole& console = app.consoles[i];
+            bool focused = i == app.console_cursor;
+            SDL_Rect card = {kMargin + i * 620, 270, 560, 380};
+            app.gfx.fill(card, focused ? gfx::kSurfaceHi : gfx::kSurface);
+            SDL_Rect icon = {card.x + 48, card.y + 56, 72, 72};
+            app.gfx.fill(icon, focused ? gfx::kAccent : gfx::kChip);
+            app.gfx.text_centered("X", icon.x + 36, icon.y + 14,
+                                  gfx::FontSize::Body, gfx::kText);
+            app.gfx.text(console.name.empty() ? "Your Xbox" : console.name,
+                         card.x + 48, card.y + 164, gfx::FontSize::Body,
+                         gfx::kText);
+            app.gfx.text("Remote play from", card.x + 48, card.y + 220,
+                         gfx::FontSize::Note, gfx::kTextDim);
+            app.gfx.text(console.console_type, card.x + 48, card.y + 260,
+                         gfx::FontSize::Note, gfx::kTextDim);
+            bool on = console.power_state == "On";
+            app.gfx.fill({card.x + 48, card.y + 322, 12, 12},
+                         on ? gfx::kFocus : gfx::kWarn);
+            app.gfx.text(console.power_state + " · local network",
+                         card.x + 72, card.y + 312,
+                         gfx::FontSize::Small, gfx::kTextDim);
+            if (focused) draw_focus_frames(app, card);
+        }
+        draw_hints(app, {{"A", "Connect", true},
+                         {"L R", "Tabs"},
+                         {"ZR", "Refresh"},
+                         {"ZL", "Settings"},
+                         {"+", "Exit"}});
+        return;
+    }
+
+    if (app.visible.empty()) {
+        if (!app.query.empty())
+            draw_empty_state(app, "", gfx::kText,
+                             "Nothing found for \"" + app.query + "\"",
+                             "Press", "Y", "to search again");
+        else if (app.tab == LibraryTab::Favorites)
+            draw_empty_state(app, "★", gfx::kWarn, "No favorites yet",
+                             "Press", "X", "on any game to pin it here");
+        else if (app.tab == LibraryTab::History)
+            draw_empty_state(app, "…", gfx::kTextDim,
+                             "Nothing played yet",
+                             "Games you launch appear here", nullptr, "");
+        else
+            draw_empty_state(app, "", gfx::kText,
+                             "No games available for this account",
+                             "Press", "ZR", "to refresh your library");
+        draw_hints(app, {{"Y", "Search", true},
+                         {"ZR", "Refresh"},
+                         {"ZL", "Settings"},
+                         {"+", "Exit"}});
+        return;
+    }
+
+    app.cursor = std::clamp(app.cursor, 0,
+                            static_cast<int>(app.visible.size()) - 1);
+    const Game& selected = app.games[app.visible[app.cursor]];
+    app.gfx.fill(kLibraryPanel, {3, 13, 17, 210});
+    app.gfx.frame(kLibraryPanel, {35, 91, 82, 155}, 2);
+
+    const char* section = app.tab == LibraryTab::Favorites
+                              ? "Favorites"
+                          : app.tab == LibraryTab::History
+                              ? "Recently played"
+                              : "All games";
+    app.gfx.text(section, kMargin + 20, 212, gfx::FontSize::Note,
+                 gfx::kText);
+    int page_start = (app.cursor / kPageSize) * kPageSize;
+    int page_number = page_start / kPageSize + 1;
+    int page_count =
+        (static_cast<int>(app.visible.size()) + kPageSize - 1) / kPageSize;
+    std::string count = std::to_string(app.visible.size()) + " games  ·  " +
+                        std::to_string(page_number) + "/" +
+                        std::to_string(page_count);
+    app.gfx.text(count,
+                 gfx::kWidth - kMargin -
+                     app.gfx.text_width(count, gfx::FontSize::Small),
+                 216, gfx::FontSize::Small, gfx::kFocus);
+
+    int focused_slot = app.cursor - page_start;
+    for (int slot = 0; slot < kPageSize; ++slot) {
+        int index = page_start + slot;
+        if (index >= static_cast<int>(app.visible.size())) break;
+        if (slot == focused_slot) continue;
+        int column = slot % kColumns;
+        int row = slot / kColumns;
+        SDL_Rect card = {kGridX + column * (kCardW + kGapX),
+                         kGridY + row * (kCardH + kGapY), kCardW, kCardH};
+        draw_card(app, app.games[app.visible[index]], card, false);
+    }
+    int focused_column = focused_slot % kColumns;
+    int focused_row = focused_slot / kColumns;
+    SDL_Rect focused_card = {kGridX + focused_column * (kCardW + kGapX),
+                             kGridY + focused_row * (kCardH + kGapY),
+                             kCardW, kCardH};
+    draw_card(app, selected, focused_card, true);
+
+    draw_hints(app, {{"A", "Details", true},
+                     {"X", "Favorite"},
+                     {"Y", "Search"},
+                     {"ZR", "Refresh"},
+                     {"ZL", "Settings"},
+                     {"+", "Exit"}});
+}
+
+// Game detail: big cover left, stable local metadata + action buttons right.
+// Play is focused on entry, so A-A launches as fast as before.
 void draw_detail(App& app) {
     if (app.detail_index < 0 ||
         app.detail_index >= static_cast<int>(app.games.size()))
@@ -1602,6 +2173,9 @@ void draw_accounts(App& app) {
 }
 
 void draw_settings(App& app) {
+    // A stream login may have refreshed Xbox's live datacenter list while the
+    // menu was not visible. Import it once and persist it for the next launch.
+    sync_server_regions(app);
     app.gfx.text("Settings", kMargin, 48, gfx::FontSize::Title, gfx::kText);
     auto signed_value = [](int value) {
         return std::string(value > 0 ? "+" : "") + std::to_string(value);
@@ -1611,18 +2185,32 @@ void draw_settings(App& app) {
         const char* title;
         std::string value;
     };
+    const char* kForceRegionLabels[2] = {"Off (Allow Fallback)", "On (Strict Region Only)"};
+    const char* kBitrateLabels[5] = {"Auto", "7 Mbps (Low)", "14 Mbps (Medium)", "20 Mbps (High)", "30 Mbps (Ultra HQ)"};
+
     std::vector<Row> rows = {
+        {"Server region", selected_server_region_label(app)},
+        {"Region bypass", kRegionLabels[app.settings.region]},
+        {"Force region", kForceRegionLabels[app.settings.force_region]},
+        {"Max bitrate", kBitrateLabels[app.settings.max_bitrate]},
         {"Stream quality", kQualityLabels[app.settings.quality]},
+        {"Console quality",
+         kConsoleQualityLabels[app.settings.console_quality]},
         {"Button layout", kMappingLabels[app.settings.mapping]},
         {"Vibration", kVibrationLabels[app.settings.vibration]},
-        {"Region bypass", kRegionLabels[app.settings.region]},
         {"Game language", kLanguageLabels[app.settings.language]},
         {"Volume",
          std::to_string(static_cast<int>(app.settings.volume * 100 + 0.5f)) + "%"},
-        {"Video pacing", app.settings.smooth ? "Smooth" : "Standard"},
+        {"Pacing", kPacingLabels[app.settings.pacing]},
         {"Brightness", signed_value(app.settings.brightness)},
         {"Contrast", std::to_string(app.settings.contrast) + "%"},
         {"Saturation", std::to_string(app.settings.saturation) + "%"},
+        {"Gamma", [&app] {
+             char value[16];
+             std::snprintf(value, sizeof(value), "%.2f",
+                           app.settings.gamma / 100.0f);
+             return std::string(value);
+        }()},
         {"Sharpness", kSharpnessLabels[app.settings.sharpness]},
     };
     if (!app.consoles.empty())
@@ -1667,12 +2255,12 @@ void draw_settings(App& app) {
         if (focused) {
             app.gfx.fill({row.x, row.y, 10, row.h}, gfx::kFocus);
             app.gfx.frame(row, gfx::kFocus, 4);
-            app.gfx.frame({row.x - 4, row.y - 4, row.w + 8, row.h + 8},
-                          {gfx::kFocus.r, gfx::kFocus.g, gfx::kFocus.b, 90},
-                          5);
+        } else {
+            app.gfx.frame(row, gfx::kChipEdge, 2);
         }
-        app.gfx.text(rows[i].title, row.x + 68, row.y + 26,
-                     gfx::FontSize::Body, gfx::kText);
+        app.gfx.text(rows[i].title, row.x + 36, row.y + 26,
+                     gfx::FontSize::Body,
+                     focused ? gfx::kText : gfx::kTextDim);
         int vw = app.gfx.text_width(rows[i].value, gfx::FontSize::Body);
         if (i == signout_row || i == accounts_row) {
             // Action rows: no ‹ › carets (A opens/confirms them), and the
@@ -1711,49 +2299,91 @@ void draw_settings(App& app) {
         line1 = "On-screen overlay with live stream stats (resolution, FPS,";
         line2 = "bitrate, loss). A debug tool -- turn it off for clean playback.";
     } else switch (app.settings_cursor) {
-        case 5:
-            line1 = "Output volume for streamed audio — raise it if the stream";
-            line2 = "sounds quiet even with the console at full volume.";
-            break;
-        case 6:
-            line1 = "Smooth evens motion out by holding one frame in reserve —";
-            line2 = "steadier 30 fps scenes for about one frame of extra lag.";
-            break;
-        case 7:
-            line1 = "Adds or removes light after video color conversion.";
-            line2 = "Small changes work best; high values can clip highlights.";
-            break;
-        case 8:
-            line1 = "Expands or compresses the difference between dark and";
-            line2 = "bright areas. 100% preserves the source image.";
-            break;
-        case 9:
-            line1 = "Controls color intensity. 100% is neutral; 0% is";
-            line2 = "grayscale, while higher values make colors stronger.";
-            break;
-        case 10:
-            line1 = "Sharpens the streamed image, which is a touch soft at";
-            line2 = "cloud bitrates. Low is subtle; High can ring on edges.";
-            break;
-        case 11:
-            line1 = "Where Play launches games: xCloud (cloud servers) or";
-            line2 = "remote play from your own console over your network.";
+        case 0:
+            line1 = "Chooses the xCloud datacenter. Auto follows Xbox; a fixed";
+            line2 = "region can avoid a busy queue but may add network latency.";
             break;
         case 1:
-            line1 = "Positional keeps the Switch layout under your thumbs;";
-            line2 = "match labels follows the printed A/B/X/Y letters.";
-            break;
-        case 2:
-            line1 = "Rumble intensity for the game's vibration effects.";
-            line2 = "High still leaves headroom to avoid the HD-rumble hum.";
-            break;
-        case 3:
             line1 = "Region bypass spoofs your location to Xbox to reach";
             line2 = "xCloud from an unsupported country. Use at your own risk.";
             break;
+        case 2:
+            line1 = "Forces xCloud to use ONLY your chosen region with NO fallback.";
+            line2 = "Prevents Xbox from transferring your session to US servers.";
+            break;
+        case 3:
+            line1 = "Controls maximum WebRTC video stream bitrate.";
+            line2 = "Auto adapts; higher values (20-30 Mbps) improve image sharpness.";
+            break;
         case 4:
+            if (app.settings.quality == 3) {
+                line1 = "Experimental TV/Tizen pool. It may provide high bitrate";
+                line2 = "but can queue longer; use HQ Windows if that happens.";
+            } else {
+                line1 = "Announces your device tier to Xbox. HQ Windows gives";
+                line2 = "the best 1080p pool; 720p uses less bandwidth.";
+            }
+            break;
+        case 5:
+            if (app.settings.console_quality == 1) {
+                line1 = "Experimental 1080p Remote Play request. Compatibility";
+                line2 = "depends on Xbox; no video after 15s retries at 720p.";
+            } else {
+                line1 = "Stable 720p Remote Play profile for your own Xbox.";
+                line2 = "Choose 1080p only for beta testing on a strong link.";
+            }
+            break;
+        case 6:
+            line1 = "Positional keeps the Switch layout under your thumbs;";
+            line2 = "match labels follows the printed A/B/X/Y letters.";
+            break;
+        case 7:
+            line1 = "Rumble intensity for the game's vibration effects.";
+            line2 = "High still leaves headroom to avoid the HD-rumble hum.";
+            break;
+        case 8:
             line1 = "Sets the streamed console's language for games without";
             line2 = "an in-game language menu. Takes effect on next launch.";
+            break;
+        case 9:
+            line1 = "Output volume for streamed audio - raise it if the stream";
+            line2 = "sounds quiet even with the console at full volume.";
+            break;
+        case 10:
+            if (app.settings.pacing == 0) {
+                line1 = "Steady prioritizes latency and repeats the newest frame";
+                line2 = "on a local 60 Hz clock when the network arrives late.";
+            } else if (app.settings.pacing == 1) {
+                line1 = "Smooth holds one source frame to absorb network jitter.";
+                line2 = "It is steadier, with about one frame of extra lag.";
+            } else {
+                line1 = "Motion is Luma 50% midpoint frame generation (30->60 Hz).";
+                line2 = "Smooth 60 Hz motion blending with no green flashing.";
+            }
+            break;
+        case 11:
+            line1 = "Adds or removes light after video color conversion.";
+            line2 = "Small changes work best; high values can clip highlights.";
+            break;
+        case 12:
+            line1 = "Expands or compresses the difference between dark and";
+            line2 = "bright areas. 100% preserves the source image.";
+            break;
+        case 13:
+            line1 = "Controls color intensity. 100% is neutral; 0% is";
+            line2 = "grayscale, while higher values make colors stronger.";
+            break;
+        case 14:
+            line1 = "Adjusts midtones without moving the darkest blacks or";
+            line2 = "brightest whites. 1.00 is neutral; higher is brighter.";
+            break;
+        case 15:
+            line1 = "Sharpens the streamed image, which is a touch soft at";
+            line2 = "cloud bitrates. Low is subtle; High can ring on edges.";
+            break;
+        case 16:
+            line1 = "Where Play launches games: xCloud (cloud servers) or";
+            line2 = "Remote Play from your Xbox, including away from home.";
             break;
         default:
             line1 = "Higher quality needs a stronger connection — 5 GHz";
@@ -2045,11 +2675,18 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
                                      : app.launch_game.name;
     app.gfx.text_centered(label, gfx::kWidth / 2, 584, gfx::FontSize::Title,
                           gfx::kText);
-    app.gfx.text_centered(app.engine->status(), gfx::kWidth / 2, 664,
+    app.gfx.text_centered(app.engine->status(), gfx::kWidth / 2, 650,
                           gfx::FontSize::Note, gfx::kTextDim);
 
+    std::string route = app.launching_home
+                            ? "Route: Xbox Remote Play · xHome"
+                            : "Server region: " +
+                                  active_stream_region_label(app);
+    app.gfx.text_centered(route, gfx::kWidth / 2, 700,
+                          gfx::FontSize::Small, gfx::kFocus);
+
     int phase = stream_phase(app.engine->status());
-    SDL_Rect track = {gfx::kWidth / 2 - 280, 736, 560, 6};
+    SDL_Rect track = {gfx::kWidth / 2 - 280, 756, 560, 6};
     app.gfx.fill(track, gfx::kChip);
     app.gfx.fill({track.x, track.y, 140 * (phase + 1), 6}, gfx::kFocus);
 
@@ -2062,14 +2699,14 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
         gfx::Color color = i < phase ? gfx::kFocus
                            : i == phase ? gfx::kText
                                         : gfx::kFaint;
-        sx += app.gfx.text(stages[i], sx, 768, gfx::FontSize::Small, color) +
+        sx += app.gfx.text(stages[i], sx, 788, gfx::FontSize::Small, color) +
               32;
     }
 
     // Teach the persistent deko3d overlays before the first video frame.
     app.gfx.text_centered(
         "In the stream: tap  ..  for picture controls   |   "
-        "tap HOME or press L3 + R3 for the Xbox guide",
+        "tap the Xbox symbol or press L3 + R3 for the Xbox guide",
         gfx::kWidth / 2, 920, gfx::FontSize::Small, gfx::kTextDim);
 
     // Source/quality chip, top right.
@@ -2078,7 +2715,8 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
             ? (app.consoles.empty() || app.consoles[0].name.empty()
                    ? std::string("Your Xbox")
                    : app.consoles[0].name)
-            : std::string("xCloud · ") + kQualityLabels[app.settings.quality];
+            : std::string("xCloud · ") +
+                  kQualityLabels[app.settings.quality];
     int qw = app.gfx.text_width(quality, gfx::FontSize::Small) + 40;
     app.gfx.fill({gfx::kWidth - kMargin - qw, 48, qw, 44},
                  {gfx::kSurface.r, gfx::kSurface.g, gfx::kSurface.b, 217});
@@ -2289,6 +2927,8 @@ int main(int argc, char** argv) {
     app.auth = std::make_unique<XboxAuth>(user_path("tokens.json"));
     app.auth->set_abort_flag(&app.abort_http);
     app.settings = load_settings();
+    app.server_regions = load_server_regions();
+    app.auth->set_preferred_server_region(app.settings.server_region);
     app.favorites = load_id_list("favorites.json");
     app.history = load_id_list("history.json");
     {
@@ -2408,6 +3048,7 @@ int main(int argc, char** argv) {
                         app.tab = LibraryTab::Consoles;
                     apply_filter(app);
                     app.scene = Scene::Library;
+                    app.library_focus_started = SDL_GetTicks();
                     try {
                         app.gamertag = app.auth->fetch_profile().gamertag;
                         remember_gamertag(app.gamertag);
@@ -2426,27 +3067,39 @@ int main(int argc, char** argv) {
                 // Touch: tap a tab to switch, or a card to select + open it,
                 // reusing the A path (input.a) below. Design-space coords.
                 if (input.touch) {
-                    if (input.touch_y >= 116 && input.touch_y <= 190) {
-                        int tx = kGridX + chip_width(app, "L") + 44;
+                    if (input.touch_x >= kLibrarySettingsTab.x &&
+                        input.touch_x <= kLibrarySettingsTab.x +
+                                             kLibrarySettingsTab.w &&
+                        input.touch_y >= kLibrarySettingsTab.y &&
+                        input.touch_y <= kLibrarySettingsTab.y +
+                                             kLibrarySettingsTab.h) {
+                        input.zl = true;
+                    } else if (input.touch_x >= kMargin &&
+                        input.touch_x <= kMargin + 420 &&
+                        input.touch_y >= 124 && input.touch_y <= 178) {
+                        input.y = true;
+                    } else if (input.touch_y >= kFilterTabsY &&
+                               input.touch_y <= kFilterTabsY + 48) {
+                        int tx = kFilterTabsX;
                         for (int t = 0; t < tabs; ++t) {
                             int w = app.gfx.text_width(kTabNames[t],
-                                                       gfx::FontSize::Body);
+                                                       gfx::FontSize::Small);
                             if (input.touch_x >= tx - 16 &&
-                                input.touch_x <= tx + w + 16) {
+                                 input.touch_x <= tx + w + 16) {
                                 app.tab = static_cast<LibraryTab>(t);
                                 app.cursor = 0;
                                 apply_filter(app);
                                 break;
                             }
-                            tx += w + 44;
+                            tx += w + 50;
                         }
                     } else if (console_tab) {
                         int cx = input.touch_x - kGridX;
-                        int cy = input.touch_y - 300;
+                        int cy = input.touch_y - 270;
                         if (cx >= 0 && cy >= 0 && cy < 380) {
-                            int i = cx / (560 + 56);
+                            int i = cx / 620;
                             if (i < static_cast<int>(app.consoles.size()) &&
-                                i < 3 && cx - i * (560 + 56) < 560) {
+                                i < 3 && cx - i * 620 < 560) {
                                 app.console_cursor = i;
                                 input.a = true;
                             }
@@ -2457,12 +3110,12 @@ int main(int argc, char** argv) {
                         if (gx >= 0 && gy >= 0) {
                             int col = gx / (kCardW + kGapX);
                             int row = gy / (kCardH + kGapY);
-                            if (col < kColumns &&
+                            if (col < kColumns && row < kRowsVisible &&
                                 gx - col * (kCardW + kGapX) < kCardW &&
                                 gy - row * (kCardH + kGapY) < kCardH) {
-                                int first_row = std::max(
-                                    0, app.cursor / kColumns - (kRowsVisible - 1));
-                                int index = (first_row + row) * kColumns + col;
+                                int page_start =
+                                    (app.cursor / kPageSize) * kPageSize;
+                                int index = page_start + row * kColumns + col;
                                 if (index >= 0 &&
                                     index <
                                         static_cast<int>(app.visible.size())) {
@@ -2606,11 +3259,12 @@ int main(int argc, char** argv) {
             }
 
             case Scene::Settings: {
-                // Row order: quality, mapping, vibration, region, language,
-                // volume, pacing, brightness, contrast, saturation, sharpness,
+                // Row order: cloud quality, console quality, mapping,
+                // vibration, bypass, language, volume, pacing, brightness,
+                // contrast, saturation, gamma, sharpness, server region,
                 // [source when a console is linked], Debug HUD, accounts,
                 // sign out.
-                int hud_row = app.consoles.empty() ? 11 : 12;
+                int hud_row = app.consoles.empty() ? 14 : 15;
                 int accounts_row = hud_row + 1;
                 int signout_row = hud_row + 2;
                 if (input.up)
@@ -2655,45 +3309,65 @@ int main(int argc, char** argv) {
                 int direction = (input.right ? 1 : 0) - (input.left ? 1 : 0);
                 if (direction != 0 && app.settings_cursor != signout_row) {
                     if (app.settings_cursor == 0)
+                        cycle_server_region(app, direction);
+                    else if (app.settings_cursor == 1) {
+                        app.settings.region =
+                            (app.settings.region + direction + 6) % 6;
+                        apply_region(app.settings);  // takes effect next request
+                    } else if (app.settings_cursor == 2)
+                        app.settings.force_region =
+                            (app.settings.force_region + direction + 2) % 2;
+                    else if (app.settings_cursor == 3)
+                        app.settings.max_bitrate =
+                            (app.settings.max_bitrate + direction + 5) % 5;
+                    else if (app.settings_cursor == 4)
                         app.settings.quality =
-                            (app.settings.quality + direction + 3) % 3;
-                    else if (app.settings_cursor == 1)
+                            (app.settings.quality + direction +
+                             kQualityLevels) %
+                            kQualityLevels;
+                    else if (app.settings_cursor == 5)
+                        app.settings.console_quality =
+                            (app.settings.console_quality + direction +
+                             kConsoleQualityLevels) %
+                            kConsoleQualityLevels;
+                    else if (app.settings_cursor == 6)
                         app.settings.mapping =
                             (app.settings.mapping + direction + 2) % 2;
-                    else if (app.settings_cursor == 2)
+                    else if (app.settings_cursor == 7)
                         app.settings.vibration =
                             (app.settings.vibration + direction +
                              kVibrationLevels) %
                             kVibrationLevels;
-                    else if (app.settings_cursor == 3) {
-                        app.settings.region =
-                            (app.settings.region + direction + 6) % 6;
-                        apply_region(app.settings);  // takes effect next request
-                    } else if (app.settings_cursor == 4)
+                    else if (app.settings_cursor == 8)
                         app.settings.language =
                             (app.settings.language + direction + kLanguageCount) %
                             kLanguageCount;
-                    else if (app.settings_cursor == 5)
+                    else if (app.settings_cursor == 9)
                         app.settings.volume = std::clamp(
                             app.settings.volume + direction * 0.5f, 0.5f, 4.0f);
-                    else if (app.settings_cursor == 6)
-                        app.settings.smooth = !app.settings.smooth;
-                    else if (app.settings_cursor == 7)
+                    else if (app.settings_cursor == 10)
+                        app.settings.pacing =
+                            (app.settings.pacing + direction + kPacingLevels) %
+                            kPacingLevels;
+                    else if (app.settings_cursor == 11)
                         app.settings.brightness = std::clamp(
                             app.settings.brightness + direction * 5, -20, 20);
-                    else if (app.settings_cursor == 8)
+                    else if (app.settings_cursor == 12)
                         app.settings.contrast = std::clamp(
                             app.settings.contrast + direction * 10, 70, 130);
-                    else if (app.settings_cursor == 9)
+                    else if (app.settings_cursor == 13)
                         app.settings.saturation = std::clamp(
                             app.settings.saturation + direction * 10, 0, 150);
-                    else if (app.settings_cursor == 10)
+                    else if (app.settings_cursor == 14)
+                        app.settings.gamma = std::clamp(
+                            app.settings.gamma + direction * 5, 50, 200);
+                    else if (app.settings_cursor == 15)
                         app.settings.sharpness =
                             (app.settings.sharpness + direction + 4) % 4;
                     // "Preferred source" only exists with a linked console;
                     // Debug HUD sits right after it either way. Accounts and
                     // Sign out are A-rows, handled above.
-                    else if (!app.consoles.empty() && app.settings_cursor == 11)
+                    else if (!app.consoles.empty() && app.settings_cursor == 16)
                         app.settings.source =
                             (app.settings.source + direction + 3) % 3;
                     else if (app.settings_cursor == hud_row)
@@ -2870,10 +3544,14 @@ int main(int argc, char** argv) {
         }
 #endif
 
-        if (app.cursor != nav_cursor || app.tab != nav_tab ||
+        bool navigation_changed =
+            app.cursor != nav_cursor || app.tab != nav_tab ||
             app.console_cursor != nav_console ||
-            app.settings_cursor != nav_settings)
+            app.settings_cursor != nav_settings;
+        if (navigation_changed)
             app.ui_sound.play(1.0f);
+        if (navigation_changed && app.scene == Scene::Library)
+            app.library_focus_started = SDL_GetTicks();
 
         app.covers->pump();
         app.gfx.begin_frame();

@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <optional>
 #include <string>
@@ -81,9 +82,11 @@ public:
     bool init();
     void shutdown();
 
-    // Present one decoded frame. frame must be AV_PIX_FMT_NVTEGRA. Returns
-    // false if the frame could not be rendered.
-    bool render(AVFrame* frame);
+    // Present one decoded frame. frame must be AV_PIX_FMT_NVTEGRA. When
+    // motion_frame is compatible and motion_blend is between 0 and 1, the
+    // shader generates a cross-frame midpoint for Motion pacing.
+    bool render(AVFrame* frame, AVFrame* motion_frame = nullptr,
+                float motion_blend = 0.0f);
 
     bool initialized() const { return initialized_; }
 
@@ -106,6 +109,9 @@ private:
         uint32_t size = 0;
         uint32_t luma_offset = 0;
         uint32_t chroma_offset = 0;
+        // Motion may sample a surface as its second input only after the same
+        // imported mapping has completed at least one ordinary primary draw.
+        bool primary_ready = false;
         dk::UniqueMemBlock memblock;
         dk::Image luma;
         dk::Image chroma;
@@ -128,9 +134,12 @@ private:
     void rasterize_hud();              // compose panel bg + text into hud_cpu_
     void blit_text(const char* s, int x, int y);  // white text onto hud_pixels_
     void rasterize_guide();            // compose Guide/Home touch button
-    void blit_guide_text(const char* s, int x, int y);
     void rasterize_quick_menu();       // compose dots + expanded picture panel
     void blit_quick_text(const char* s, int x, int y);
+    // The render queue is asynchronous. Keep every NVDEC surface referenced
+    // until the swapchain gives its framebuffer slot back to us, which proves
+    // the GPU has finished sampling that slot's video textures.
+    void release_in_flight_frames();
 
     LogFn log_;
     bool initialized_ = false;
@@ -139,6 +148,9 @@ private:
     dk::UniqueQueue queue_;
     dk::UniqueCmdBuf cmdbuf_;
     dk::UniqueSwapchain swapchain_;
+
+    AVFrame* in_flight_frames_[kFbNum]{};
+    AVFrame* in_flight_motion_frames_[kFbNum]{};
 
     // deko3d memory blocks (raw; freed in shutdown()).
     dk::UniqueMemBlock fb_memblock_;
@@ -163,7 +175,9 @@ private:
     dk::ImageLayout luma_layout_;
     dk::ImageLayout chroma_layout_;
 
-    std::vector<FrameMapping> mappings_;
+    // map_frame may append the second Motion surface after returning the first
+    // one. deque keeps descriptor references stable across push_back.
+    std::deque<FrameMapping> mappings_;
     int current_mapping_ = -1;
 
     DkSamplerDescriptor sampler_desc_{};
@@ -193,8 +207,12 @@ private:
     std::string hud_text_cache_;         // last rasterized text (skip if unchanged)
     uint64_t fps_tick_ = 0;              // armGetSystemTick at last FPS sample
     int fps_frames_ = 0;                 // distinct frames presented this window
+    int output_frames_ = 0;              // all display presents this window
+    int generated_frames_ = 0;           // Motion midpoint presents
     const uint8_t* fps_last_data_ = nullptr;  // last frame's surface, for dedup
     float fps_ = 0.0f;
+    float output_fps_ = 0.0f;
+    float generated_fps_ = 0.0f;
     std::atomic<float> net_mbps_{0.0f};   // set by Engine worker, read by update_hud
     std::atomic<float> net_loss_{0.0f};
     std::atomic<int> net_buffer_ms_{0};
@@ -202,8 +220,10 @@ private:
 
     // Always-on top-right Xbox Guide/Home touch overlay. It has its own RGBA
     // texture so the optional debug HUD can remain independently disabled.
-    static constexpr uint32_t kGuideTexW = 192;  // RGBA pitch = 768, aligned
-    static constexpr uint32_t kGuideTexH = 112;
+    // 96 keeps the RGBA pitch aligned; the square texture is scaled into the
+    // 72x72 design-space touch target.
+    static constexpr uint32_t kGuideTexW = 96;
+    static constexpr uint32_t kGuideTexH = 96;
     dk::UniqueMemBlock guide_memblock_;
     dk::Image guide_image_;
     dk::ImageDescriptor guide_desc_;
@@ -215,8 +235,8 @@ private:
     // Always-visible two-dot handle and its optional expanded quick panel.
     // One transparent RGBA texture covers both shapes and costs one overlay
     // draw call regardless of whether the panel is open.
-    static constexpr uint32_t kQuickTexW = 512;
-    static constexpr uint32_t kQuickTexH = 640;
+    static constexpr uint32_t kQuickTexW = 672;
+    static constexpr uint32_t kQuickTexH = 812;
     dk::UniqueMemBlock quick_memblock_;
     dk::Image quick_image_;
     dk::ImageDescriptor quick_desc_;
