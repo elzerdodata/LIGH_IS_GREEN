@@ -73,13 +73,21 @@ std::vector<Game> fetch_playable_titles(Http& http,
         if (title_id.empty()) continue;
 
         const json details = entry.value("details", json::object());
-        bool playable = details.value("hasEntitlement", false);
+        std::string product_id = details.value("productId", "");
+        if (product_id.empty()) continue;
+
+        bool playable = details.value("hasEntitlement", true);
         if (!playable) {
             const json programs = details.value("programs", json::array());
             const json subs = details.value("userSubscriptions", json::array());
             for (const json& program : programs)
                 for (const json& sub : subs)
                     if (program == sub) { playable = true; break; }
+        }
+        // If still not marked playable but has a valid product_id and title_id, allow it for Game Pass / Cloud
+        if (!playable && details.contains("hasEntitlement")) {
+            // Keep if product_id is valid so newly released titles aren't hidden
+            playable = true;
         }
         if (!playable) continue;
 

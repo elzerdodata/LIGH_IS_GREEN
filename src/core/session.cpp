@@ -179,6 +179,13 @@ std::vector<std::string> GssvSession::headers() const {
 }
 
 void GssvSession::start_cloud(const std::string& title_id) {
+    json fallback_regions = json::array();
+    for (const auto& r : credentials_.regions) {
+        if (r.name != credentials_.selected_region && !r.name.empty()) {
+            fallback_regions.push_back(r.name);
+        }
+    }
+
     json body = {
         {"clientSessionId", ""},
         {"titleId", title_id},
@@ -194,7 +201,7 @@ void GssvSession::start_cloud(const std::string& title_id) {
           {"sdkType", "web"},
           {"osName", os_name(tier_)}}},
         {"serverId", ""},
-        {"fallbackRegionNames", json::array()},
+        {"fallbackRegionNames", fallback_regions},
     };
     json response = parse_or_throw(
         http_.post(credentials_.host + "/v5/sessions/cloud/play", body.dump(),
@@ -260,14 +267,30 @@ std::optional<int> GssvSession::fetch_wait_time(
         if (!response.ok() || response.body.empty()) return std::nullopt;
 
         json parsed = json::parse(response.body, nullptr, false);
-        if (parsed.is_discarded()) return std::nullopt;
-        const char* key = "estimatedTotalWaitTimeInSeconds";
-        if (!parsed.contains(key) || !parsed[key].is_number_integer())
-            return std::nullopt;
+        if (parsed.is_discarded() || !parsed.is_object()) return std::nullopt;
 
-        int seconds = parsed[key].get<int>();
-        if (seconds < 0) return std::nullopt;
-        return seconds;
+        const char* keys[] = {
+            "estimatedTotalWaitTimeInSeconds",
+            "estimatedWaitTimeInSeconds",
+            "estimatedAllocationTimeInSeconds",
+            "waitTotalInSeconds",
+            "waitTimeInSeconds",
+            "estimatedWaitTime"
+        };
+        for (const char* key : keys) {
+            if (parsed.contains(key)) {
+                if (parsed[key].is_number()) {
+                    int sec = static_cast<int>(parsed[key].get<double>());
+                    if (sec >= 0) return sec;
+                } else if (parsed[key].is_string()) {
+                    try {
+                        int sec = std::stoi(parsed[key].get<std::string>());
+                        if (sec >= 0) return sec;
+                    } catch (...) {}
+                }
+            }
+        }
+        return std::nullopt;
     } catch (const std::exception&) {
         // Queue information is optional. A failed estimate must never abort
         // the real session-state polling and WebRTC setup.

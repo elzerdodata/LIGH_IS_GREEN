@@ -515,7 +515,26 @@ const char* kRegionIps[6] = {"", "143.244.47.65", "169.150.198.66",
                              "45.134.212.66"};
 
 void apply_region(const Settings& settings) {
-    Http::set_forwarded_for(kRegionIps[std::clamp(settings.region, 0, 5)]);
+    if (settings.region > 0 && settings.region < 6) {
+        Http::set_forwarded_for(kRegionIps[settings.region]);
+    } else if (!settings.server_region.empty()) {
+        std::string key = normalized_server_region(settings.server_region);
+        if (key.find("US") != std::string::npos) {
+            Http::set_forwarded_for(kRegionIps[1]);  // United States
+        } else if (key.find("BRAZIL") != std::string::npos || key.find("CHILE") != std::string::npos || key.find("ARGENTINA") != std::string::npos) {
+            Http::set_forwarded_for(kRegionIps[2]);  // South America / Brazil
+        } else if (key.find("JAPAN") != std::string::npos) {
+            Http::set_forwarded_for(kRegionIps[3]);  // Japan
+        } else if (key.find("KOREA") != std::string::npos) {
+            Http::set_forwarded_for(kRegionIps[4]);  // Korea
+        } else if (key.find("EUROPE") != std::string::npos || key.find("UK") != std::string::npos || key.find("SWEDEN") != std::string::npos || key.find("GERMANY") != std::string::npos || key.find("POLAND") != std::string::npos) {
+            Http::set_forwarded_for(kRegionIps[5]);  // Europe / Poland
+        } else {
+            Http::set_forwarded_for("");
+        }
+    } else {
+        Http::set_forwarded_for("");
+    }
 }
 
 std::string normalized_server_region(const std::string& value) {
