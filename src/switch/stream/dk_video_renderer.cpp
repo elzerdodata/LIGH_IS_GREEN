@@ -1039,7 +1039,7 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
                 FrameMapping* candidate =
                     map_frame(motion_frame, motion_base, motion_handle,
                               motion_size);
-                if (candidate && candidate != fm)
+                if (candidate && candidate != fm && candidate->primary_ready)
                     motion_fm = candidate;
             }
         }

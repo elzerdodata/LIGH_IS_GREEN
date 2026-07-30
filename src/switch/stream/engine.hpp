@@ -223,7 +223,8 @@ private:
     std::mutex frame_mutex_;
     AVFrame* shared_frame_ = nullptr;   // latest decoded (decode thread writes)
     AVFrame* present_frame_ = nullptr;  // render thread's stable ref
-    AVFrame* motion_frame_ = nullptr;   // next source frame for midpoint pass
+    AVFrame* prev_frame_ = nullptr;     // previous presented frame for safe motion blending
+    AVFrame* motion_frame_ = nullptr;   // next/current source frame for midpoint pass
     bool shared_frame_valid_ = false;
     uint64_t shared_frame_seq_ = 0;     // protected by frame_mutex_
 

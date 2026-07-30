@@ -225,6 +225,7 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
 #ifdef __SWITCH__
     shared_frame_ = av_frame_alloc();
     present_frame_ = av_frame_alloc();
+    prev_frame_ = av_frame_alloc();
     motion_frame_ = av_frame_alloc();
     shared_frame_valid_ = false;
     shared_frame_seq_ = 0;
@@ -284,6 +285,7 @@ void Engine::stop() {
         std::lock_guard<std::mutex> lock(frame_mutex_);
         if (shared_frame_) av_frame_free(&shared_frame_);
         if (present_frame_) av_frame_free(&present_frame_);
+        if (prev_frame_) av_frame_free(&prev_frame_);
         if (motion_frame_) av_frame_free(&motion_frame_);
         for (SmoothFrame& queued : smooth_frames_)
             if (queued.frame) av_frame_free(&queued.frame);
@@ -1623,6 +1625,13 @@ SDL_Texture* Engine::pump_video() {
                     }
                     SmoothFrame next = smooth_frames_.front();
                     smooth_frames_.pop_front();
+
+                    // Shift present_frame_ into prev_frame_ (both are fully rendered/flushed primary frames)
+                    if (prev_frame_) av_frame_unref(prev_frame_);
+                    if (present_frame_ && present_frame_->data[0]) {
+                        av_frame_move_ref(prev_frame_, present_frame_);
+                    }
+
                     av_frame_unref(present_frame_);
                     av_frame_move_ref(present_frame_, next.frame);
                     av_frame_free(&next.frame);
@@ -1631,20 +1640,23 @@ SDL_Texture* Engine::pump_video() {
                     smooth_refresh_phase_ = 0;
                 } else if (smooth_have_present_) {
                     frame_seq = last_present_seq_;  // hold the current frame
-                    // At a detected 30 fps cadence the refresh between two
-                    // source frames becomes a 50/50 midpoint. Take a stable
-                    // ref because the decode thread may trim the queue as soon
-                    // as this lock is released.
-                    if (motion_frame_ && pacing_ == VideoPacing::Motion &&
-                        period == 2 &&
-                        smooth_refresh_phase_ == 1 && !smooth_frames_.empty() &&
-                        av_frame_ref(motion_frame_,
-                                     smooth_frames_.front().frame) == 0) {
-                        motion_frame = motion_frame_;
-                        motion_blend = 0.5f;
-                    }
                 }
-                if (smooth_have_present_) frame = present_frame_;
+
+                if (pacing_ == VideoPacing::Motion && smooth_have_present_) {
+                    if (prev_frame_ && prev_frame_->data[0] && present_frame_ && present_frame_->data[0]) {
+                        frame = prev_frame_;
+                        if (smooth_refresh_phase_ == 1) {
+                            if (motion_frame_ && av_frame_ref(motion_frame_, present_frame_) == 0) {
+                                motion_frame = motion_frame_;
+                                motion_blend = 0.5f;
+                            }
+                        }
+                    } else {
+                        frame = present_frame_;
+                    }
+                } else if (smooth_have_present_) {
+                    frame = present_frame_;
+                }
             } else if (shared_frame_valid_) {
                 av_frame_unref(present_frame_);
                 if (av_frame_ref(present_frame_, shared_frame_) == 0)
@@ -1742,6 +1754,7 @@ void Engine::set_pacing(VideoPacing pacing) {
     // generated surface owned by the old mode. This is especially important
     // when leaving Motion: retaining its second NVDEC surface can make the next
     // shader pass sample a recycled buffer and flash green.
+    if (prev_frame_) av_frame_unref(prev_frame_);
     if (motion_frame_) av_frame_unref(motion_frame_);
     for (SmoothFrame& queued : smooth_frames_)
         if (queued.frame) av_frame_free(&queued.frame);
