@@ -44,8 +44,6 @@ void main()
     vec2 chroma = texture(plane1, chromaUv).rg;
     if (u.motion_data.y > 0.5) {
         y = mix(y, texture(motionPlane0, lumaUv).r, u.motion_data.x);
-        chroma = mix(chroma, texture(motionPlane1, chromaUv).rg,
-                     u.motion_data.x);
     }
     if (u.sharp_data.x > 0.0) {
         vec2 px = 1.0 / vec2(textureSize(plane0, 0));
