@@ -36,12 +36,13 @@ constexpr uint32_t kDataSize = 0x1000;
 constexpr uint32_t kUniformTemplateOff = 0x000;
 constexpr uint32_t kUniformSlotOff = 0x100;
 constexpr uint32_t kUniformSlotStride = 0x100;
-constexpr uint32_t kSamplerOff = 0x400;   // sampler descriptor set
-constexpr uint32_t kImageOff = 0x500;     // image descriptor set (luma, chroma)
-constexpr uint32_t kVtxOff = 0x600;       // quad vertex buffer
-constexpr uint32_t kHudVtxOff = 0x680;    // HUD overlay corner quad
-constexpr uint32_t kGuideVtxOff = 0x700;  // top-right Guide/Home touch button
-constexpr uint32_t kQuickVtxOff = 0x780;  // two-dot handle + quick panel
+constexpr uint32_t kSamplerOff = 0x400;       // sampler descriptor set
+constexpr uint32_t kImageSlotOff = 0x500;     // per-slot image descriptor set
+constexpr uint32_t kImageSlotStride = 0x100;  // 256 bytes stride per slot (7 * 32 = 224 bytes)
+constexpr uint32_t kVtxOff = 0x800;           // quad vertex buffer
+constexpr uint32_t kHudVtxOff = 0x880;        // HUD overlay corner quad
+constexpr uint32_t kGuideVtxOff = 0x900;      // top-right Guide/Home touch button
+constexpr uint32_t kQuickVtxOff = 0x980;      // two-dot handle + quick panel
 
 struct Vertex {
     float position[3];
@@ -99,8 +100,8 @@ struct Transformation {
     alignas(16) float motion_data[4];  // x=blend factor, y=enabled
 };
 
-static_assert(7 * sizeof(DkImageDescriptor) <= kVtxOff - kImageOff,
-              "image descriptors overlap the vertex buffer");
+static_assert(7 * sizeof(DkImageDescriptor) <= kImageSlotStride,
+              "image descriptors overlap image slot stride");
 static_assert(sizeof(Transformation) == 144, "std140 Transformation");
 static_assert(kFrameSlots == 3, "renderer slot count must match kFbNum");
 
@@ -1085,30 +1086,33 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
                       static_cast<uint32_t>(slot) * kCmdPerFrameSize,
                       kCmdPerFrameSize);
 
+    const uint32_t image_off =
+        kImageSlotOff + static_cast<uint32_t>(slot) * kImageSlotStride;
+
     // Write sampler + image descriptors through the command buffer (canonical
     // deko3d path) so the writes are ordered on the GPU timeline before use.
     cmdbuf_.pushData(data_gpu_ + kSamplerOff, &sampler_desc_,
                      sizeof(DkSamplerDescriptor));
-    cmdbuf_.pushData(data_gpu_ + kImageOff, &fm->luma_desc,
+    cmdbuf_.pushData(data_gpu_ + image_off, &fm->luma_desc,
                      sizeof(DkImageDescriptor));
-    cmdbuf_.pushData(data_gpu_ + kImageOff + sizeof(DkImageDescriptor),
+    cmdbuf_.pushData(data_gpu_ + image_off + sizeof(DkImageDescriptor),
                      &fm->chroma_desc, sizeof(DkImageDescriptor));
     // Image descriptor #2 = the HUD text texture (sampled by the overlay pass).
-    cmdbuf_.pushData(data_gpu_ + kImageOff + 2 * sizeof(DkImageDescriptor),
+    cmdbuf_.pushData(data_gpu_ + image_off + 2 * sizeof(DkImageDescriptor),
                      &hud_desc_, sizeof(DkImageDescriptor));
     // Image descriptor #3 = the always-on Xbox Guide/Home touch overlay.
-    cmdbuf_.pushData(data_gpu_ + kImageOff + 3 * sizeof(DkImageDescriptor),
+    cmdbuf_.pushData(data_gpu_ + image_off + 3 * sizeof(DkImageDescriptor),
                      &guide_desc_, sizeof(DkImageDescriptor));
     // Image descriptor #4 = two-dot quick menu handle + optional panel.
-    cmdbuf_.pushData(data_gpu_ + kImageOff + 4 * sizeof(DkImageDescriptor),
+    cmdbuf_.pushData(data_gpu_ + image_off + 4 * sizeof(DkImageDescriptor),
                      &quick_desc_, sizeof(DkImageDescriptor));
     // Image descriptors #5/#6 = the next decoded frame used by Motion. When
     // Motion is inactive they alias the current frame, keeping all samplers
     // valid without requiring a separate shader variant.
     FrameMapping* next = motion_fm ? motion_fm : fm;
-    cmdbuf_.pushData(data_gpu_ + kImageOff + 5 * sizeof(DkImageDescriptor),
+    cmdbuf_.pushData(data_gpu_ + image_off + 5 * sizeof(DkImageDescriptor),
                      &next->luma_desc, sizeof(DkImageDescriptor));
-    cmdbuf_.pushData(data_gpu_ + kImageOff + 6 * sizeof(DkImageDescriptor),
+    cmdbuf_.pushData(data_gpu_ + image_off + 6 * sizeof(DkImageDescriptor),
                      &next->chroma_desc, sizeof(DkImageDescriptor));
 
     dk::ImageView view{framebuffers_[slot]};
@@ -1134,7 +1138,7 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
     cmdbuf_.bindDepthStencilState(depth_stencil);
 
     cmdbuf_.bindSamplerDescriptorSet(data_gpu_ + kSamplerOff, 1);
-    cmdbuf_.bindImageDescriptorSet(data_gpu_ + kImageOff, 7);
+    cmdbuf_.bindImageDescriptorSet(data_gpu_ + image_off, 7);
     cmdbuf_.barrier(DkBarrier_None,
                     DkInvalidateFlags_Image | DkInvalidateFlags_Descriptors);
 
