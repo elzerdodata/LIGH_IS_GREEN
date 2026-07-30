@@ -451,12 +451,7 @@ Settings load_settings() {
             std::clamp(data.value("pacing", 0), 0, kPacingLevels - 1);
     else
         settings.pacing = data.value("smooth", false) ? 1 : 0;
-    // Motion is an explicit per-session opt-in in v0.7. Never restore it at
-    // startup from an older settings file: a user who previously selected the
-    // experimental mode must see the new flashing warning before enabling it
-    // again. Smooth preserves the low-jitter behaviour without dual-surface
-    // interpolation.
-    if (settings.pacing == 2) settings.pacing = 1;
+    // Motion mode setting is preserved if set by the user.
     settings.console_quality = std::clamp(
         data.value("console_quality", 0), 0, kConsoleQualityLevels - 1);
     settings.brightness = std::clamp(data.value("brightness", 0), -20, 20);

@@ -1039,11 +1039,7 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
                 FrameMapping* candidate =
                     map_frame(motion_frame, motion_base, motion_handle,
                               motion_size);
-                // Never expose a just-imported or unproven NVDEC surface as
-                // Motion's second sampler. Its first ordinary draw establishes
-                // that the descriptor/layout is safe; until then Motion behaves
-                // exactly like Smooth instead of risking a green flash.
-                if (candidate && candidate != fm && candidate->primary_ready)
+                if (candidate && candidate != fm)
                     motion_fm = candidate;
             }
         }

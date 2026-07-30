@@ -1603,7 +1603,9 @@ SDL_Texture* Engine::pump_video() {
             if (motion_frame_) av_frame_unref(motion_frame_);
             if (pacing_ != VideoPacing::Steady) {
                 uint32_t period =
-                    source_refresh_period_.load(std::memory_order_relaxed);
+                    (pacing_ == VideoPacing::Motion)
+                        ? 2
+                        : source_refresh_period_.load(std::memory_order_relaxed);
                 bool due = !smooth_have_present_ ||
                            ++smooth_refresh_phase_ >= period;
                 // >= 2 keeps one decoded frame in reserve so a late arrival
