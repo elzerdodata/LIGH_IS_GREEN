@@ -178,11 +178,13 @@ std::vector<std::string> GssvSession::headers() const {
     };
 }
 
-void GssvSession::start_cloud(const std::string& title_id) {
+void GssvSession::start_cloud(const std::string& title_id, bool force_region) {
     json fallback_regions = json::array();
-    for (const auto& r : credentials_.regions) {
-        if (r.name != credentials_.selected_region && !r.name.empty()) {
-            fallback_regions.push_back(r.name);
+    if (!force_region) {
+        for (const auto& r : credentials_.regions) {
+            if (r.name != credentials_.selected_region && !r.name.empty()) {
+                fallback_regions.push_back(r.name);
+            }
         }
     }
 
@@ -304,10 +306,25 @@ void GssvSession::connect(const std::string& passport_token) {
                    "session connect");
 }
 
-std::string GssvSession::exchange_sdp(const std::string& offer_sdp) {
+std::string sdp_set_max_bitrate(const std::string& sdp, int max_kbps) {
+    if (max_kbps <= 0) return sdp;
+    std::string out = sdp;
+    std::string b_line = "b=AS:" + std::to_string(max_kbps) + "\r\n";
+    size_t video_m = out.find("m=video");
+    if (video_m != std::string::npos) {
+        size_t next_line = out.find("\r\n", video_m);
+        if (next_line != std::string::npos) {
+            out.insert(next_line + 2, b_line);
+        }
+    }
+    return out;
+}
+
+std::string GssvSession::exchange_sdp(const std::string& offer_sdp, int max_bitrate_kbps) {
+    std::string offer = sdp_set_max_bitrate(offer_sdp, max_bitrate_kbps);
     json body = {
         {"messageType", "offer"},
-        {"sdp", offer_sdp},
+        {"sdp", offer},
         {"requestId", "1"},
         {"configuration",
          {{"chatConfiguration",

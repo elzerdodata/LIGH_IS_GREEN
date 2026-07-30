@@ -758,7 +758,7 @@ void Engine::worker() {
             if (home)
                 session.start_home(home_server_id_);
             else
-                session.start_cloud(title_id_);
+                session.start_cloud(title_id_, force_region_);
             log("session created, polling state");
 
             set_status("Waiting for a server...");
@@ -1038,7 +1038,7 @@ bool Engine::run_peer(GssvSession& session) {
     // dropped by the server -> connection never completes).
     std::string answer;
     try {
-        answer = session.exchange_sdp(munged);
+        answer = session.exchange_sdp(munged, max_bitrate_kbps_);
     } catch (const std::exception& error) {
         log(std::string("SDP exchange failed; requesting a fresh session: ") +
             error.what());

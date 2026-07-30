@@ -35,7 +35,7 @@ public:
                 std::string locale = "en-US");
 
     // POST /v5/sessions/cloud/play for a title.
-    void start_cloud(const std::string& title_id);
+    void start_cloud(const std::string& title_id, bool force_region = true);
 
     // POST /v5/sessions/home/play against your own console (remote play).
     // Use with the xhome offering's credentials, not the cloud ones.
@@ -55,7 +55,7 @@ public:
     void connect(const std::string& passport_token);
 
     // Sends our SDP offer, blocks (polling) until the server's answer arrives.
-    std::string exchange_sdp(const std::string& offer_sdp);
+    std::string exchange_sdp(const std::string& offer_sdp, int max_bitrate_kbps = 0);
 
     // candidates: raw "candidate:..." strings; ufrag is our local ice-ufrag.
     void send_ice_candidates(const std::vector<std::string>& candidates,

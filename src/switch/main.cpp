@@ -285,6 +285,8 @@ struct Settings {
     // Empty = Xbox automatic. Otherwise the stable region.name returned by
     // offeringSettings.regions, e.g. "ChileCentral" or "BrazilSouth".
     std::string server_region;
+    int force_region = 1; // 0=Off (Allow Fallback), 1=On (Strict Selected Region Only)
+    int max_bitrate = 0;  // 0=Auto, 1=7Mbps, 2=14Mbps, 3=20Mbps, 4=30Mbps
     int language = 0;   // index into kLanguage* (0 = English US)
     int source = 0;     // 0=ask every time, 1=xCloud, 2=your Xbox
     float volume = 1.0f;  // output gain for streamed audio (0.5-4.0); tune in settings.json
@@ -440,6 +442,8 @@ Settings load_settings() {
             std::clamp(data.value("vibration", 2), 0, kVibrationLevels - 1);
     settings.region = std::clamp(data.value("region", 0), 0, 5);
     settings.server_region = data.value("server_region", "");
+    settings.force_region = std::clamp(data.value("force_region", 1), 0, 1);
+    settings.max_bitrate = std::clamp(data.value("max_bitrate", 0), 0, 4);
     settings.language =
         std::clamp(data.value("language", 0), 0, kLanguageCount - 1);
     settings.source = std::clamp(data.value("source", 0), 0, 2);
@@ -470,6 +474,8 @@ void save_settings(const Settings& settings) {
                 {"vibration", settings.vibration},
                 {"region", settings.region},
                 {"server_region", settings.server_region},
+                {"force_region", settings.force_region},
+                {"max_bitrate", settings.max_bitrate},
                 {"language", settings.language},
                 {"source", settings.source},
                 {"volume", settings.volume},
@@ -1486,6 +1492,10 @@ void launch_stream(App& app, bool home) {
     app.engine->set_audio_gain(app.settings.volume);
     app.engine->set_pacing(
         static_cast<stream::VideoPacing>(app.settings.pacing));
+    app.engine->set_force_region(app.settings.force_region != 0);
+    const int kBitrateKbps[5] = {0, 7000, 14000, 20000, 30000};
+    app.engine->set_max_bitrate_kbps(
+        kBitrateKbps[std::clamp(app.settings.max_bitrate, 0, 4)]);
     app.quick_menu_open = false;
     push_quick_menu_state(app, false);
     if (app.launching_home)
@@ -2175,13 +2185,19 @@ void draw_settings(App& app) {
         const char* title;
         std::string value;
     };
+    const char* kForceRegionLabels[2] = {"Off (Allow Fallback)", "On (Strict Region Only)"};
+    const char* kBitrateLabels[5] = {"Auto", "7 Mbps (Low)", "14 Mbps (Medium)", "20 Mbps (High)", "30 Mbps (Ultra HQ)"};
+
     std::vector<Row> rows = {
+        {"Server region", selected_server_region_label(app)},
+        {"Region bypass", kRegionLabels[app.settings.region]},
+        {"Force region", kForceRegionLabels[app.settings.force_region]},
+        {"Max bitrate", kBitrateLabels[app.settings.max_bitrate]},
         {"Stream quality", kQualityLabels[app.settings.quality]},
         {"Console quality",
          kConsoleQualityLabels[app.settings.console_quality]},
         {"Button layout", kMappingLabels[app.settings.mapping]},
         {"Vibration", kVibrationLabels[app.settings.vibration]},
-        {"Region bypass", kRegionLabels[app.settings.region]},
         {"Game language", kLanguageLabels[app.settings.language]},
         {"Volume",
          std::to_string(static_cast<int>(app.settings.volume * 100 + 0.5f)) + "%"},
@@ -2196,7 +2212,6 @@ void draw_settings(App& app) {
              return std::string(value);
         }()},
         {"Sharpness", kSharpnessLabels[app.settings.sharpness]},
-        {"Server region", selected_server_region_label(app)},
     };
     if (!app.consoles.empty())
         rows.push_back({"Preferred source",
@@ -2239,14 +2254,14 @@ void draw_settings(App& app) {
         app.gfx.fill(row, focused ? gfx::kSurfaceHi : gfx::kSurface);
         if (focused) {
             app.gfx.fill({row.x, row.y, 10, row.h}, gfx::kFocus);
-            app.gfx.frame(row, gfx::kFocus, 4);
-            app.gfx.frame({row.x - 4, row.y - 4, row.w + 8, row.h + 8},
-                          {gfx::kFocus.r, gfx::kFocus.g, gfx::kFocus.b, 90},
-                          5);
+            app.gfx.frame(row, 4, gfx::kFocus);
+        } else {
+            app.gfx.frame(row, 2, gfx::kBorder);
         }
-        app.gfx.text(rows[i].title, row.x + 68, row.y + 26,
-                     gfx::FontSize::Body, gfx::kText);
-        int vw = app.gfx.text_width(rows[i].value, gfx::FontSize::Body);
+        app.gfx.text(rows[i].title, row.x + 36, row.y + 26,
+                     gfx::FontSize::Body,
+                     focused ? gfx::kText : gfx::kTextDim);
+        int vw = app.gfx.measure_width(rows[i].value, gfx::FontSize::Body);
         if (i == signout_row || i == accounts_row) {
             // Action rows: no ‹ › carets (A opens/confirms them), and the
             // armed sign-out reads as danger.
@@ -2284,67 +2299,32 @@ void draw_settings(App& app) {
         line1 = "On-screen overlay with live stream stats (resolution, FPS,";
         line2 = "bitrate, loss). A debug tool -- turn it off for clean playback.";
     } else switch (app.settings_cursor) {
-        case 6:
-            line1 = "Output volume for streamed audio - raise it if the stream";
-            line2 = "sounds quiet even with the console at full volume.";
-            break;
-        case 7:
-            if (app.settings.pacing == 0) {
-                line1 = "Steady prioritizes latency and repeats the newest frame";
-                line2 = "on a local 60 Hz clock when the network arrives late.";
-            } else if (app.settings.pacing == 1) {
-                line1 = "Smooth holds one source frame to absorb network jitter.";
-                line2 = "It is steadier, with about one frame of extra lag.";
-            } else {
-                line1 = "Motion is 100% experimental midpoint frame generation.";
-                line2 = "It may cause rapid green flashing; switch back if seen.";
-            }
-            break;
-        case 8:
-            line1 = "Adds or removes light after video color conversion.";
-            line2 = "Small changes work best; high values can clip highlights.";
-            break;
-        case 9:
-            line1 = "Expands or compresses the difference between dark and";
-            line2 = "bright areas. 100% preserves the source image.";
-            break;
-        case 10:
-            line1 = "Controls color intensity. 100% is neutral; 0% is";
-            line2 = "grayscale, while higher values make colors stronger.";
-            break;
-        case 11:
-            line1 = "Adjusts midtones without moving the darkest blacks or";
-            line2 = "brightest whites. 1.00 is neutral; higher is brighter.";
-            break;
-        case 12:
-            line1 = "Sharpens the streamed image, which is a touch soft at";
-            line2 = "cloud bitrates. Low is subtle; High can ring on edges.";
-            break;
-        case 13:
+        case 0:
             line1 = "Chooses the xCloud datacenter. Auto follows Xbox; a fixed";
             line2 = "region can avoid a busy queue but may add network latency.";
             break;
-        case 14:
-            line1 = "Where Play launches games: xCloud (cloud servers) or";
-            line2 = "Remote Play from your Xbox, including away from home.";
-            break;
-        case 2:
-            line1 = "Positional keeps the Switch layout under your thumbs;";
-            line2 = "match labels follows the printed A/B/X/Y letters.";
-            break;
-        case 3:
-            line1 = "Rumble intensity for the game's vibration effects.";
-            line2 = "High still leaves headroom to avoid the HD-rumble hum.";
-            break;
-        case 4:
+        case 1:
             line1 = "Region bypass spoofs your location to Xbox to reach";
             line2 = "xCloud from an unsupported country. Use at your own risk.";
             break;
-        case 5:
-            line1 = "Sets the streamed console's language for games without";
-            line2 = "an in-game language menu. Takes effect on next launch.";
+        case 2:
+            line1 = "Forces xCloud to use ONLY your chosen region with NO fallback.";
+            line2 = "Prevents Xbox from transferring your session to US servers.";
             break;
-        case 1:
+        case 3:
+            line1 = "Controls maximum WebRTC video stream bitrate.";
+            line2 = "Auto adapts; higher values (20-30 Mbps) improve image sharpness.";
+            break;
+        case 4:
+            if (app.settings.quality == 3) {
+                line1 = "Experimental TV/Tizen pool. It may provide high bitrate";
+                line2 = "but can queue longer; use HQ Windows if that happens.";
+            } else {
+                line1 = "Announces your device tier to Xbox. HQ Windows gives";
+                line2 = "the best 1080p pool; 720p uses less bandwidth.";
+            }
+            break;
+        case 5:
             if (app.settings.console_quality == 1) {
                 line1 = "Experimental 1080p Remote Play request. Compatibility";
                 line2 = "depends on Xbox; no video after 15s retries at 720p.";
@@ -2353,14 +2333,57 @@ void draw_settings(App& app) {
                 line2 = "Choose 1080p only for beta testing on a strong link.";
             }
             break;
-        case 0:
-            if (app.settings.quality == 3) {
-                line1 = "Experimental TV/Tizen pool. It may provide high bitrate";
-                line2 = "but can queue longer; use HQ Windows if that happens.";
+        case 6:
+            line1 = "Positional keeps the Switch layout under your thumbs;";
+            line2 = "match labels follows the printed A/B/X/Y letters.";
+            break;
+        case 7:
+            line1 = "Rumble intensity for the game's vibration effects.";
+            line2 = "High still leaves headroom to avoid the HD-rumble hum.";
+            break;
+        case 8:
+            line1 = "Sets the streamed console's language for games without";
+            line2 = "an in-game language menu. Takes effect on next launch.";
+            break;
+        case 9:
+            line1 = "Output volume for streamed audio - raise it if the stream";
+            line2 = "sounds quiet even with the console at full volume.";
+            break;
+        case 10:
+            if (app.settings.pacing == 0) {
+                line1 = "Steady prioritizes latency and repeats the newest frame";
+                line2 = "on a local 60 Hz clock when the network arrives late.";
+            } else if (app.settings.pacing == 1) {
+                line1 = "Smooth holds one source frame to absorb network jitter.";
+                line2 = "It is steadier, with about one frame of extra lag.";
             } else {
-                line1 = "Higher quality needs a stronger connection - 5 GHz";
-                line2 = "Wi-Fi or docked LAN is recommended for high bitrate.";
+                line1 = "Motion is Luma 50% midpoint frame generation (30->60 Hz).";
+                line2 = "Smooth 60 Hz motion blending with no green flashing.";
             }
+            break;
+        case 11:
+            line1 = "Adds or removes light after video color conversion.";
+            line2 = "Small changes work best; high values can clip highlights.";
+            break;
+        case 12:
+            line1 = "Expands or compresses the difference between dark and";
+            line2 = "bright areas. 100% preserves the source image.";
+            break;
+        case 13:
+            line1 = "Controls color intensity. 100% is neutral; 0% is";
+            line2 = "grayscale, while higher values make colors stronger.";
+            break;
+        case 14:
+            line1 = "Adjusts midtones without moving the darkest blacks or";
+            line2 = "brightest whites. 1.00 is neutral; higher is brighter.";
+            break;
+        case 15:
+            line1 = "Sharpens the streamed image, which is a touch soft at";
+            line2 = "cloud bitrates. Low is subtle; High can ring on edges.";
+            break;
+        case 16:
+            line1 = "Where Play launches games: xCloud (cloud servers) or";
+            line2 = "Remote Play from your Xbox, including away from home.";
             break;
         default:
             line1 = "Higher quality needs a stronger connection — 5 GHz";
@@ -3286,59 +3309,65 @@ int main(int argc, char** argv) {
                 int direction = (input.right ? 1 : 0) - (input.left ? 1 : 0);
                 if (direction != 0 && app.settings_cursor != signout_row) {
                     if (app.settings_cursor == 0)
+                        cycle_server_region(app, direction);
+                    else if (app.settings_cursor == 1) {
+                        app.settings.region =
+                            (app.settings.region + direction + 6) % 6;
+                        apply_region(app.settings);  // takes effect next request
+                    } else if (app.settings_cursor == 2)
+                        app.settings.force_region =
+                            (app.settings.force_region + direction + 2) % 2;
+                    else if (app.settings_cursor == 3)
+                        app.settings.max_bitrate =
+                            (app.settings.max_bitrate + direction + 5) % 5;
+                    else if (app.settings_cursor == 4)
                         app.settings.quality =
                             (app.settings.quality + direction +
                              kQualityLevels) %
                             kQualityLevels;
-                    else if (app.settings_cursor == 1)
+                    else if (app.settings_cursor == 5)
                         app.settings.console_quality =
                             (app.settings.console_quality + direction +
                              kConsoleQualityLevels) %
                             kConsoleQualityLevels;
-                    else if (app.settings_cursor == 2)
+                    else if (app.settings_cursor == 6)
                         app.settings.mapping =
                             (app.settings.mapping + direction + 2) % 2;
-                    else if (app.settings_cursor == 3)
+                    else if (app.settings_cursor == 7)
                         app.settings.vibration =
                             (app.settings.vibration + direction +
                              kVibrationLevels) %
                             kVibrationLevels;
-                    else if (app.settings_cursor == 4) {
-                        app.settings.region =
-                            (app.settings.region + direction + 6) % 6;
-                        apply_region(app.settings);  // takes effect next request
-                    } else if (app.settings_cursor == 5)
+                    else if (app.settings_cursor == 8)
                         app.settings.language =
                             (app.settings.language + direction + kLanguageCount) %
                             kLanguageCount;
-                    else if (app.settings_cursor == 6)
+                    else if (app.settings_cursor == 9)
                         app.settings.volume = std::clamp(
                             app.settings.volume + direction * 0.5f, 0.5f, 4.0f);
-                    else if (app.settings_cursor == 7)
+                    else if (app.settings_cursor == 10)
                         app.settings.pacing =
                             (app.settings.pacing + direction + kPacingLevels) %
                             kPacingLevels;
-                    else if (app.settings_cursor == 8)
+                    else if (app.settings_cursor == 11)
                         app.settings.brightness = std::clamp(
                             app.settings.brightness + direction * 5, -20, 20);
-                    else if (app.settings_cursor == 9)
+                    else if (app.settings_cursor == 12)
                         app.settings.contrast = std::clamp(
                             app.settings.contrast + direction * 10, 70, 130);
-                    else if (app.settings_cursor == 10)
+                    else if (app.settings_cursor == 13)
                         app.settings.saturation = std::clamp(
                             app.settings.saturation + direction * 10, 0, 150);
-                    else if (app.settings_cursor == 11)
+                    else if (app.settings_cursor == 14)
                         app.settings.gamma = std::clamp(
                             app.settings.gamma + direction * 5, 50, 200);
-                    else if (app.settings_cursor == 12)
+                    else if (app.settings_cursor == 15)
                         app.settings.sharpness =
                             (app.settings.sharpness + direction + 4) % 4;
-                    else if (app.settings_cursor == 13)
-                        cycle_server_region(app, direction);
                     // "Preferred source" only exists with a linked console;
                     // Debug HUD sits right after it either way. Accounts and
                     // Sign out are A-rows, handled above.
-                    else if (!app.consoles.empty() && app.settings_cursor == 14)
+                    else if (!app.consoles.empty() && app.settings_cursor == 16)
                         app.settings.source =
                             (app.settings.source + direction + 3) % 3;
                     else if (app.settings_cursor == hud_row)

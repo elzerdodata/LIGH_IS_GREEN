@@ -178,8 +178,13 @@ private:
     std::string locale_ = "en-US";  // streamed console's system language
     float audio_gain_ = 1.0f;       // forwarded to AudioPlayer::set_gain
     VideoPacing pacing_ = VideoPacing::Steady;  // set before start()
+    bool force_region_ = true;
+    int max_bitrate_kbps_ = 0;
     QuickMenuState quick_menu_state_;
+
 public:
+    void set_force_region(bool force) { force_region_ = force; }
+    void set_max_bitrate_kbps(int kbps) { max_bitrate_kbps_ = kbps; }
     void log(const std::string& line);  // also used by the libpeer log sink
 
 private:
