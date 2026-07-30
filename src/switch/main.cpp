@@ -2254,14 +2254,14 @@ void draw_settings(App& app) {
         app.gfx.fill(row, focused ? gfx::kSurfaceHi : gfx::kSurface);
         if (focused) {
             app.gfx.fill({row.x, row.y, 10, row.h}, gfx::kFocus);
-            app.gfx.frame(row, 4, gfx::kFocus);
+            app.gfx.frame(row, gfx::kFocus, 4);
         } else {
-            app.gfx.frame(row, 2, gfx::kBorder);
+            app.gfx.frame(row, gfx::kChipEdge, 2);
         }
         app.gfx.text(rows[i].title, row.x + 36, row.y + 26,
                      gfx::FontSize::Body,
                      focused ? gfx::kText : gfx::kTextDim);
-        int vw = app.gfx.measure_width(rows[i].value, gfx::FontSize::Body);
+        int vw = app.gfx.text_width(rows[i].value, gfx::FontSize::Body);
         if (i == signout_row || i == accounts_row) {
             // Action rows: no ‹ › carets (A opens/confirms them), and the
             // armed sign-out reads as danger.
