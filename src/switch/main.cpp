@@ -514,6 +514,15 @@ const char* kRegionIps[6] = {"", "143.244.47.65", "169.150.198.66",
                              "138.199.21.239", "121.125.60.151",
                              "45.134.212.66"};
 
+std::string normalized_server_region(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (unsigned char ch : value)
+        if (std::isalnum(ch))
+            out.push_back(static_cast<char>(std::toupper(ch)));
+    return out;
+}
+
 void apply_region(const Settings& settings) {
     if (settings.region > 0 && settings.region < 6) {
         Http::set_forwarded_for(kRegionIps[settings.region]);
@@ -535,15 +544,6 @@ void apply_region(const Settings& settings) {
     } else {
         Http::set_forwarded_for("");
     }
-}
-
-std::string normalized_server_region(const std::string& value) {
-    std::string out;
-    out.reserve(value.size());
-    for (unsigned char ch : value)
-        if (std::isalnum(ch))
-            out.push_back(static_cast<char>(std::toupper(ch)));
-    return out;
 }
 
 std::string pretty_server_region(const std::string& name) {
