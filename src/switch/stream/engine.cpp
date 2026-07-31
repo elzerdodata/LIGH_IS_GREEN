@@ -1385,11 +1385,13 @@ bool Engine::run_peer(GssvSession& session) {
                     if (peer_) {
                         peer_connection_send_receiver_report(
                             peer_, fraction, cumulative, highest_ext, 0);
-                        peer_connection_send_remb(
-                            peer_,
-                            static_cast<uint32_t>(
-                                tier_profile(media_tier_).bitrate_kbps) *
-                                1000u);
+                        uint32_t remb_kbps = static_cast<uint32_t>(
+                            tier_profile(media_tier_).bitrate_kbps);
+                        if (max_bitrate_kbps_ > 0) {
+                            remb_kbps = std::min(remb_kbps,
+                                                 static_cast<uint32_t>(max_bitrate_kbps_));
+                        }
+                        peer_connection_send_remb(peer_, remb_kbps * 1000u);
                     }
                 }
 #ifdef __SWITCH__

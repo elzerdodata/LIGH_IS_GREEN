@@ -534,15 +534,25 @@ void apply_region(const Settings& settings) {
         Http::set_forwarded_for(kRegionIps[settings.region]);
     } else if (!settings.server_region.empty()) {
         std::string key = normalized_server_region(settings.server_region);
-        if (key.find("US") != std::string::npos) {
+        if (key.find("EASTUS") != std::string::npos ||
+            key.find("WESTUS") != std::string::npos ||
+            key.find("CENTRALUS") != std::string::npos ||
+            key.find("UNITEDSTATES") != std::string::npos) {
             Http::set_forwarded_for(kRegionIps[1]);  // United States
-        } else if (key.find("BRAZIL") != std::string::npos || key.find("CHILE") != std::string::npos || key.find("ARGENTINA") != std::string::npos) {
+        } else if (key.find("BRAZIL") != std::string::npos ||
+                   key.find("CHILE") != std::string::npos ||
+                   key.find("ARGENTINA") != std::string::npos ||
+                   key.find("SOUTHAMERICA") != std::string::npos) {
             Http::set_forwarded_for(kRegionIps[2]);  // South America / Brazil
         } else if (key.find("JAPAN") != std::string::npos) {
             Http::set_forwarded_for(kRegionIps[3]);  // Japan
         } else if (key.find("KOREA") != std::string::npos) {
             Http::set_forwarded_for(kRegionIps[4]);  // Korea
-        } else if (key.find("EUROPE") != std::string::npos || key.find("UK") != std::string::npos || key.find("SWEDEN") != std::string::npos || key.find("GERMANY") != std::string::npos || key.find("POLAND") != std::string::npos) {
+        } else if (key.find("EUROPE") != std::string::npos ||
+                   key.find("UK") != std::string::npos ||
+                   key.find("SWEDEN") != std::string::npos ||
+                   key.find("GERMANY") != std::string::npos ||
+                   key.find("POLAND") != std::string::npos) {
             Http::set_forwarded_for(kRegionIps[5]);  // Europe / Poland
         } else {
             Http::set_forwarded_for("");
@@ -3264,7 +3274,8 @@ int main(int argc, char** argv) {
                 // contrast, saturation, gamma, sharpness, server region,
                 // [source when a console is linked], Debug HUD, accounts,
                 // sign out.
-                int hud_row = app.consoles.empty() ? 14 : 15;
+                int source_row = app.consoles.empty() ? -1 : 16;
+                int hud_row = app.consoles.empty() ? 16 : 17;
                 int accounts_row = hud_row + 1;
                 int signout_row = hud_row + 2;
                 if (input.up)
@@ -3307,7 +3318,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 int direction = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-                if (direction != 0 && app.settings_cursor != signout_row) {
+                if (direction != 0 && app.settings_cursor != signout_row && app.settings_cursor != accounts_row) {
                     if (app.settings_cursor == 0)
                         cycle_server_region(app, direction);
                     else if (app.settings_cursor == 1) {
@@ -3364,14 +3375,13 @@ int main(int argc, char** argv) {
                     else if (app.settings_cursor == 15)
                         app.settings.sharpness =
                             (app.settings.sharpness + direction + 4) % 4;
-                    // "Preferred source" only exists with a linked console;
-                    // Debug HUD sits right after it either way. Accounts and
-                    // Sign out are A-rows, handled above.
-                    else if (!app.consoles.empty() && app.settings_cursor == 16)
+                    else if (source_row != -1 && app.settings_cursor == source_row)
                         app.settings.source =
                             (app.settings.source + direction + 3) % 3;
                     else if (app.settings_cursor == hud_row)
                         app.settings.debug_hud = app.settings.debug_hud ? 0 : 1;
+                    save_settings(app.settings);
+                }
                     save_settings(app.settings);
                 }
                 if (input.b || input.zl) {
