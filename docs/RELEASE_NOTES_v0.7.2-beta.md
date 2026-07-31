@@ -1,8 +1,23 @@
-# Light is Green v0.7.2-beta
+# Light is Green v0.7.2-beta (Green Screen Fix Release)
 
-Esta versión corrige el funcionamiento del perfil **Motion** (frame generation/interpolation 30fps -> 60fps).
+> ⚠️ **Nota Importante / Important Note:**
+> **[ES]** La versión preliminar v0.8.0 fue retirada del repositorio debido a que requería pruebas adicionales de estabilidad. La v0.7.2-beta es la versión oficial actual recomendada para su uso.
+> **[EN]** The preliminary v0.8.0 release was withdrawn from the repository as it required additional stability testing. v0.7.2-beta is the current official recommended release.
 
-## Cambios y Correcciones en v0.7.2-beta
-* **Corrección del perfil Motion:** Se eliminó la restricción `candidate->primary_ready` en el renderizador deko3d (`DkVideoRenderer::render`), la cual impedía la asignación de `motion_fm` y desactivaba la mezcla de fotogramas (frame blending).
-* **Forzado de cadencia de 2 refrescos en modo Motion:** Ajustado el pacer en `Engine::pump_video()` para forzar un período de cadencia (`period = 2`) cuando el perfil Motion está activo, permitiendo la generación de fotogramas intermedios (50/50 blend) en pantallas de 60Hz.
-* **Persistencia del perfil Motion:** Eliminado el reseteo automático de `settings.pacing` a `1` (Smooth) al iniciar la aplicación, permitiendo que la preferencia del usuario se guarde correctamente.
+---
+
+## 🇪🇸 Notas de Lanzamiento en Español
+
+### 💚 Corrección del Parpadeo Verde (Perfil Motion)
+* **Solución a la falla de croma YUV / deko3d:**
+  * Se corrigió la colisión de memoria GPU (*descriptor set race condition*) en deko3d asignando búferes de descriptores aislados por ranura de swapchain (`0x500`, `0x600`, `0x700`).
+  * Se aplicó la mezcla de fotogramas al 50% en el plano Luma (*Luma-Only Blending*), eliminando permanentemente los destellos y parpadeos verdes al activar la interpolación a 60 Hz.
+
+---
+
+## 🇬🇧 Release Notes in English
+
+### 💚 Green Screen / Flashing Fix (Motion Profile)
+* **Resolved YUV Chroma / deko3d Memory Race Condition:**
+  * Fixed GPU memory race condition in deko3d by assigning isolated descriptor set buffers per swapchain slot (`0x500`, `0x600`, `0x700`).
+  * Implemented 50% Luma-Only frame interpolation, permanently eliminating rapid green flashing when using the 60 Hz Motion profile.
