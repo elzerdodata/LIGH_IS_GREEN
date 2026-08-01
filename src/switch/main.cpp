@@ -3382,8 +3382,6 @@ int main(int argc, char** argv) {
                         app.settings.debug_hud = app.settings.debug_hud ? 0 : 1;
                     save_settings(app.settings);
                 }
-                    save_settings(app.settings);
-                }
                 if (input.b || input.zl) {
                     app.signout_armed = false;
                     app.scene = app.settings_return;
