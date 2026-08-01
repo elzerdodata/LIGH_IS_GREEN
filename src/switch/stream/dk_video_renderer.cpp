@@ -103,7 +103,7 @@ struct Transformation {
 
 static_assert(7 * sizeof(DkImageDescriptor) <= kImageSlotStride,
               "image descriptors overlap image slot stride");
-static_assert(sizeof(Transformation) == 144, "std140 Transformation");
+static_assert(sizeof(Transformation) == 160, "std140 Transformation");
 static_assert(kFrameSlots == 3, "renderer slot count must match kFbNum");
 
 // Column-major YUV->RGB matrices (matching Moonlight-Switch / BT.xxx).
