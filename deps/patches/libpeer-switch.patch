@@ -162,7 +162,7 @@ index 7721f87..e003079 100644
  )
 -
 diff --git a/src/agent.c b/src/agent.c
-index 57de5c9..dd9d7e0 100644
+index 57de5c9..ca83d7d 100644
 --- a/src/agent.c
 +++ b/src/agent.c
 @@ -13,7 +13,15 @@
@@ -182,15 +182,20 @@ index 57de5c9..dd9d7e0 100644
  #define AGENT_CONNCHECK_PERIOD 100
  #define AGENT_STUN_RECV_MAXTIMES 1000
  
-@@ -21,6 +29,7 @@ void agent_clear_candidates(Agent* agent) {
+@@ -21,6 +29,12 @@ void agent_clear_candidates(Agent* agent) {
    agent->local_candidates_count = 0;
    agent->remote_candidates_count = 0;
    agent->candidate_pairs_num = 0;
 +  agent->conncheck_rounds = 0;
++  agent->consent_request_time = 0;
++  agent->consent_response_time = 0;
++  agent->consent_rtt_ms = 0;
++  memset(agent->consent_transaction_id, 0,
++         sizeof(agent->consent_transaction_id));
  }
  
  int agent_create(Agent* agent) {
-@@ -339,6 +348,20 @@ static void agent_create_binding_request(Agent* agent, StunMessage* msg) {
+@@ -339,6 +353,41 @@ static void agent_create_binding_request(Agent* agent, StunMessage* msg) {
    stun_msg_finish(msg, STUN_CREDENTIAL_SHORT_TERM, agent->remote_upwd, strlen(agent->remote_upwd));
  }
  
@@ -203,15 +208,59 @@ index 57de5c9..dd9d7e0 100644
 +  if (pair == NULL || pair->remote == NULL)
 +    return -1;
 +  StunMessage msg;
++  StunHeader* header;
++  uint32_t sent_at;
++  int ret;
 +  memset(&msg, 0, sizeof(msg));
 +  agent_create_binding_request(agent, &msg);
-+  return agent_socket_send(agent, &pair->remote->addr, msg.buf, msg.size);
++  header = (StunHeader*)msg.buf;
++  sent_at = ports_get_epoch_time();
++  ret = agent_socket_send(agent, &pair->remote->addr, msg.buf, msg.size);
++  if (ret >= 0) {
++    memcpy(agent->consent_transaction_id, header->transaction_id,
++           sizeof(agent->consent_transaction_id));
++    agent->consent_request_time = sent_at;
++  }
++  return ret;
++}
++
++int agent_get_rtt_ms(Agent* agent) {
++  uint32_t now;
++  if (agent == NULL || agent->consent_response_time == 0)
++    return -1;
++  now = ports_get_epoch_time();
++  if ((uint32_t)(now - agent->consent_response_time) > 10000)
++    return -1;
++  return (int)agent->consent_rtt_ms;
 +}
 +
  void agent_process_stun_request(Agent* agent, StunMessage* stun_msg, Address* addr) {
    StunMessage msg;
    StunHeader* header;
-@@ -373,7 +396,11 @@ int agent_recv(Agent* agent, uint8_t* buf, int len) {
+@@ -358,10 +407,21 @@ void agent_process_stun_request(Agent* agent, StunMessage* stun_msg, Address* ad
+ }
+ 
+ void agent_process_stun_response(Agent* agent, StunMessage* stun_msg) {
++  StunHeader* header;
+   switch (stun_msg->stunmethod) {
+     case STUN_METHOD_BINDING:
+       if (stun_msg_is_valid(stun_msg->buf, stun_msg->size, agent->remote_upwd) == 0) {
+-        agent->nominated_pair->state = ICE_CANDIDATE_STATE_SUCCEEDED;
++        if (agent->nominated_pair != NULL)
++          agent->nominated_pair->state = ICE_CANDIDATE_STATE_SUCCEEDED;
++        header = (StunHeader*)stun_msg->buf;
++        if (agent->consent_request_time != 0 &&
++            memcmp(header->transaction_id, agent->consent_transaction_id,
++                   sizeof(agent->consent_transaction_id)) == 0) {
++          uint32_t now = ports_get_epoch_time();
++          agent->consent_rtt_ms = now - agent->consent_request_time;
++          agent->consent_response_time = now;
++          agent->consent_request_time = 0;
++        }
+       }
+       break;
+     default:
+@@ -373,7 +433,11 @@ int agent_recv(Agent* agent, uint8_t* buf, int len) {
    int ret = -1;
    StunMessage stun_msg;
    Address addr;
@@ -224,7 +273,7 @@ index 57de5c9..dd9d7e0 100644
      memcpy(stun_msg.buf, buf, ret);
      stun_msg.size = ret;
      stun_parse_msg_buf(&stun_msg);
-@@ -434,18 +461,112 @@ void agent_set_remote_description(Agent* agent, char* description) {
+@@ -434,18 +498,112 @@ void agent_set_remote_description(Agent* agent, char* description) {
    LOGD("remote upwd: %s", agent->remote_upwd);
  }
  
@@ -322,14 +371,14 @@ index 57de5c9..dd9d7e0 100644
 +          local = &agent->local_candidates[i];
 +          break;
 +        }
-+      }
+       }
 +      if (local == NULL)
 +        continue;
 +      for (k = 0; k < agent->candidate_pairs_num; k++) {
 +        if (agent_addr_same_endpoint(&agent->candidate_pairs[k].remote->addr,
 +                                     &agent->remote_candidates[j].addr))
 +          break;
-       }
++      }
 +      if (k < agent->candidate_pairs_num)
 +        continue;  // duplicate endpoint
 +      if (agent->candidate_pairs_num >= AGENT_MAX_CANDIDATE_PAIRS)
@@ -346,7 +395,7 @@ index 57de5c9..dd9d7e0 100644
      }
    }
    LOGD("candidate pairs num: %d", agent->candidate_pairs_num);
-@@ -501,6 +622,16 @@ int agent_select_candidate_pair(Agent* agent) {
+@@ -501,6 +659,16 @@ int agent_select_candidate_pair(Agent* agent) {
        return 0;
      }
    }
@@ -365,10 +414,21 @@ index 57de5c9..dd9d7e0 100644
    return -1;
  }
 diff --git a/src/agent.h b/src/agent.h
-index 382d5a4..f696cb7 100644
+index 382d5a4..564ea21 100644
 --- a/src/agent.h
 +++ b/src/agent.h
-@@ -68,6 +68,7 @@ struct Agent {
+@@ -59,6 +59,10 @@ struct Agent {
+   Address host_addr;
+   int b_host_addr;
+   uint64_t binding_request_time;
++  uint32_t consent_request_time;
++  uint32_t consent_response_time;
++  uint32_t consent_rtt_ms;
++  uint32_t consent_transaction_id[3];
+   AgentState state;
+ 
+   AgentMode mode;
+@@ -68,6 +72,7 @@ struct Agent {
    IceCandidatePair* nominated_pair;
  
    int candidate_pairs_num;
@@ -376,12 +436,16 @@ index 382d5a4..f696cb7 100644
    int use_candidate;
    uint32_t transaction_id[3];
  };
-@@ -80,6 +81,9 @@ void agent_get_local_description(Agent* agent, char* description, int length);
+@@ -80,6 +85,13 @@ void agent_get_local_description(Agent* agent, char* description, int length);
  
  int agent_send(Agent* agent, const uint8_t* buf, int len);
  
 +// Resend a STUN binding request on the selected pair (ICE consent keepalive).
 +int agent_send_binding_request(Agent* agent);
++
++// Latest round-trip time from a consent STUN request/response on the selected
++// media path, or -1 when no recent sample is available.
++int agent_get_rtt_ms(Agent* agent);
 +
  int agent_recv(Agent* agent, uint8_t* buf, int len);
  
@@ -401,8 +465,37 @@ index 94905a8..1d204ff 100644
  #endif
  
  #define CONFIG_IPV6 0
+diff --git a/src/dtls_srtp.c b/src/dtls_srtp.c
+index dd54616..86b2098 100644
+--- a/src/dtls_srtp.c
++++ b/src/dtls_srtp.c
+@@ -423,7 +423,9 @@ static int dtls_srtp_handshake_client(DtlsSrtp* dtls_srtp) {
+   int ret;
+ 
+   ret = dtls_srtp_do_handshake(dtls_srtp);
+-  if (ret != 0) {
++  if (ret == MBEDTLS_ERR_SSL_TIMEOUT) {
++    LOGW("DTLS handshake timed out waiting for the peer");
++  } else if (ret != 0) {
+     LOGE("failed! mbedtls_ssl_handshake returned -0x%.4x\n\n", (unsigned int)-ret);
+   }
+ 
+@@ -442,6 +444,13 @@ int dtls_srtp_handshake(DtlsSrtp* dtls_srtp, Address* addr) {
+     ret = dtls_srtp_handshake_client(dtls_srtp);
+   }
+ 
++  // Do not validate a certificate that the handshake never received. Besides
++  // producing the misleading "no remote fingerprint" message, returning -1
++  // here erased MBEDTLS_ERR_SSL_TIMEOUT and made a recoverable wait
++  // indistinguishable from a terminal DTLS failure.
++  if (ret != 0)
++    return ret;
++
+   const mbedtls_x509_crt* remote_crt;
+   if ((remote_crt = mbedtls_ssl_get_peer_cert(&dtls_srtp->ssl)) != NULL) {
+     dtls_srtp_x509_digest(remote_crt, dtls_srtp->actual_remote_fingerprint);
 diff --git a/src/peer_connection.c b/src/peer_connection.c
-index c763e80..b3442c2 100644
+index c763e80..f5f0ea8 100644
 --- a/src/peer_connection.c
 +++ b/src/peer_connection.c
 @@ -45,6 +45,10 @@ struct PeerConnection {
@@ -416,7 +509,20 @@ index c763e80..b3442c2 100644
  };
  
  static void peer_connection_outgoing_rtp_packet(uint8_t* data, size_t size, void* user_data) {
-@@ -92,6 +96,22 @@ static void peer_connection_incoming_rtcp(PeerConnection* pc, uint8_t* buf, size
+@@ -73,6 +77,12 @@ static int peer_connection_dtls_srtp_recv(void* ctx, unsigned char* buf, size_t
+ 
+     recv_max++;
+   }
++  // mbedTLS interprets a zero-length return as a real UDP EOF and permanently
++  // reports MBEDTLS_ERR_SSL_CONN_EOF. An idle non-blocking socket is not EOF:
++  // report the polling budget as a timeout so the DTLS state machine remains
++  // resumable and callers can distinguish a silent route from a fatal alert.
++  if (ret <= 0 && recv_max >= CONFIG_TLS_READ_TIMEOUT)
++    return MBEDTLS_ERR_SSL_TIMEOUT;
+   return ret;
+ }
+ 
+@@ -92,6 +102,22 @@ static void peer_connection_incoming_rtcp(PeerConnection* pc, uint8_t* buf, size
      rtcp_header = (RtcpHeader*)(buf + pos);
  
      switch (rtcp_header->type) {
@@ -439,7 +545,7 @@ index c763e80..b3442c2 100644
        case RTCP_RR:
          LOGD("RTCP_PR");
          if (rtcp_header->rc > 0) {
-@@ -213,6 +233,161 @@ int peer_connection_send_video(PeerConnection* pc, const uint8_t* buf, size_t le
+@@ -213,6 +239,167 @@ int peer_connection_send_video(PeerConnection* pc, const uint8_t* buf, size_t le
    return rtp_encoder_encode(&pc->vrtp_encoder, buf, len);
  }
  
@@ -465,6 +571,12 @@ index c763e80..b3442c2 100644
 +  if (pc == NULL || pc->state != PEER_CONNECTION_COMPLETED)
 +    return -1;
 +  return agent_send_binding_request(&pc->agent);
++}
++
++int peer_connection_get_rtt_ms(PeerConnection* pc) {
++  if (pc == NULL || pc->state != PEER_CONNECTION_COMPLETED)
++    return -1;
++  return agent_get_rtt_ms(&pc->agent);
 +}
 +
 +// Send an RTCP Generic NACK (RFC 4585 RTPFB, FMT=1) to request retransmission
@@ -601,7 +713,7 @@ index c763e80..b3442c2 100644
  int peer_connection_datachannel_send(PeerConnection* pc, char* message, size_t len) {
    return peer_connection_datachannel_send_sid(pc, message, len, 0);
  }
-@@ -228,6 +403,17 @@ int peer_connection_datachannel_send_sid(PeerConnection* pc, char* message, size
+@@ -228,6 +415,17 @@ int peer_connection_datachannel_send_sid(PeerConnection* pc, char* message, size
      return sctp_outgoing_data(&pc->sctp, message, len, PPID_BINARY, sid);
  }
  
@@ -619,7 +731,7 @@ index c763e80..b3442c2 100644
  int peer_connection_create_datachannel(PeerConnection* pc, DecpChannelType channel_type, uint16_t priority, uint32_t reliability_parameter, char* label, char* protocol) {
    return peer_connection_create_datachannel_sid(pc, channel_type, priority, reliability_parameter, label, protocol, 0);
  }
-@@ -268,6 +454,7 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
+@@ -268,6 +466,7 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
    }
  
    msg[0] = DATA_CHANNEL_OPEN;
@@ -627,7 +739,7 @@ index c763e80..b3442c2 100644
    memcpy(msg + 2, &priority_big_endian, sizeof(uint16_t));
    memcpy(msg + 4, &reliability_big_endian, sizeof(uint32_t));
    memcpy(msg + 8, &label_length, sizeof(uint16_t));
-@@ -277,6 +464,11 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
+@@ -277,6 +476,11 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
  
    rtrn = sctp_outgoing_data(&pc->sctp, msg, msg_size, PPID_CONTROL, sid);
    free(msg);
@@ -639,7 +751,39 @@ index c763e80..b3442c2 100644
    return rtrn;
  }
  
-@@ -342,6 +534,26 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -301,9 +505,9 @@ int peer_connection_loop(PeerConnection* pc) {
+       }
+       break;
+ 
+-    case PEER_CONNECTION_CONNECTED:
+-
+-      if (dtls_srtp_handshake(&pc->dtls_srtp, NULL) == 0) {
++    case PEER_CONNECTION_CONNECTED: {
++      int dtls_ret = dtls_srtp_handshake(&pc->dtls_srtp, NULL);
++      if (dtls_ret == 0) {
+         LOGD("DTLS-SRTP handshake done");
+ 
+         if (pc->config.datachannel) {
+@@ -313,8 +517,18 @@ int peer_connection_loop(PeerConnection* pc) {
+         }
+ 
+         STATE_CHANGED(pc, PEER_CONNECTION_COMPLETED);
++      } else if (dtls_ret != MBEDTLS_ERR_SSL_TIMEOUT &&
++                 dtls_ret != MBEDTLS_ERR_SSL_WANT_READ &&
++                 dtls_ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
++        // Retrying a fatal alert, malformed record, fingerprint mismatch, or
++        // other terminal mbedTLS error on the same SSL object cannot recover.
++        // Surface it immediately; the application can request a fresh Xbox
++        // media allocation instead of waiting for a generic outer timeout.
++        LOGE("terminal DTLS failure: -0x%.4x", (unsigned int)-dtls_ret);
++        STATE_CHANGED(pc, PEER_CONNECTION_FAILED);
+       }
+       break;
++    }
+     case PEER_CONNECTION_COMPLETED:
+       if ((pc->agent_ret = agent_recv(&pc->agent, pc->agent_buf, sizeof(pc->agent_buf))) > 0) {
+         LOGD("agent_recv %d", pc->agent_ret);
+@@ -342,6 +556,26 @@ int peer_connection_loop(PeerConnection* pc) {
              rtp_decoder_decode(&pc->artp_decoder, pc->agent_buf, pc->agent_ret);
            } else if (ssrc == pc->remote_vssrc) {
              rtp_decoder_decode(&pc->vrtp_decoder, pc->agent_buf, pc->agent_ret);
@@ -666,7 +810,7 @@ index c763e80..b3442c2 100644
            }
  
          } else {
-@@ -365,7 +577,9 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -365,7 +599,9 @@ int peer_connection_loop(PeerConnection* pc) {
        break;
    }
  
@@ -677,7 +821,7 @@ index c763e80..b3442c2 100644
  }
  
  void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp, SdpType type) {
-@@ -432,7 +646,11 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
+@@ -432,7 +668,11 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
  
    switch (sdp_type) {
      case SDP_TYPE_OFFER:
@@ -690,7 +834,7 @@ index c763e80..b3442c2 100644
        agent_clear_candidates(&pc->agent);
        pc->agent.mode = AGENT_MODE_CONTROLLING;
        break;
-@@ -578,6 +796,10 @@ char* peer_connection_lookup_sid_label(PeerConnection* pc, uint16_t sid) {
+@@ -578,6 +818,10 @@ char* peer_connection_lookup_sid_label(PeerConnection* pc, uint16_t sid) {
  
  int peer_connection_add_ice_candidate(PeerConnection* pc, char* candidate) {
    Agent* agent = &pc->agent;
@@ -702,10 +846,10 @@ index c763e80..b3442c2 100644
      return -1;
    }
 diff --git a/src/peer_connection.h b/src/peer_connection.h
-index b087893..9f6ee48 100644
+index b087893..17a3394 100644
 --- a/src/peer_connection.h
 +++ b/src/peer_connection.h
-@@ -113,10 +113,32 @@ int peer_connection_datachannel_send(PeerConnection* pc, char* message, size_t l
+@@ -113,10 +113,36 @@ int peer_connection_datachannel_send(PeerConnection* pc, char* message, size_t l
  
  int peer_connection_datachannel_send_sid(PeerConnection* pc, char* message, size_t len, uint16_t sid);
  
@@ -729,6 +873,10 @@ index b087893..9f6ee48 100644
 +
 +// Send an ICE consent-freshness STUN binding request (keeps the peer sending).
 +int peer_connection_send_consent(PeerConnection* pc);
++
++// Latest STUN round-trip time on the selected WebRTC media path, or -1 until
++// the first response arrives (and whenever the sample becomes stale).
++int peer_connection_get_rtt_ms(PeerConnection* pc);
 +
 +// Send an RTCP Receiver Report with the given loss/jitter stats.
 +int peer_connection_send_receiver_report(PeerConnection* pc, uint8_t fraction_lost,
@@ -945,15 +1093,3 @@ index 6f7d8ef..d19e903 100644
      if ((ret = bind(udp_socket->fd, sa, sock_len)) < 0) {
        LOGE("Failed to bind socket: %d", ret);
        break;
-diff --git a/third_party/mbedtls b/third_party/mbedtls
---- a/third_party/mbedtls
-+++ b/third_party/mbedtls
-@@ -1 +1 @@
--Subproject commit 1873d3bfc2da771672bd8e7e8f41f57e0af77f33
-+Subproject commit 1873d3bfc2da771672bd8e7e8f41f57e0af77f33-dirty
-diff --git a/third_party/usrsctp b/third_party/usrsctp
---- a/third_party/usrsctp
-+++ b/third_party/usrsctp
-@@ -1 +1 @@
--Subproject commit 01cc4e042e2235b29d9d489d89728a6f9ac063ed
-+Subproject commit 01cc4e042e2235b29d9d489d89728a6f9ac063ed-dirty

@@ -203,8 +203,9 @@ enum class Scene {
     Accounts, Stream, Fatal
 };
 
-enum class LibraryTab { All, Favorites, History, Consoles };
-constexpr int kTabCount = 4;  // Consoles only shows with a linked console
+enum class LibraryTab { All, OwnedFree, Favorites, History, Consoles };
+constexpr int kGameTabCount = 4;
+constexpr int kTabCount = 5;  // Consoles only shows with a linked console
 constexpr int kHistoryMax = 10;  // recently-played games kept
 
 #ifdef __SWITCH__
@@ -607,36 +608,14 @@ std::string normalized_server_region(const std::string& value) {
 }
 
 void apply_region(const Settings& settings) {
-    if (settings.region > 0 && settings.region < 6) {
+    // Region bypass and server selection are intentionally independent:
+    // bypass changes the location presented to Xbox's geo gate, while
+    // server_region selects a real baseUri returned by Xbox. "Off" must never
+    // silently spoof an IP merely because a datacenter was selected.
+    if (settings.region > 0 && settings.region < 6)
         Http::set_forwarded_for(kRegionIps[settings.region]);
-    } else if (!settings.server_region.empty()) {
-        std::string key = normalized_server_region(settings.server_region);
-        if (key.find("EASTUS") != std::string::npos ||
-            key.find("WESTUS") != std::string::npos ||
-            key.find("CENTRALUS") != std::string::npos ||
-            key.find("UNITEDSTATES") != std::string::npos) {
-            Http::set_forwarded_for(kRegionIps[1]);  // United States
-        } else if (key.find("BRAZIL") != std::string::npos ||
-                   key.find("CHILE") != std::string::npos ||
-                   key.find("ARGENTINA") != std::string::npos ||
-                   key.find("SOUTHAMERICA") != std::string::npos) {
-            Http::set_forwarded_for(kRegionIps[2]);  // South America / Brazil
-        } else if (key.find("JAPAN") != std::string::npos) {
-            Http::set_forwarded_for(kRegionIps[3]);  // Japan
-        } else if (key.find("KOREA") != std::string::npos) {
-            Http::set_forwarded_for(kRegionIps[4]);  // Korea
-        } else if (key.find("EUROPE") != std::string::npos ||
-                   key.find("UK") != std::string::npos ||
-                   key.find("SWEDEN") != std::string::npos ||
-                   key.find("GERMANY") != std::string::npos ||
-                   key.find("POLAND") != std::string::npos) {
-            Http::set_forwarded_for(kRegionIps[5]);  // Europe / Poland
-        } else {
-            Http::set_forwarded_for("");
-        }
-    } else {
+    else
         Http::set_forwarded_for("");
-    }
 }
 
 std::string pretty_server_region(const std::string& name) {
@@ -805,7 +784,8 @@ void cycle_server_region(App& app, int direction) {
 
 // ---- persistence ----------------------------------------------------------
 
-constexpr int kGamesCacheVersion = 2;  // same stable format used by v0.4
+// v5 records alternative-catalog membership for the Owned & Free tab.
+constexpr int kGamesCacheVersion = 5;
 
 void save_games_cache(const std::vector<Game>& games) {
     json list = json::array();
@@ -813,7 +793,9 @@ void save_games_cache(const std::vector<Game>& games) {
         list.push_back({{"titleId", game.title_id},
                         {"productId", game.product_id},
                         {"name", game.name},
-                        {"boxArt", game.box_art_url}});
+                        {"boxArt", game.box_art_url},
+                        {"f2pOffering", game.uses_f2p_offering},
+                        {"f2pCatalog", game.available_on_f2p}});
     std::ofstream out(user_path("games.json"), std::ios::trunc);
     out << json{{"version", kGamesCacheVersion}, {"games", list}}.dump();
 }
@@ -824,7 +806,7 @@ std::vector<Game> load_games_cache() {
     if (!in) return games;
     json data = json::parse(in, nullptr, false);
     if (data.is_discarded() || !data.is_object() ||
-        data.value("version", 0) < kGamesCacheVersion)
+        data.value("version", 0) != kGamesCacheVersion)
         return games;  // stale or old-format cache -> full refresh
     for (const json& entry : data.value("games", json::array())) {
         Game game;
@@ -832,6 +814,8 @@ std::vector<Game> load_games_cache() {
         game.product_id = entry.value("productId", "");
         game.name = entry.value("name", "");
         game.box_art_url = entry.value("boxArt", "");
+        game.uses_f2p_offering = entry.value("f2pOffering", false);
+        game.available_on_f2p = entry.value("f2pCatalog", false);
         if (!game.title_id.empty()) games.push_back(std::move(game));
     }
     return games;
@@ -963,7 +947,7 @@ void start_library_load(App& app, bool force_refresh) {
                 app.auth->fetch_streaming_credentials();
             app.server_regions = credentials.cloud.regions;
             save_server_regions(app.server_regions);
-            app.status = "Loading your library...";
+            app.status = "Loading all playable cloud games...";
             Http http;
             // Linked consoles for xHome remote play. Non-fatal: no consoles
             // (or an error here) just leaves the source picker hidden. The
@@ -989,7 +973,7 @@ void start_library_load(App& app, bool force_refresh) {
                 std::fclose(f);
             }
             std::vector<Game> games =
-                fetch_playable_titles(http, credentials.cloud);
+                fetch_playable_titles(http, credentials);
             app.status = "Resolving names and covers (" +
                          std::to_string(games.size()) + " titles)...";
             fetch_names(http, games);
@@ -1097,6 +1081,9 @@ void apply_filter(App& app) {
         }
     } else {
         for (int i = 0; i < static_cast<int>(app.games.size()); ++i) {
+            if (app.tab == LibraryTab::OwnedFree &&
+                !app.games[i].available_on_f2p)
+                continue;
             if (app.tab == LibraryTab::Favorites &&
                 !is_favorite(app, app.games[i].title_id))
                 continue;
@@ -1434,8 +1421,8 @@ SDL_Rect scale_about_center(const SDL_Rect& rect, float scale) {
     return {rect.x - (w - rect.w) / 2, rect.y - (h - rect.h) / 2, w, h};
 }
 
-const char* kTabNames[kTabCount] = {"All games", "Favorites", "History",
-                                    "Consoles"};
+const char* kTabNames[kTabCount] = {"All games", "Owned & Free", "Favorites",
+                                    "History", "Consoles"};
 
 const char* kQualityLabels[kQualityLevels] = {
     "720p", "1080p", "1080p HQ · Windows", "1080p HQ · Tizen test"};
@@ -1449,6 +1436,7 @@ const char* kSharpnessLabels[4] = {"Off", "Low", "Medium", "High"};
 
 std::string selected_game_meta(const App& app, const Game& game) {
     std::string meta = "Xbox Cloud Gaming · ";
+    if (game.available_on_f2p) meta += "Owned / Free-to-play · ";
     meta += kQualityLabels[app.settings.quality];
     if (is_favorite(app, game.title_id)) meta += " · Favorite";
     return meta;
@@ -1587,6 +1575,11 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
 void launch_stream(App& app, bool home) {
     app.launching_home = home && !app.consoles.empty();
 #ifdef GNX_NATIVE_STREAM
+    // Release library artwork before the HTTP/WebRTC worker allocates session,
+    // SDP and media buffers. The connecting screen lazily reloads only the one
+    // selected cover, and the renderer handoff drops that again once video is
+    // ready. This keeps page browsing from starving stream setup on Switch.
+    app.covers->drop_textures();
     QualityTier tier = app.launching_home
                            ? (app.settings.console_quality == 1
                                   ? QualityTier::P1080
@@ -1605,7 +1598,8 @@ void launch_stream(App& app, bool home) {
     if (app.launching_home)
         app.engine->start_home(selected_console(app).server_id, tier, locale);
     else
-        app.engine->start(app.launch_game.title_id, tier, locale);
+        app.engine->start(app.launch_game.title_id, tier, locale,
+                          app.launch_game.uses_f2p_offering);
     app.stream_hint_until = SDL_GetTicks() + 8000;
     app.scene = Scene::Stream;
 #endif
@@ -1800,7 +1794,7 @@ void draw_empty_state(App& app, const std::string& glyph, gfx::Color glyph_col,
             bool on = console.power_state == "On";
             app.gfx.fill({card.x + 48, card.y + 322, 12, 12},
                          on ? gfx::kFocus : gfx::kWarn);
-            app.gfx.text(console.power_state + " · local network",
+            app.gfx.text(console.power_state + " · LAN / internet",
                          card.x + 72, card.y + 312, gfx::FontSize::Small,
                          gfx::kTextDim);
             if (focused) draw_focus_frames(app, card);
@@ -1812,7 +1806,7 @@ void draw_empty_state(App& app, const std::string& glyph, gfx::Color glyph_col,
     int tx = kGridX;
     draw_chip(app, "L", tx, 128, false);
     tx += chip_width(app, "L") + 44;
-    int tabs = app.consoles.empty() ? 3 : kTabCount;
+    int tabs = app.consoles.empty() ? kGameTabCount : kTabCount;
     for (int t = 0; t < tabs; ++t) {
         bool active = static_cast<int>(app.tab) == t;
         int w = app.gfx.text_width(kTabNames[t], gfx::FontSize::Body);
@@ -1862,6 +1856,10 @@ void draw_empty_state(App& app, const std::string& glyph, gfx::Color glyph_col,
         else if (app.tab == LibraryTab::History)
             draw_empty_state(app, "…", gfx::kTextDim, "Nothing played yet",
                              "Games you launch appear here", nullptr, "");
+        else if (app.tab == LibraryTab::OwnedFree)
+            draw_empty_state(app, "", gfx::kFocus,
+                             "No owned or free games available",
+                             "Press", "ZR", "to refresh both Xbox catalogs");
         else
             draw_empty_state(app, "", gfx::kText,
                              "No games available for this account",
@@ -1948,7 +1946,7 @@ void draw_library(App& app) {
                  search.x + 58, search.y + 10, gfx::FontSize::Small,
                  app.query.empty() ? gfx::kTextDim : gfx::kText);
 
-    int tabs = app.consoles.empty() ? 3 : kTabCount;
+    int tabs = app.consoles.empty() ? kGameTabCount : kTabCount;
     int tx = kFilterTabsX;
     app.gfx.text("L/R", tx - 76, kFilterTabsY + 8,
                  gfx::FontSize::Small, gfx::kFaint);
@@ -1995,7 +1993,7 @@ void draw_library(App& app) {
             bool on = console.power_state == "On";
             app.gfx.fill({card.x + 48, card.y + 322, 12, 12},
                          on ? gfx::kFocus : gfx::kWarn);
-            app.gfx.text(console.power_state + " · local network",
+            app.gfx.text(console.power_state + " · LAN / internet",
                          card.x + 72, card.y + 312,
                          gfx::FontSize::Small, gfx::kTextDim);
             if (focused) draw_focus_frames(app, card);
@@ -2020,6 +2018,10 @@ void draw_library(App& app) {
             draw_empty_state(app, "…", gfx::kTextDim,
                              "Nothing played yet",
                              "Games you launch appear here", nullptr, "");
+        else if (app.tab == LibraryTab::OwnedFree)
+            draw_empty_state(app, "", gfx::kFocus,
+                             "No owned or free games available",
+                             "Press", "ZR", "to refresh both Xbox catalogs");
         else
             draw_empty_state(app, "", gfx::kText,
                              "No games available for this account",
@@ -2041,6 +2043,8 @@ void draw_library(App& app) {
                               ? "Favorites"
                           : app.tab == LibraryTab::History
                               ? "Recently played"
+                          : app.tab == LibraryTab::OwnedFree
+                              ? "Stream Your Own Game & free-to-play"
                               : "All games";
     app.gfx.text(section, kMargin + 20, 212, gfx::FontSize::Note,
                  gfx::kText);
@@ -2206,7 +2210,7 @@ void draw_source_picker(App& app) {
             bool on = console.power_state == "On";
             app.gfx.fill({card.x + 48, card.y + 352, 12, 12},
                          on ? gfx::kFocus : gfx::kWarn);
-            app.gfx.text(console.power_state + " · local network",
+            app.gfx.text(console.power_state + " · LAN / internet",
                          card.x + 72, card.y + 342, gfx::FontSize::Small,
                          gfx::kTextDim);
         }
@@ -2413,7 +2417,7 @@ void draw_settings(App& app) {
             break;
         case 2:
             line1 = "Forces xCloud to use ONLY your chosen region with NO fallback.";
-            line2 = "Prevents Xbox from transferring your session to US servers.";
+            line2 = "Prevents Xbox from moving the session to any other datacenter.";
             break;
         case 3:
             line1 = "Controls maximum WebRTC video stream bitrate.";
@@ -3165,7 +3169,7 @@ int main(int argc, char** argv) {
                 break;
 
             case Scene::Library: {
-                int tabs = app.consoles.empty() ? 3 : kTabCount;
+                int tabs = app.consoles.empty() ? kGameTabCount : kTabCount;
                 bool console_tab = app.tab == LibraryTab::Consoles;
 
                 // Touch: tap a tab to switch, or a card to select + open it,

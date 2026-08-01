@@ -20,6 +20,14 @@ std::string g_ca_bundle;
 std::mutex g_forwarded_mutex;
 std::string g_forwarded_for;  // guarded by g_forwarded_mutex
 
+bool is_gssv_url(const std::string& url) {
+    // Covers offering login hosts and the regional core endpoints Xbox returns
+    // (including possible prod suffix variants) without leaking the spoofed IP
+    // to unrelated Microsoft or image/catalog services.
+    return url.find(".gssv-play-prod") != std::string::npos &&
+           url.find(".xboxlive.com") != std::string::npos;
+}
+
 int abort_cb(void* userdata, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
     auto* flag = static_cast<std::atomic<bool>*>(userdata);
     return (flag && flag->load()) ? 1 : 0;  // non-zero aborts the transfer
@@ -102,7 +110,7 @@ HttpResponse Http::request(const char* method, const std::string& url,
     curl_slist* list = nullptr;
     {
         std::lock_guard<std::mutex> lock(g_forwarded_mutex);
-        if (!g_forwarded_for.empty())
+        if (!g_forwarded_for.empty() && is_gssv_url(url))
             list = curl_slist_append(
                 list, ("X-Forwarded-For: " + g_forwarded_for).c_str());
     }

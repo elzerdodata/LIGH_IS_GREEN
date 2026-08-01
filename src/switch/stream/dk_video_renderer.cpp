@@ -804,7 +804,6 @@ void DkVideoRenderer::rasterize_quick_menu() {
     const uint32_t edge = rgba(42, 74, 72, 255);
     const uint32_t accent = rgba(57, 224, 103, 255);
     const uint32_t active = rgba(16, 124, 16, 240);
-    const uint32_t warning = rgba(168, 92, 8, 245);
     const uint32_t glyph_shadow = rgba(0, 0, 0, 150);
     const uint32_t text = rgba(255, 255, 255, 255);
 
@@ -945,14 +944,24 @@ void DkVideoRenderer::update_hud(AVFrame* frame) {
     }
     char buf[220];
     if (net_valid_.load(std::memory_order_relaxed)) {
+        const int ping_ms = net_ping_ms_.load(std::memory_order_relaxed);
+        char network_line[96];
+        if (ping_ms >= 0) {
+            std::snprintf(network_line, sizeof(network_line),
+                          "%.1f Mbps  loss %.1f%%\nping %dms",
+                          net_mbps_.load(std::memory_order_relaxed),
+                          net_loss_.load(std::memory_order_relaxed), ping_ms);
+        } else {
+            std::snprintf(network_line, sizeof(network_line),
+                          "%.1f Mbps  loss %.1f%%\nping --",
+                          net_mbps_.load(std::memory_order_relaxed),
+                          net_loss_.load(std::memory_order_relaxed));
+        }
         std::snprintf(buf, sizeof(buf),
                       "%dx%d\nsrc %.0f  out %.0f  gen %.0f fps\n"
-                      "%.1f Mbps  loss %.1f%%\nbuf %dms",
+                      "%s",
                       frame->width, frame->height, fps_, output_fps_,
-                      generated_fps_,
-                      net_mbps_.load(std::memory_order_relaxed),
-                      net_loss_.load(std::memory_order_relaxed),
-                      net_buffer_ms_.load(std::memory_order_relaxed));
+                      generated_fps_, network_line);
     } else {
         std::snprintf(buf, sizeof(buf),
                       "%dx%d\nsrc %.0f  out %.0f  gen %.0f fps",

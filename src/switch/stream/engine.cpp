@@ -4,8 +4,9 @@
 #include <cctype>
 #include <chrono>
 #include <cstdarg>
-#include <sstream>
 #include <cstring>
+#include <new>
+#include <sstream>
 
 extern "C" {
 #include <peer.h>
@@ -147,14 +148,16 @@ void Engine::log(const std::string& line) {
 }
 
 void Engine::start(const std::string& title_id, QualityTier tier,
-                   const std::string& locale) {
+                   const std::string& locale, bool uses_f2p_offering) {
     home_server_id_.clear();
+    uses_f2p_offering_ = uses_f2p_offering;
     start_common(title_id, tier, locale);
 }
 
 void Engine::start_home(const std::string& server_id, QualityTier tier,
                         const std::string& locale) {
     home_server_id_ = server_id;
+    uses_f2p_offering_ = false;
     start_common("(your console)", tier, locale);
 }
 
@@ -354,26 +357,57 @@ void Engine::on_video(uint8_t* data, size_t size, void* user) {
     self->last_media_ticks_.store(SDL_GetTicks64(), std::memory_order_relaxed);
     self->video_bytes_.fetch_add(size, std::memory_order_relaxed);  // HUD bitrate
     bool want_keyframe = false;
-    self->jitter_.receive(
-        data, size, SDL_GetTicks64(),
-        [self](const uint8_t* au, size_t au_size, uint32_t rtp_timestamp) {
-            {
-                std::lock_guard<std::mutex> lock(self->video_mutex_);
-                if (self->video_queue_.size() >= kMaxQueuedVideo)
-                    self->video_queue_.clear();
-                VideoAccessUnit unit;
-                unit.data.assign(au, au + au_size);
-                unit.rtp_timestamp = rtp_timestamp;
-                self->video_queue_.push_back(std::move(unit));
-            }
-            self->video_cv_.notify_one();  // wake the decode thread (Switch)
-        },
-        [self](uint16_t pid, uint16_t blp) {
-            // Retransmit request for lost packets (peer_mutex_ already held).
-            if (self->peer_) peer_connection_send_nack(self->peer_, pid, blp);
-        },
-        &want_keyframe);
-    if (want_keyframe) self->request_keyframe_locked();
+    try {
+        self->jitter_.receive(
+            data, size, SDL_GetTicks64(),
+            [self](const uint8_t* au, size_t au_size,
+                   uint32_t rtp_timestamp) {
+                {
+                    std::lock_guard<std::mutex> lock(self->video_mutex_);
+                    if (self->video_queue_.size() >= kMaxQueuedVideo)
+                        self->video_queue_.clear();
+                    VideoAccessUnit unit;
+                    unit.data.assign(au, au + au_size);
+                    unit.rtp_timestamp = rtp_timestamp;
+                    self->video_queue_.push_back(std::move(unit));
+                }
+                self->video_cv_.notify_one();  // wake decode thread (Switch)
+            },
+            [self](uint16_t pid, uint16_t blp) {
+                // Retransmit request for lost packets (peer_mutex_ held).
+                if (self->peer_)
+                    peer_connection_send_nack(self->peer_, pid, blp);
+            },
+            &want_keyframe);
+    } catch (const std::bad_alloc&) {
+        // Never let an allocation exception cross libpeer's C callback frame.
+        // On Switch, a burst of large access units can briefly exhaust the
+        // application heap. Release every compressed frame, reset reassembly,
+        // and recover at the next IDR instead of killing the whole stream with
+        // a bare `std::bad_alloc` error card.
+        {
+            std::lock_guard<std::mutex> lock(self->video_mutex_);
+            self->video_queue_.clear();
+        }
+        self->jitter_.reset();
+        want_keyframe = true;
+        try {
+            self->log(
+                "video buffer memory pressure; queue released and IDR requested");
+        } catch (...) {
+            // Diagnostics must not rethrow through a C callback when the heap
+            // is already under pressure.
+        }
+    }
+    if (want_keyframe) {
+        try {
+            self->request_keyframe_locked();
+        } catch (const std::bad_alloc&) {
+            // The app-level control message allocates a JSON string. The RTCP
+            // PLI itself does not, and is enough for Xbox to send a fresh IDR.
+            if (self->peer_) peer_connection_request_keyframe(self->peer_);
+        }
+    }
 }
 
 void Engine::on_audio(uint8_t* data, size_t size, void* user) {
@@ -661,13 +695,26 @@ std::string queue_wait_status(int seconds) {
 }
 
 void Engine::worker() {
+    const char* allocation_stage = "starting the stream worker";
     try {
         bool home = !home_server_id_.empty();
         set_status(home ? "Signing in to your Xbox..."
                         : "Signing in to xCloud...");
         log("fetching streaming credentials");
+        allocation_stage = "fetching Xbox streaming credentials";
         StreamingCredentials creds = auth_.fetch_streaming_credentials();
-        cloud_ = home ? creds.home : creds.cloud;
+        if (home) {
+            cloud_ = creds.home;
+        } else if (uses_f2p_offering_) {
+            if (!creds.cloud_f2p) {
+                fail("Xbox's free-to-play/owned-game service is unavailable "
+                     "for this account right now");
+                return;
+            }
+            cloud_ = *creds.cloud_f2p;
+        } else {
+            cloud_ = creds.cloud;
+        }
         if (!home) {
             {
                 std::lock_guard<std::mutex> lock(status_mutex_);
@@ -675,6 +722,9 @@ void Engine::worker() {
             }
             log("server region: " + cloud_.selected_region + " | " +
                 cloud_.host);
+            log(std::string("region policy: ") +
+                (force_region_ ? "strict (no fallback regions)"
+                               : "fallback regions allowed"));
         }
         // Without a host every request goes out as a bare path, which curl
         // rejects as a malformed URL -- a useless error for the one thing that
@@ -691,6 +741,7 @@ void Engine::worker() {
 
         set_status(home ? "Preparing Xbox Remote Play route..."
                         : "Connecting to " + cloud_.selected_region + "...");
+        allocation_stage = "cleaning stale Xbox sessions";
         GssvSession::cleanup_stale_sessions(http_, cloud_,
                                             home ? "home" : "cloud");
         log("stale-session cleanup done");
@@ -699,9 +750,9 @@ void Engine::worker() {
         // as the wake-up call but fails with AgentCommandError while the
         // console boots its streaming service (same behaviour Greenlight
         // sees). Retry a few times before surfacing the failure.
-        // Cloud gets one retry too: a session can come up with a dead media
-        // path (ICE connects, DTLS never answers) -- a fresh session
-        // re-rolls that server-side fault.
+        // Cloud gets up to two fresh retries too: a session can come up with a
+        // dead media path (ICE connects, DTLS never answers), and a new
+        // allocation re-rolls that server-side fault.
         // Console readiness and WebRTC transport are independent failure
         // domains. A slow wake/register cycle must not consume the budget for
         // fresh ICE/DTLS sessions (the old shared six-attempt counter did).
@@ -735,15 +786,25 @@ void Engine::worker() {
                     ? (retrying_transport
                            ? std::min(20, 8 + transport_retries * 2)
                            : std::min(15, 5 + readiness_retries * 2))
-                    : 3;
-                log("retry backoff: " + std::to_string(wait_seconds) +
-                    "s | readiness=" + std::to_string(readiness_retries) +
-                    "/" + std::to_string(max_readiness_retries) +
-                    " transport=" + std::to_string(transport_retries) +
-                    "/" + std::to_string(max_transport_retries));
-                for (int i = 0; i < wait_seconds * 10 && !quit_; ++i)
-                    std::this_thread::sleep_for(
-                        std::chrono::milliseconds(100));
+                    : 0;
+                if (wait_seconds > 0) {
+                    log("retry backoff: " + std::to_string(wait_seconds) +
+                        "s | readiness=" + std::to_string(readiness_retries) +
+                        "/" + std::to_string(max_readiness_retries) +
+                        " transport=" + std::to_string(transport_retries) +
+                        "/" + std::to_string(max_transport_retries));
+                    for (int i = 0; i < wait_seconds * 10 && !quit_; ++i)
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(100));
+                } else {
+                    // The cloud session was already stopped synchronously.
+                    // Unlike xHome, a replacement cloud allocation does not
+                    // reuse a sleeping physical console or need a teardown
+                    // grace period, so an extra fixed delay only makes a bad
+                    // Xbox media route more expensive.
+                    log("cloud transport retry: starting immediately after "
+                        "session teardown");
+                }
                 if (quit_) break;
             }
             set_status("Requesting a session...");
@@ -755,6 +816,7 @@ void Engine::worker() {
             // windows/tizen quality-tier fingerprints get AgentCommandError.
             GssvSession session(http_, cloud_,
                                 home ? QualityTier::P720 : tier_, locale_);
+            allocation_stage = "requesting an Xbox play session";
             if (home)
                 session.start_home(home_server_id_);
             else
@@ -772,6 +834,7 @@ void Engine::worker() {
             auto next_queue_estimate_refresh =
                 std::chrono::steady_clock::time_point{};
             for (int i = 0; i < 300 && !quit_; ++i) {
+                allocation_stage = "polling the Xbox session";
                 SessionState state = session.refresh_state();
                 if (state != logged_state) {
                     logged_state = state;
@@ -812,9 +875,11 @@ void Engine::worker() {
                 }
                 if (state == SessionState::ReadyToConnect && !connected) {
                     set_status("Authenticating...");
+                    allocation_stage = "authenticating the Xbox session";
                     session.connect(auth_.fetch_passport_token());
                     connected = true;
                 } else if (state == SessionState::Provisioned) {
+                    allocation_stage = "negotiating WebRTC media";
                     if (run_peer(session)) {
                         session.stop();
                         return;
@@ -955,6 +1020,14 @@ void Engine::worker() {
             }
             retrying_transport = false;
         }
+    } catch (const std::bad_alloc&) {
+        // By the time the exception reaches here, response/session temporaries
+        // have unwound and released their buffers, so reporting a useful stage
+        // is safe. A bad_alloc inside RTP reassembly is recovered in on_video
+        // and never reaches this outer handler.
+        fail(std::string("Out of memory while ") + allocation_stage +
+             ". Return to the library and retry; the diagnostic log records "
+             "the exact stage.");
     } catch (const std::exception& error) {
         fail(error.what());
     }
@@ -1073,38 +1146,47 @@ bool Engine::run_peer(GssvSession& session) {
     std::vector<std::string> remote;
     bool remote_has_real_candidate = false;
     {
-        // xHome's useful Teredo/relay candidate can arrive well after the
-        // priority-100 placeholder. Give consoles outside the LAN ten extra
-        // seconds before declaring that no route exists.
+        // xHome's useful LAN/Teredo candidate can arrive well after its
+        // priority-100 fallback, so Remote Play gets a long gather window.
+        // xCloud is different: its normal public ingress is itself commonly a
+        // priority-100 13.104.x candidate. Accept that response immediately,
+        // just like the pre-regression client, instead of imposing a 15-second
+        // wait and then rejecting every valid cloud allocation.
         Uint64 gather_deadline =
-            SDL_GetTicks64() + (home ? 25000 : 15000);
-        bool done = false;
+            SDL_GetTicks64() + (home ? 25000 : 6000);
         int quiet_polls = 0;
-        // xCloud first returns a placeholder front candidate (priority 100 on
-        // 13.104.x) that never answers STUN; the REAL (Teredo) candidate can
-        // trickle in seconds later. Settling for the placeholder alone makes
-        // ICE fail, so keep polling until a real candidate shows up.
+        // For xHome, priority distinguishes a full LAN/public route from its
+        // fallback. Do not apply this rule to xCloud: its working edge route
+        // may legitimately have priority 100.
         auto has_real_candidate = [&remote]() {
             for (const std::string& candidate : remote)
                 if (candidate_priority(candidate) > 1000) return true;
             return false;
         };
-        while (!quit_ && !done && SDL_GetTicks64() < gather_deadline) {
+        while (!quit_ && SDL_GetTicks64() < gather_deadline) {
             size_t before = remote.size();
+            bool response_done = false;
             try {
                 for (std::string& candidate :
-                     session.receive_ice_candidates(&done))
-                    remote.push_back(std::move(candidate));
+                     session.receive_ice_candidates(&response_done)) {
+                    if (std::find(remote.begin(), remote.end(), candidate) ==
+                        remote.end())
+                        remote.push_back(std::move(candidate));
+                }
             } catch (const std::exception& error) {
                 log(std::string("ice poll failed: ") + error.what());
             }
             quiet_polls = remote.size() == before ? quiet_polls + 1 : 0;
-            // No end marker but candidates stopped coming: assume complete --
-            // but never settle while all we have is the dead placeholder.
-            if (!remote.empty() && has_real_candidate() && quiet_polls >= 4)
+            if (!home) {
+                // Cloud candidate/end marker is a complete usable response.
+                // A failed ICE/DTLS attempt still falls through to the existing
+                // fresh-session retry, without delaying every good connection.
+                if (!remote.empty() || response_done) break;
+            } else if (has_real_candidate() &&
+                       (response_done || quiet_polls >= 4)) {
                 break;
-            if (!done)
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
         remote_has_real_candidate = has_real_candidate();
     }
@@ -1124,7 +1206,7 @@ bool Engine::run_peer(GssvSession& session) {
                 ? (home
                        ? "xhome returned no remote ICE candidates; fresh route needed"
                        : "xCloud returned no remote ICE candidates")
-                : "xhome returned only the non-routable placeholder candidate; "
+                : "xhome returned only the non-routable fallback candidate; "
                   "fresh route needed");
         set_status(home ? "No Xbox route yet - retrying..."
                         : "No server route yet - retrying...");
@@ -1273,18 +1355,22 @@ bool Engine::run_peer(GssvSession& session) {
             return true;
         }
         // Dead media path: ICE is up (the front-door placeholder answers
-        // STUN) but DTLS/SCTP never completes -- the handshake starves on
-        // CONN_EOF because nothing behind the front door talks back. Healthy
-        // sessions open their channels ~1-2 s after connecting. xHome can be
-        // substantially slower across NAT/Teredo, so Remote Play gets 25 s;
-        // cloud keeps the tighter 12 s window.
+        // STUN) but DTLS/SCTP never completes. Healthy xCloud allocations in
+        // the field answer DTLS in well under a second. libpeer gives each
+        // receive flight a full ~3 s, so a 5 s wall-clock threshold still
+        // permits TWO complete waits (the check runs after each blocking
+        // flight) while retiring a silent cloud edge after ~6 s instead of
+        // four flights/~12 s. xHome across NAT/Teredo keeps its wide 25 s
+        // allowance.
         if (!ice_connected_at && (current == PEER_CONNECTION_CONNECTED ||
                                   current == PEER_CONNECTION_COMPLETED))
             ice_connected_at = now;
-        Uint64 dtls_timeout = home ? 25000 : 12000;
+        Uint64 dtls_timeout = home ? 25000 : 5000;
         if (ice_connected_at && !channels_open_ &&
             now - ice_connected_at > dtls_timeout) {
-            log("ICE connected but DTLS/SCTP never completed -- dead media path");
+            log("ICE connected but DTLS/SCTP stayed silent for " +
+                std::to_string((now - ice_connected_at + 999) / 1000) +
+                "s -- requesting a fresh media route");
             set_status("Secure media channel stalled - retrying...");
             return false;
         }
@@ -1380,6 +1466,9 @@ bool Engine::run_peer(GssvSession& session) {
             uint8_t fraction;
             uint32_t cumulative, highest_ext;
             if (jitter_.report_stats(&fraction, &cumulative, &highest_ext)) {
+#ifdef __SWITCH__
+                int ping_ms = -1;
+#endif
                 {
                     std::lock_guard<std::mutex> lock(peer_mutex_);
                     if (peer_) {
@@ -1392,11 +1481,15 @@ bool Engine::run_peer(GssvSession& session) {
                                                  static_cast<uint32_t>(max_bitrate_kbps_));
                         }
                         peer_connection_send_remb(peer_, remb_kbps * 1000u);
+#ifdef __SWITCH__
+                        ping_ms = peer_connection_get_rtt_ms(peer_);
+#endif
                     }
                 }
 #ifdef __SWITCH__
                 // Feed the debug HUD: real bitrate (RTP video bytes over the
-                // window), packet loss (RTCP fraction), audio buffer depth.
+                // window), packet loss (RTCP fraction), and the live STUN RTT
+                // measured on the selected WebRTC media path.
                 uint64_t vb = video_bytes_.load(std::memory_order_relaxed);
                 double dt = (now > prev_hud_time)
                                 ? static_cast<double>(now - prev_hud_time)
@@ -1407,7 +1500,7 @@ bool Engine::run_peer(GssvSession& session) {
                 prev_hud_bytes = vb;
                 prev_hud_time = now;
                 float loss_pct = static_cast<float>(fraction) * 100.0f / 255.0f;
-                dk_video_.set_net_stats(mbps, loss_pct, audio_.stats().queue_ms);
+                dk_video_.set_net_stats(mbps, loss_pct, ping_ms);
 #endif
             }
         }

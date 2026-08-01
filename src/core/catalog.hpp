@@ -13,12 +13,19 @@ struct Game {
     std::string product_id;  // Microsoft Store bigId, for metadata lookup
     std::string name;        // filled by fetch_names()
     std::string box_art_url;
+    // Free-to-play and Stream Your Own Game/BYOG titles are discovered and
+    // launched through xgpuwebf2p instead of the regular xgpuweb offering.
+    bool uses_f2p_offering = false;
+    // Kept separately because a title may exist in both catalogs: it can use
+    // the regular token while still appearing in the Owned & Free tab.
+    bool available_on_f2p = false;
 };
 
-// Titles the signed-in account can actually play (entitlement or subscription),
-// from the xCloud backend's /v2/titles.
-std::vector<Game> fetch_playable_titles(Http& http,
-                                        const EndpointCredentials& cloud);
+// Every cloud title the signed-in account can currently play. Combines the
+// regular xgpuweb catalog (Game Pass) with xgpuwebf2p (free-to-play and Stream
+// Your Own Game/BYOG), keeping only entitled entries and deduplicating them.
+std::vector<Game> fetch_playable_titles(
+    Http& http, const StreamingCredentials& credentials);
 
 // Fills name/box_art_url from the public Microsoft Store display catalog.
 // Batched; no authentication required.

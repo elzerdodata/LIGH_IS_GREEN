@@ -12,7 +12,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 
 APP_TITLE   := Light is Green
 APP_AUTHOR  := rmrf404 (original) / elzerdodata
-APP_VERSION := 0.7.4
+APP_VERSION := 0.8.0
 APP_ICON    := icon.jpg
 
 TARGET   := Light_is_Green

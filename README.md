@@ -1,6 +1,6 @@
 # Light is Green
 
-> **Stable v0.6.0 · Preview v0.7.1 / Estable v0.6.0 · Preliminar v0.7.1**
+> **Stable v0.8.0 / Estable v0.8.0**
 
 English | [Español](#español)
 
@@ -12,6 +12,25 @@ It is a standalone, open-source **Xbox Cloud Gaming (xCloud) client for
 Nintendo Switch** homebrew. Authentication, WebRTC, hardware H.264 decoding,
 GPU rendering, audio, and controller input all run on the console; no companion
 PC is required.
+
+## v0.8.0 stable release
+
+- Builds the playable library from entitled **Game Pass**, **Stream Your Own
+  Game (BYOG)** and **free-to-play** titles. It does not expose the full Xbox
+  store, and duplicate entries are merged.
+- Adds an **Owned & Free** tab and launches every title with the Xbox offering
+  that granted its entitlement. Accounts without Game Pass can still load
+  eligible free-to-play and owned cloud games.
+- Recovers faster from silent xCloud media routes: a cloud DTLS route is retired
+  after about 6 seconds in practice and the next allocation starts as soon as
+  teardown finishes. Remote Play retains its more conservative xHome timing.
+- Caps cover textures and pending artwork jobs to protect Switch memory, and
+  recovers safely from video allocation pressure by resynchronizing the stream.
+- Keeps region bypass independent from server selection, supports Xbox's live
+  datacenter list and optional strict server forcing, and exposes bitrate and
+  quality controls.
+- Replaces the old audio `BUF` value with true live **PING**, measured as STUN
+  round-trip time on the active WebRTC media route.
 
 ## v0.7.1 smoothness preview
 
@@ -53,9 +72,9 @@ PC is required.
   Success depends on Remote Features, NAT, IPv6/Teredo and UDP connectivity.
 - Expands the performance overlay with source, output and generated FPS.
 
-The v0.7 preview is published separately. **v0.6.0 remains the recommended stable
-release.** Do not publish `stream-log.txt`: connection diagnostics can include
-IP candidates.
+The v0.7 releases remain available as historical previews. **v0.8.0 is the
+recommended stable release.** Do not publish `stream-log.txt`: connection
+diagnostics can include IP candidates.
 
 ## What's new in v0.6.0
 
@@ -80,12 +99,14 @@ IP candidates.
   experimental Tizen HQ profile.
 - Independent region bypass and xCloud server selection, configurable game
   language, button mapping, vibration, video pacing, volume, and image controls.
+- Performance HUD with video bitrate, packet loss, and live WebRTC-route ping.
 
 ## Requirements
 
 - A Nintendo Switch running
   [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere) custom firmware.
-- An active Xbox Game Pass plan that includes Cloud Gaming.
+- A Microsoft/Xbox account. Game Pass is required for the subscription catalog;
+  eligible owned cloud games and free-to-play titles can work without it.
 - A 5 GHz Wi-Fi connection or docked Ethernet is recommended.
 
 ## Installation
@@ -159,7 +180,7 @@ valid subscription and hardware.
 - License: [GPL-3.0](LICENSE)
 - Original project and core implementation: **rmrf404** —
   [green-nx](https://github.com/rmrf404/green-nx)
-- Light is Green fork and v0.2–v0.7.1 work: **elzerdodata**
+- Light is Green fork and v0.2–v0.8.0 work: **elzerdodata**
 
 ---
 
@@ -173,6 +194,27 @@ Es un cliente homebrew independiente y de código abierto de **Xbox Cloud
 Gaming (xCloud) para Nintendo Switch**. La autenticación, WebRTC, decodificación
 H.264 por hardware, renderizado en GPU, audio y controles funcionan en la
 consola; no requiere una PC auxiliar.
+
+## Versión estable v0.8.0
+
+- Construye la biblioteca jugable con títulos habilitados de **Game Pass**,
+  **Stream Your Own Game (BYOG)** y **free-to-play**. No muestra toda la tienda
+  Xbox y combina los duplicados.
+- Agrega la pestaña **Propios y gratis** y abre cada juego con la oferta Xbox que
+  concedió su acceso. Las cuentas sin Game Pass aún pueden cargar juegos gratis
+  y juegos propios compatibles con cloud.
+- Se recupera más rápido de rutas multimedia silenciosas: descarta una ruta
+  DTLS cloud después de unos 6 segundos en la práctica e inicia la siguiente
+  asignación apenas termina el cierre. Remote Play mantiene tiempos xHome más
+  conservadores.
+- Limita las texturas de carátulas y los trabajos de imágenes pendientes para
+  proteger la memoria de Switch, y se recupera de presión de memoria de video
+  resincronizando el stream.
+- Mantiene el bypass regional separado de la selección de servidor, admite la
+  lista real de datacenters de Xbox y el forzado opcional, e incluye controles
+  de calidad y bitrate.
+- Sustituye el antiguo valor `BUF` por **PING** real en vivo, medido como tiempo
+  de ida y vuelta STUN sobre la ruta WebRTC activa.
 
 ## Avance de fluidez v0.7.1
 
@@ -216,9 +258,9 @@ consola; no requiere una PC auxiliar.
   UDP.
 - Amplía el overlay de rendimiento con FPS de origen, salida y generados.
 
-La versión preliminar v0.7 se publica por separado. **v0.6.0 sigue siendo la
-versión estable recomendada.** No publiques `stream-log.txt`: el diagnóstico puede incluir
-candidatos de direcciones IP.
+Las versiones v0.7 siguen disponibles como avances históricos. **v0.8.0 es la
+versión estable recomendada.** No publiques `stream-log.txt`: el diagnóstico
+puede incluir candidatos de direcciones IP.
 
 ## Novedades de v0.6.0
 
@@ -245,12 +287,16 @@ candidatos de direcciones IP.
   un perfil HQ Tizen experimental.
 - Bypass geográfico y servidor de xCloud independientes, además de idioma,
   distribución de botones, vibración, suavizado, volumen y controles de imagen.
+- HUD de rendimiento con bitrate de video, pérdida de paquetes y ping en vivo
+  sobre la ruta WebRTC.
 
 ## Requisitos
 
 - Nintendo Switch con el firmware personalizado
   [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere).
-- Plan activo de Xbox Game Pass que incluya Cloud Gaming.
+- Cuenta Microsoft/Xbox. Game Pass es necesario para el catálogo de la
+  suscripción; los juegos propios compatibles con cloud y los free-to-play
+  pueden funcionar sin él.
 - Se recomienda Wi-Fi de 5 GHz o Ethernet mediante el dock.
 
 ## Instalación

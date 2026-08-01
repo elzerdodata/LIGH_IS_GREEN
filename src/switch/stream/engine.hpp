@@ -62,7 +62,8 @@ public:
     static void global_shutdown();
 
     void start(const std::string& title_id, QualityTier tier,
-               const std::string& locale = "en-US");
+               const std::string& locale = "en-US",
+               bool uses_f2p_offering = false);
     // Remote play from your own console (xhome offering): the target is the
     // console's serverId; the game is whatever the console runs.
     void start_home(const std::string& server_id, QualityTier tier,
@@ -169,6 +170,7 @@ private:
     EndpointCredentials cloud_;
     std::string title_id_;
     std::string home_server_id_;  // non-empty selects the home (xhome) path
+    bool uses_f2p_offering_ = false;  // launch through xgpuwebf2p
     QualityTier tier_ = QualityTier::P1080HQ;
     // The media request may fall back independently of the user's saved tier.
     // Remote Play always starts with an Android session fingerprint, while

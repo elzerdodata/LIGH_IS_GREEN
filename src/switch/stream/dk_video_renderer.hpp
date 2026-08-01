@@ -70,10 +70,10 @@ public:
 
     // Live network stats for the HUD, fed once per second from the streaming
     // worker thread (stored atomically; read on the render thread).
-    void set_net_stats(float mbps, float loss_pct, int buffer_ms) {
+    void set_net_stats(float mbps, float loss_pct, int ping_ms) {
         net_mbps_.store(mbps, std::memory_order_relaxed);
         net_loss_.store(loss_pct, std::memory_order_relaxed);
-        net_buffer_ms_.store(buffer_ms, std::memory_order_relaxed);
+        net_ping_ms_.store(ping_ms, std::memory_order_relaxed);
         net_valid_.store(true, std::memory_order_relaxed);
     }
 
@@ -215,7 +215,9 @@ private:
     float generated_fps_ = 0.0f;
     std::atomic<float> net_mbps_{0.0f};   // set by Engine worker, read by update_hud
     std::atomic<float> net_loss_{0.0f};
-    std::atomic<int> net_buffer_ms_{0};
+    // Live STUN consent-check RTT on the selected WebRTC media path. -1 until
+    // the peer answers the first check (and whenever the sample becomes stale).
+    std::atomic<int> net_ping_ms_{-1};
     std::atomic<bool> net_valid_{false};
 
     // Always-on top-right Xbox Guide/Home touch overlay. It has its own RGBA

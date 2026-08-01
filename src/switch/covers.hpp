@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -40,22 +41,30 @@ private:
     gfx::Gfx& gfx_;
     std::string cache_dir_;
 
-    std::unordered_map<std::string, SDL_Texture*> textures_;
+    struct TextureEntry {
+        SDL_Texture* texture = nullptr;
+        uint64_t last_used = 0;
+    };
+    std::unordered_map<std::string, TextureEntry> textures_;
     std::unordered_set<std::string> pending_;
 
     struct Job {
         std::string title_id;
         std::string url;
+        uint64_t generation = 0;
     };
     struct Done {
         std::string title_id;
         std::vector<char> bytes;
+        uint64_t generation = 0;
     };
 
     std::mutex mutex_;
     std::condition_variable wake_;
     std::deque<Job> jobs_;
     std::deque<Done> done_;
+    uint64_t generation_ = 0;
+    uint64_t use_serial_ = 0;
     std::atomic<bool> quit_{false};
     std::thread thread_;
 };

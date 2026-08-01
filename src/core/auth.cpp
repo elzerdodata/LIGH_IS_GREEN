@@ -267,17 +267,38 @@ StreamingCredentials XboxAuth::fetch_streaming_credentials() {
         // to stream from a console anyway.
         credentials.home_error = error.what();
     }
-    credentials.cloud =
-        streaming_login(gssv_token, "xgpuweb", preferred_region);
+    std::string cloud_error;
+    try {
+        credentials.cloud =
+            streaming_login(gssv_token, "xgpuweb", preferred_region);
+    } catch (const std::exception& error) {
+        cloud_error = error.what();
+    }
+    std::string f2p_error;
+    try {
+        credentials.cloud_f2p = streaming_login(
+            gssv_token, "xgpuwebf2p", preferred_region);
+    } catch (const std::exception& error) {
+        f2p_error = error.what();
+        credentials.cloud_f2p = std::nullopt;
+    }
+
+    // Xbox permits accounts without a paid subscription to use the separate
+    // F2P/owned-games offering. Previously a failed xgpuweb login aborted the
+    // whole operation before xgpuwebf2p could be used.
+    if (credentials.cloud.host.empty()) {
+        if (credentials.cloud_f2p) {
+            credentials.cloud = *credentials.cloud_f2p;
+            credentials.cloud_is_f2p_fallback = true;
+        } else {
+            throw std::runtime_error(
+                "Xbox cloud login failed (Game Pass: " + cloud_error +
+                "; free-to-play/owned games: " + f2p_error + ")");
+        }
+    }
     {
         std::lock_guard<std::mutex> lock(region_mutex_);
         available_cloud_regions_ = credentials.cloud.regions;
-    }
-    try {
-        credentials.cloud_f2p =
-            streaming_login(gssv_token, "xgpuwebf2p", preferred_region);
-    } catch (const std::exception&) {
-        credentials.cloud_f2p = std::nullopt;
     }
     return credentials;
 }

@@ -45,6 +45,10 @@ struct StreamingCredentials {
     std::string home_error;
     EndpointCredentials cloud;
     std::optional<EndpointCredentials> cloud_f2p;
+    // True when the account could not log in to xgpuweb and cloud therefore
+    // aliases cloud_f2p. This keeps free-only accounts usable without
+    // misclassifying their catalog as Game Pass.
+    bool cloud_is_f2p_fallback = false;
 };
 
 struct XboxProfile {

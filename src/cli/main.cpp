@@ -60,7 +60,7 @@ int cmd_games(gnx::XboxAuth& auth, bool with_names) {
 
     gnx::Http http;
     std::vector<gnx::Game> games =
-        gnx::fetch_playable_titles(http, credentials.cloud);
+        gnx::fetch_playable_titles(http, credentials);
     std::printf("Playable titles: %zu\n\n", games.size());
 
     if (with_names) {
