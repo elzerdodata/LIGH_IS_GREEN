@@ -84,11 +84,6 @@ std::vector<Game> fetch_playable_titles(Http& http,
                 for (const json& sub : subs)
                     if (program == sub) { playable = true; break; }
         }
-        // If still not marked playable but has a valid product_id and title_id, allow it for Game Pass / Cloud
-        if (!playable && details.contains("hasEntitlement")) {
-            // Keep if product_id is valid so newly released titles aren't hidden
-            playable = true;
-        }
         if (!playable) continue;
 
         Game game;
@@ -109,8 +104,8 @@ std::vector<Game> fetch_playable_titles(Http& http,
 
 void fetch_names(Http& http, std::vector<Game>& games,
                  const std::string& market, const std::string& language) {
-    // displaycatalog accepts comma-separated bigIds; keep batches modest.
-    constexpr size_t kBatch = 20;
+    // displaycatalog accepts comma-separated bigIds; batch size 50 for fast fetching.
+    constexpr size_t kBatch = 50;
     std::unordered_map<std::string, Game*> by_product;
     for (Game& game : games)
         if (!game.product_id.empty()) by_product[game.product_id] = &game;
