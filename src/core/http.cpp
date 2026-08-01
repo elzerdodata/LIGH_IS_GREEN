@@ -83,6 +83,10 @@ HttpResponse Http::request(const char* method, const std::string& url,
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
     if (!g_ca_bundle.empty())
         curl_easy_setopt(curl, CURLOPT_CAINFO, g_ca_bundle.c_str());
+#ifdef __SWITCH__
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+#endif
     if (abort_flag_) {
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, abort_cb);
