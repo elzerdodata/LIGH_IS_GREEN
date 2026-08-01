@@ -24,6 +24,8 @@ layout (std140, binding = 0) uniform Transformation
     // x=blend factor, y=enabled. Experimental Motion uses 0.5 for the generated
     // midpoint between adjacent 30 fps source frames.
     vec4 motion_data;
+    // x=temperature (-1.0 to 1.0)
+    vec4 color_tune_data;
 } u;
 
 void main()
@@ -83,6 +85,13 @@ void main()
     // midtones, values below 1.0 deepen them while preserving black and white.
     rgb = pow(clamp(rgb, 0.0, 1.0),
               vec3(1.0 / max(u.picture_data.w, 0.01)));
+
+    float temperature = clamp(u.color_tune_data.x, -1.0, 1.0);
+    rgb += vec3(
+        temperature * 0.035,
+        temperature * 0.008,
+       -temperature * 0.035
+    );
 
     outColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
 }

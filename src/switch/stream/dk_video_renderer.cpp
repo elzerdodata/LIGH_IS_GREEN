@@ -98,6 +98,7 @@ struct Transformation {
     alignas(16) float sharp_data[4];  // x=strength, y=overshoot allowance
     alignas(16) float picture_data[4];  // brightness, contrast, saturation, gamma
     alignas(16) float motion_data[4];  // x=blend factor, y=enabled
+    alignas(16) float color_tune_data[4];  // x=temperature (-1.0 to 1.0)
 };
 
 static_assert(7 * sizeof(DkImageDescriptor) <= kImageSlotStride,
@@ -581,6 +582,7 @@ void DkVideoRenderer::update_transform(AVFrame* frame) {
     t.picture_data[1] = static_cast<float>(quick_state_.contrast) / 100.0f;
     t.picture_data[2] = static_cast<float>(quick_state_.saturation) / 100.0f;
     t.picture_data[3] = static_cast<float>(quick_state_.gamma) / 100.0f;
+    t.color_tune_data[0] = static_cast<float>(quick_state_.temperature) / 20.0f;
     std::memcpy(static_cast<uint8_t*>(data_cpu_) + kUniformTemplateOff, &t,
                 sizeof(t));
     logf("deko3d: color=%d full=%d cropY=%.4fx%.4f cropUV=%.4fx%.4f picture=%+d/%d/%d gamma=%.2f sharp=%d",
@@ -824,9 +826,12 @@ void DkVideoRenderer::rasterize_quick_menu() {
         blit_quick_text("STREAM CONTROLS", menu.x + 20, menu.y + 16);
 
         const char* labels[kQuickRowCount] = {
-            "Performance", "Pacing", "Brightness", "Contrast", "Saturation",
-            "Gamma", "Sharpness"};
-        const char* pacing_labels[3] = {"Steady", "Smooth", "Motion"};
+            "Performance", "Pacing", "Picture Profile", "Brightness", "Contrast",
+            "Saturation", "Gamma", "Sharpness", "Temperature"};
+        const char* pacing_labels[2] = {"Steady", "Smooth"};
+        const char* profile_labels[7] = {
+            "Signal Pure", "Midnight Cinema", "Solar Ember", "Razor Edge",
+            "Neon Pulse", "OLED Abyss", "Custom"};
         const char* sharp_labels[4] = {"Off", "Low", "Medium", "High"};
 
         for (int row = 0; row < kQuickRowCount; ++row) {
@@ -854,10 +859,13 @@ void DkVideoRenderer::rasterize_quick_menu() {
             blit_quick_text("-", minus.x + 25, minus.y + 10);
             blit_quick_text("+", plus.x + 22, plus.y + 10);
 
-            char value[24];
+            char value[32];
             if (row == QuickPacing)
                 std::snprintf(value, sizeof(value), "%s",
-                              pacing_labels[quick_state_.pacing]);
+                              pacing_labels[std::clamp(quick_state_.pacing, 0, 1)]);
+            else if (row == QuickPictureProfile)
+                std::snprintf(value, sizeof(value), "%s",
+                              profile_labels[std::clamp(quick_state_.picture_profile, 0, 6)]);
             else if (row == QuickBrightness)
                 std::snprintf(value, sizeof(value), "%+d", quick_state_.brightness);
             else if (row == QuickContrast)
@@ -867,28 +875,18 @@ void DkVideoRenderer::rasterize_quick_menu() {
             else if (row == QuickGamma)
                 std::snprintf(value, sizeof(value), "%.2f",
                               quick_state_.gamma / 100.0f);
-            else
+            else if (row == QuickSharpness)
                 std::snprintf(value, sizeof(value), "%s",
-                              sharp_labels[quick_state_.sharpness]);
-            blit_quick_text(value, rr.x + 300, rr.y + 12);
+                              sharp_labels[std::clamp(quick_state_.sharpness, 0, 3)]);
+            else if (row == QuickTemperature)
+                std::snprintf(value, sizeof(value), "%+d", quick_state_.temperature);
+            blit_quick_text(value, rr.x + 280, rr.y + 12);
         }
-
-        // Motion remains available for testing, but never hide its risk: the
-        // warning is visible before the user taps either pacing arrow.
-        QuickRect warning_box = local({1180, 632, 468, 88});
-        fill(warning_box.x, warning_box.y, warning_box.w, warning_box.h,
-             warning);
-        frame(warning_box.x, warning_box.y, warning_box.w, warning_box.h, 2,
-              quick_state_.pacing == 2 ? accent : edge);
-        blit_quick_text("MOTION: 100% EXPERIMENTAL", warning_box.x + 14,
-                        warning_box.y + 6);
-        blit_quick_text("May cause rapid green flashing", warning_box.x + 14,
-                        warning_box.y + 44);
 
         QuickRect reset = local(kQuickResetRect);
         fill(reset.x, reset.y, reset.w, reset.h, surface);
         frame(reset.x, reset.y, reset.w, reset.h, 2, accent);
-        blit_quick_text("RESET IMAGE", reset.x + 55, reset.y + 10);
+        blit_quick_text("RESET IMAGE", reset.x + 55, reset.y + 8);
     }
 
     if (quick_cpu_)

@@ -282,32 +282,97 @@ struct Settings {
     int mapping = 0;    // 0=positional, 1=match labels
     int vibration = 2;  // rumble intensity: 0=Off, 1=Low, 2=Medium, 3=High
     int region = 0;     // region-bypass IP: 0=Off, else index into kRegion*
-    // Empty = Xbox automatic. Otherwise the stable region.name returned by
-    // offeringSettings.regions, e.g. "ChileCentral" or "BrazilSouth".
     std::string server_region;
     int force_region = 1; // 0=Off (Allow Fallback), 1=On (Strict Selected Region Only)
     int max_bitrate = 0;  // 0=Auto, 1=7Mbps, 2=14Mbps, 3=20Mbps, 4=30Mbps
     int language = 0;   // index into kLanguage* (0 = English US)
     int source = 0;     // 0=ask every time, 1=xCloud, 2=your Xbox
     float volume = 1.0f;  // output gain for streamed audio (0.5-4.0); tune in settings.json
-    // Presentation pacing: 0=Steady (lowest latency), 1=Smooth (one-frame
-    // reserve), 2=Motion (30->60 cross-frame interpolation, experimental).
-    int pacing = 0;
-    // Remote Play media request. The session fingerprint stays on the proven
-    // Android path; this only changes the post-connect video capabilities.
+    int pacing = 0;     // Presentation pacing: 0=Steady, 1=Smooth
     int console_quality = 0;  // 0=720p stable, 1=1080p experimental
+    int picture_profile = 0;  // PictureProfile enum (0=Signal Pure .. 6=Custom)
     int brightness = 0;    // post-process offset: -20..+20
     int contrast = 100;    // post-process multiplier: 70..130 percent
     int saturation = 100;  // post-process multiplier: 0..150 percent
     int gamma = 100;       // midtone curve: 50..200 percent; 100 = 1.00
     int sharpness = 0;  // luma sharpening: 0=Off, 1=Low, 2=Medium, 3=High
+    int temperature = 0; // temperature offset: -20..+20
     int debug_hud = 0;  // 0=off, 1=on: on-screen debug overlay while streaming
 };
+
+bool is_switch_oled_handheld() {
+#ifdef __SWITCH__
+    SetHardwareType hw_type = SetHardwareType_Icosa;
+    if (R_SUCCEEDED(setInitialize())) {
+        setGetHardwareType(&hw_type);
+        setExit();
+    }
+    bool is_oled = (hw_type == SetHardwareType_Aula);
+    bool is_handheld = (appletGetOperationMode() == AppletOperationMode_Handheld);
+    return is_oled && is_handheld;
+#else
+    return false;
+#endif
+}
+
+void apply_profile_preset(Settings& settings, int profile) {
+    switch (profile) {
+        case stream::PictureMidnightCinema:
+            settings.brightness = -3;
+            settings.contrast = 108;
+            settings.saturation = 94;
+            settings.gamma = 103;
+            settings.sharpness = 1;
+            settings.temperature = 2;
+            break;
+        case stream::PictureSolarEmber:
+            settings.brightness = 1;
+            settings.contrast = 104;
+            settings.saturation = 108;
+            settings.gamma = 105;
+            settings.sharpness = 1;
+            settings.temperature = 12;
+            break;
+        case stream::PictureRazorEdge:
+            settings.brightness = 0;
+            settings.contrast = 104;
+            settings.saturation = 100;
+            settings.gamma = 100;
+            settings.sharpness = 3;
+            settings.temperature = 0;
+            break;
+        case stream::PictureNeonPulse:
+            settings.brightness = 0;
+            settings.contrast = 111;
+            settings.saturation = 118;
+            settings.gamma = 102;
+            settings.sharpness = 2;
+            settings.temperature = -2;
+            break;
+        case stream::PictureOLEDAbyss:
+            settings.brightness = -2;
+            settings.contrast = 114;
+            settings.saturation = 106;
+            settings.gamma = 97;
+            settings.sharpness = 1;
+            settings.temperature = 0;
+            break;
+        case stream::PictureSignalPure:
+        default:
+            settings.brightness = 0;
+            settings.contrast = 100;
+            settings.saturation = 100;
+            settings.gamma = 100;
+            settings.sharpness = 0;
+            settings.temperature = 0;
+            break;
+    }
+}
 
 constexpr int kLanguageCount = 14;
 constexpr int kVibrationLevels = 4;
 constexpr int kQualityLevels = 4;
-constexpr int kPacingLevels = 3;
+constexpr int kPacingLevels = 2;
 constexpr int kConsoleQualityLevels = 2;
 
 Settings load_settings();
@@ -452,18 +517,30 @@ Settings load_settings() {
     // but migrate the old key so users keep their existing choice.
     if (data.contains("pacing"))
         settings.pacing =
-            std::clamp(data.value("pacing", 0), 0, kPacingLevels - 1);
+            std::clamp(data.value("pacing", 0), 0, 2);
     else
         settings.pacing = data.value("smooth", false) ? 1 : 0;
-    // Motion mode setting is preserved if set by the user.
+    if (settings.pacing >= 2) settings.pacing = 1;
+
     settings.console_quality = std::clamp(
         data.value("console_quality", 0), 0, kConsoleQualityLevels - 1);
+    settings.picture_profile = std::clamp(data.value("picture_profile", 0), 0, 6);
     settings.brightness = std::clamp(data.value("brightness", 0), -20, 20);
     settings.contrast = std::clamp(data.value("contrast", 100), 70, 130);
     settings.saturation = std::clamp(data.value("saturation", 100), 0, 150);
     settings.gamma = std::clamp(data.value("gamma", 100), 50, 200);
     settings.sharpness = std::clamp(data.value("sharpness", 0), 0, 3);
+    settings.temperature = std::clamp(data.value("temperature", 0), -20, 20);
     settings.debug_hud = std::clamp(data.value("debug_hud", 0), 0, 1);
+
+    if (settings.picture_profile == stream::PictureOLEDAbyss && !is_switch_oled_handheld()) {
+        settings.picture_profile = stream::PictureSignalPure;
+    }
+
+    if (settings.picture_profile != stream::PictureCustom) {
+        apply_profile_preset(settings, settings.picture_profile);
+    }
+
     return settings;
 }
 
@@ -480,15 +557,15 @@ void save_settings(const Settings& settings) {
                 {"source", settings.source},
                 {"volume", settings.volume},
                 {"pacing", settings.pacing},
-                // Keep the legacy key so switching back to stable v0.6 does
-                // not silently reset Smooth/Motion to Steady.
                 {"smooth", settings.pacing != 0},
                 {"console_quality", settings.console_quality},
+                {"picture_profile", settings.picture_profile},
                 {"brightness", settings.brightness},
                 {"contrast", settings.contrast},
                 {"saturation", settings.saturation},
                 {"gamma", settings.gamma},
                 {"sharpness", settings.sharpness},
+                {"temperature", settings.temperature},
                 {"debug_hud", settings.debug_hud}}.dump(2);
 }
 
@@ -1365,7 +1442,7 @@ const char* kQualityLabels[kQualityLevels] = {
 const char* kConsoleQualityLabels[kConsoleQualityLevels] = {
     "720p · Stable", "1080p · Experimental"};
 const char* kPacingLabels[kPacingLevels] = {
-    "Steady", "Smooth", "Motion · EXPERIMENTAL"};
+    "Steady", "Smooth"};
 const char* kMappingLabels[2] = {"Positional (Switch A = Xbox B)",
                                  "Match labels (Switch A = Xbox A)"};
 const char* kSharpnessLabels[4] = {"Off", "Low", "Medium", "High"};
@@ -1404,11 +1481,13 @@ stream::QuickMenuState quick_menu_state(const App& app) {
     state.open = app.quick_menu_open;
     state.performance = app.settings.debug_hud != 0;
     state.pacing = app.settings.pacing;
+    state.picture_profile = app.settings.picture_profile;
     state.brightness = app.settings.brightness;
     state.contrast = app.settings.contrast;
     state.saturation = app.settings.saturation;
     state.gamma = app.settings.gamma;
     state.sharpness = app.settings.sharpness;
+    state.temperature = app.settings.temperature;
     return state;
 }
 
@@ -1440,15 +1519,12 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
         app.settings.debug_hud = app.settings.debug_hud ? 0 : 1;
         changed = true;
     } else if (point_in_rect(x, y, stream::kQuickResetRect)) {
-        app.settings.brightness = 0;
-        app.settings.contrast = 100;
-        app.settings.saturation = 100;
-        app.settings.gamma = 100;
-        app.settings.sharpness = 0;
+        app.settings.picture_profile = stream::PictureSignalPure;
+        apply_profile_preset(app.settings, stream::PictureSignalPure);
         changed = true;
     } else {
         for (int row = stream::QuickPacing;
-             row <= stream::QuickSharpness; ++row) {
+             row <= stream::QuickTemperature; ++row) {
             int direction = 0;
             if (point_in_rect(x, y, stream::quick_minus_rect(row)))
                 direction = -1;
@@ -1456,25 +1532,43 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
                 direction = 1;
             if (direction == 0) continue;
 
-            if (row == stream::QuickPacing)
+            if (row == stream::QuickPacing) {
                 app.settings.pacing =
-                    (app.settings.pacing + direction + kPacingLevels) %
-                    kPacingLevels;
-            else if (row == stream::QuickBrightness)
+                    (app.settings.pacing + direction + 2) % 2;
+            } else if (row == stream::QuickPictureProfile) {
+                int next = app.settings.picture_profile;
+                do {
+                    next = (next + direction + 7) % 7;
+                } while (next == stream::PictureOLEDAbyss && !is_switch_oled_handheld());
+                app.settings.picture_profile = next;
+                if (next != stream::PictureCustom) {
+                    apply_profile_preset(app.settings, next);
+                }
+            } else if (row == stream::QuickBrightness) {
                 app.settings.brightness = std::clamp(
-                    app.settings.brightness + direction * 5, -20, 20);
-            else if (row == stream::QuickContrast)
+                    app.settings.brightness + direction * 1, -20, 20);
+                app.settings.picture_profile = stream::PictureCustom;
+            } else if (row == stream::QuickContrast) {
                 app.settings.contrast = std::clamp(
-                    app.settings.contrast + direction * 10, 70, 130);
-            else if (row == stream::QuickSaturation)
+                    app.settings.contrast + direction * 1, 70, 130);
+                app.settings.picture_profile = stream::PictureCustom;
+            } else if (row == stream::QuickSaturation) {
                 app.settings.saturation = std::clamp(
-                    app.settings.saturation + direction * 10, 0, 150);
-            else if (row == stream::QuickGamma)
+                    app.settings.saturation + direction * 1, 0, 150);
+                app.settings.picture_profile = stream::PictureCustom;
+            } else if (row == stream::QuickGamma) {
                 app.settings.gamma = std::clamp(
-                    app.settings.gamma + direction * 5, 50, 200);
-            else
+                    app.settings.gamma + direction * 1, 50, 200);
+                app.settings.picture_profile = stream::PictureCustom;
+            } else if (row == stream::QuickSharpness) {
                 app.settings.sharpness =
                     (app.settings.sharpness + direction + 4) % 4;
+                app.settings.picture_profile = stream::PictureCustom;
+            } else if (row == stream::QuickTemperature) {
+                app.settings.temperature = std::clamp(
+                    app.settings.temperature + direction * 1, -20, 20);
+                app.settings.picture_profile = stream::PictureCustom;
+            }
             changed = true;
             break;
         }
