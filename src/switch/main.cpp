@@ -302,12 +302,12 @@ struct Settings {
 
 bool is_switch_oled_handheld() {
 #ifdef __SWITCH__
-    SetHardwareType hw_type = SetHardwareType_Icosa;
-    if (R_SUCCEEDED(setInitialize())) {
-        setGetHardwareType(&hw_type);
-        setExit();
+    SetSysHardwareType hw_type = SetSysHardwareType_Icosa;
+    if (R_SUCCEEDED(setsysInitialize())) {
+        setsysGetHardwareType(&hw_type);
+        setsysExit();
     }
-    bool is_oled = (hw_type == SetHardwareType_Aula);
+    bool is_oled = (hw_type == SetSysHardwareType_Aula);
     bool is_handheld = (appletGetOperationMode() == AppletOperationMode_Handheld);
     return is_oled && is_handheld;
 #else
