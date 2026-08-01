@@ -302,7 +302,7 @@ struct Settings {
 
 bool is_switch_oled_handheld() {
 #ifdef __SWITCH__
-    SetSysProductModel model = SetSysProductModel_Icosa;
+    SetSysProductModel model = SetSysProductModel_Iowa;
     if (R_SUCCEEDED(setsysInitialize())) {
         setsysGetProductModel(&model);
         setsysExit();
