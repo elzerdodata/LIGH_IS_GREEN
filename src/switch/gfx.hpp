@@ -62,6 +62,10 @@ public:
     SDL_Texture* texture_from_memory(const void* data, size_t size);
     void draw_texture(SDL_Texture* texture, const SDL_Rect& destination);
     void draw_texture_cover(SDL_Texture* texture, const SDL_Rect& destination);
+    // Aspect-contain: show the complete texture, centered, without cropping
+    // or stretching. Empty space keeps the card surface as letterbox.
+    void draw_texture_contain(SDL_Texture* texture,
+                              const SDL_Rect& destination);
     void draw_brand_icon(const SDL_Rect& destination);
 
     // Simple pulsing loading dot row.

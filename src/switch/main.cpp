@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1385,14 +1386,15 @@ void draw_signin(App& app) {
     draw_hints(app, {{"ZL", "Settings · region bypass"}, {"B", "Exit"}});
 }
 
-// v0.5.1 library geometry: 24 games per page in an 8-by-3 grid.
-constexpr int kColumns = 8;
-constexpr int kCardW = 196;
-constexpr int kCardH = 205;
-constexpr int kGapX = 28;
-constexpr int kGapY = 24;
-constexpr int kGridX = 60;
-constexpr int kGridY = 276;
+// v0.8.1 library geometry: 18 games per page in a readable 6-by-3 grid.
+// A normal card reserves a true 16:9 viewport (272x153) and two title lines.
+constexpr int kColumns = 6;
+constexpr int kCardW = 272;
+constexpr int kCardH = 216;
+constexpr int kGapX = 24;
+constexpr int kGapY = 16;
+constexpr int kGridX = 72;
+constexpr int kGridY = 280;
 constexpr int kRowsVisible = 3;
 constexpr int kPageSize = kColumns * kRowsVisible;
 constexpr int kFilterTabsX = 560;
@@ -1626,8 +1628,96 @@ void draw_loading(App& app) {
                           gfx::FontSize::Note, gfx::kTextDim);
 }
 
-// One library card. Focus grows from 1.00x to 1.05x over 220 ms; only the
-// drawn destination changes, so neighbours never reflow and input stays live.
+// Remove one complete UTF-8 code point from the end. This prevents a title
+// ellipsis from leaving a broken continuation byte on screen.
+void utf8_pop_back(std::string& value) {
+    if (value.empty()) return;
+    size_t start = value.size() - 1;
+    while (start > 0 &&
+           (static_cast<unsigned char>(value[start]) & 0xC0) == 0x80)
+        --start;
+    value.erase(start);
+}
+
+std::string ellipsize_library_title(App& app, std::string value,
+                                    int max_width) {
+    const std::string ellipsis = "…";
+    if (app.gfx.text_width(value, gfx::FontSize::Small) <= max_width)
+        return value;
+    while (!value.empty() &&
+           app.gfx.text_width(value + ellipsis, gfx::FontSize::Small) >
+               max_width)
+        utf8_pop_back(value);
+    return value + ellipsis;
+}
+
+// Word-wrap a card title into at most two measured lines. The second line may
+// use a UTF-8-safe ellipsis, while the selected-title marquee above the grid
+// always exposes the complete unmodified title.
+std::vector<std::string> wrap_library_title(App& app,
+                                            const std::string& title,
+                                            int max_width) {
+    std::istringstream input(title);
+    std::vector<std::string> words;
+    std::string word;
+    while (input >> word) words.push_back(word);
+    if (words.empty()) return {title};
+
+    std::string first;
+    size_t index = 0;
+    for (; index < words.size(); ++index) {
+        std::string candidate = first.empty() ? words[index]
+                                              : first + " " + words[index];
+        if (app.gfx.text_width(candidate, gfx::FontSize::Small) <= max_width)
+            first = std::move(candidate);
+        else
+            break;
+    }
+    if (first.empty()) {
+        first = ellipsize_library_title(app, words.front(), max_width);
+        index = 1;
+    }
+    if (index >= words.size()) return {first};
+
+    std::string second;
+    for (; index < words.size(); ++index) {
+        if (!second.empty()) second += " ";
+        second += words[index];
+    }
+    second = ellipsize_library_title(app, second, max_width);
+    return {first, second};
+}
+
+void draw_library_title_marquee(App& app, const std::string& title,
+                                const SDL_Rect& box) {
+    SDL_Renderer* renderer = app.gfx.renderer();
+    SDL_RenderSetClipRect(renderer, &box);
+    const int width = app.gfx.text_width(title, gfx::FontSize::Small);
+    if (width <= box.w) {
+        app.gfx.text(title, box.x, box.y, gfx::FontSize::Small, gfx::kText);
+    } else {
+        const int overflow = width - box.w;
+        const int pause = 90;  // 1.5 s at the 60 Hz-oriented tick division.
+        const int travel = std::max(1, overflow);
+        const int phase = static_cast<int>((SDL_GetTicks() / 16) %
+                                           (2 * pause + 2 * travel));
+        int offset = 0;
+        if (phase < pause)
+            offset = 0;
+        else if (phase < pause + travel)
+            offset = phase - pause;
+        else if (phase < 2 * pause + travel)
+            offset = travel;
+        else
+            offset = 2 * pause + 2 * travel - phase;
+        app.gfx.text(title, box.x - offset, box.y, gfx::FontSize::Small,
+                     gfx::kText);
+    }
+    SDL_RenderSetClipRect(renderer, nullptr);
+}
+
+// One library card. Artwork uses aspect-contain, so the complete source image
+// remains visible. Titles are measured by pixels and wrapped into two lines.
 void draw_card(App& app, const Game& game, const SDL_Rect& card,
                bool focused) {
     SDL_Rect dst = card;
@@ -1637,17 +1727,26 @@ void draw_card(App& app, const Game& game, const SDL_Rect& card,
     }
 
     app.gfx.fill(dst, gfx::kSurface);
-    SDL_Rect artwork = {dst.x, dst.y, dst.w, dst.h - 44};
+    const int artwork_height = std::min(dst.h - 58, (dst.w * 9) / 16);
+    SDL_Rect artwork = {dst.x, dst.y, dst.w, artwork_height};
     SDL_Texture* cover = app.covers->get(game.title_id, game.box_art_url);
     if (cover)
-        app.gfx.draw_texture_cover(cover, artwork);
+        app.gfx.draw_texture_contain(cover, artwork);
     else
         draw_cover_fallback(app, game, artwork, gfx::FontSize::Title);
-    app.gfx.fill({dst.x, dst.y + dst.h - 44, dst.w, 44},
-                 focused ? gfx::kSurfaceHi : gfx::kSurface);
+
+    SDL_Rect title_area = {dst.x, artwork.y + artwork.h, dst.w,
+                           dst.h - artwork.h};
+    app.gfx.fill(title_area, focused ? gfx::kSurfaceHi : gfx::kSurface);
     const std::string& label = game.name.empty() ? game.title_id : game.name;
-    app.gfx.text(label.substr(0, 13), dst.x + 12, dst.y + dst.h - 35,
-                 gfx::FontSize::Small, gfx::kText);
+    const std::vector<std::string> lines =
+        wrap_library_title(app, label, std::max(1, dst.w - 24));
+    int line_y = title_area.y + 3;
+    for (size_t i = 0; i < lines.size() && i < 2; ++i) {
+        app.gfx.text(lines[i], dst.x + 12, line_y, gfx::FontSize::Small,
+                     gfx::kText);
+        line_y += 27;
+    }
 
     if (is_favorite(app, game.title_id)) {
         SDL_Rect badge = {dst.x + 8, dst.y + 8, 36, 36};
@@ -1656,9 +1755,7 @@ void draw_card(App& app, const Game& game, const SDL_Rect& card,
                               gfx::FontSize::Small, gfx::kBg);
     }
 
-    if (focused) {
-        draw_focus_frames(app, dst);
-    }
+    if (focused) draw_focus_frames(app, dst);
 }
 
 void draw_selected_game_info(App& app, const Game& game) {
@@ -1682,7 +1779,7 @@ void draw_selected_game_info(App& app, const Game& game) {
                            kLibraryHero.y + 24, 268, 402};
     SDL_Texture* cover = app.covers->get(game.title_id, game.box_art_url);
     if (cover)
-        app.gfx.draw_texture_cover(cover, cover_rect);
+        app.gfx.draw_texture_contain(cover, cover_rect);
     else
         draw_cover_fallback(app, game, cover_rect, gfx::FontSize::Huge);
     app.gfx.frame(cover_rect, {57, 224, 103, 120}, 2);
@@ -2059,6 +2156,12 @@ void draw_library(App& app) {
                  gfx::kWidth - kMargin -
                      app.gfx.text_width(count, gfx::FontSize::Small),
                  216, gfx::FontSize::Small, gfx::kFocus);
+
+    const std::string& selected_label =
+        selected.name.empty() ? selected.title_id : selected.name;
+    SDL_Rect selected_title_box = {kMargin + 20, 242,
+                                   gfx::kWidth - 2 * kMargin - 40, 32};
+    draw_library_title_marquee(app, selected_label, selected_title_box);
 
     int focused_slot = app.cursor - page_start;
     for (int slot = 0; slot < kPageSize; ++slot) {
