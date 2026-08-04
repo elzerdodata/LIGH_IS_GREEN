@@ -137,6 +137,9 @@ private:
     void rasterize_guide();            // compose Guide/Home touch button
     void rasterize_quick_menu();       // compose dots + expanded picture panel
     void blit_quick_text(const char* s, int x, int y);
+    void blit_quick_text_font(TTF_Font* font, const char* s, int x, int y);
+    void blit_session_text(const char* s, int x, int y);
+    void blit_session_small_text(const char* s, int x, int y);
     // The render queue is asynchronous. Keep every NVDEC surface referenced
     // until the swapchain gives its framebuffer slot back to us, which proves
     // the GPU has finished sampling that slot's video textures.
@@ -201,6 +204,10 @@ private:
     static constexpr uint32_t kHudTexW = 512;
     static constexpr uint32_t kHudTexH = 160;
     TTF_Font* hud_font_ = nullptr;
+    // Dedicated smaller fonts for the 720p session overlay. Reusing the 28 px
+    // HUD font made labels, values and the status badge collide on handheld.
+    TTF_Font* session_font_ = nullptr;       // 22 px actions and values
+    TTF_Font* session_small_font_ = nullptr; // 18 px labels and help
     dk::UniqueMemBlock hud_memblock_;
     dk::Image hud_image_;
     dk::ImageDescriptor hud_desc_;

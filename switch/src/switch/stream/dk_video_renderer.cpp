@@ -436,15 +436,23 @@ bool DkVideoRenderer::init() {
         quick_image_.initialize(quick_layout, quick_memblock_, 0);
         quick_desc_.initialize(quick_image_);
     }
-    // System shared font (pl was initialized in main). A null font falls back to
-    // a panel with no text -- still proves the overlay, and never crashes.
-    if (!hud_font_) {
+    // System shared font (pl was initialized in main). The performance HUD
+    // keeps its 28 px face, while the dense session overlay gets dedicated
+    // 22/18 px faces so labels and values remain readable at 1280x720.
+    if (!hud_font_ || !session_font_ || !session_small_font_) {
         PlFontData fd;
         if (R_SUCCEEDED(plGetSharedFontByType(&fd, PlSharedFontType_Standard))) {
-            SDL_RWops* rw = SDL_RWFromConstMem(fd.address, fd.size);
-            if (rw) hud_font_ = TTF_OpenFontRW(rw, 1, 28);
+            const auto open_shared_font = [&](int pointSize) -> TTF_Font* {
+                SDL_RWops* rw = SDL_RWFromConstMem(fd.address, fd.size);
+                return rw ? TTF_OpenFontRW(rw, 1, pointSize) : nullptr;
+            };
+            if (!hud_font_) hud_font_ = open_shared_font(28);
+            if (!session_font_) session_font_ = open_shared_font(22);
+            if (!session_small_font_) session_small_font_ = open_shared_font(18);
         }
         if (!hud_font_) logf("deko3d: HUD font unavailable (panel only)");
+        if (!session_font_ || !session_small_font_)
+            logf("deko3d: compact session fonts unavailable; using HUD fallback");
     }
     rasterize_guide();
     rasterize_quick_menu();
@@ -466,6 +474,14 @@ void DkVideoRenderer::shutdown() {
     if (hud_font_) {
         TTF_CloseFont(hud_font_);  // also frees the RWops (opened with freesrc=1)
         hud_font_ = nullptr;
+    }
+    if (session_font_) {
+        TTF_CloseFont(session_font_);
+        session_font_ = nullptr;
+    }
+    if (session_small_font_) {
+        TTF_CloseFont(session_small_font_);
+        session_small_font_ = nullptr;
     }
     mappings_.clear();
     current_mapping_ = -1;
@@ -708,10 +724,11 @@ void DkVideoRenderer::blit_text(const char* s, int x, int y) {
     SDL_FreeSurface(surf);
 }
 
-void DkVideoRenderer::blit_quick_text(const char* s, int x, int y) {
-    if (!hud_font_ || !s || !*s) return;
+void DkVideoRenderer::blit_quick_text_font(TTF_Font* font, const char* s,
+                                                int x, int y) {
+    if (!font || !s || !*s) return;
     SDL_Color white{255, 255, 255, 255};
-    SDL_Surface* surf = TTF_RenderUTF8_Blended(hud_font_, s, white);
+    SDL_Surface* surf = TTF_RenderUTF8_Blended(font, s, white);
     if (!surf) return;
     SDL_LockSurface(surf);
     int bpp = surf->format->BytesPerPixel;
@@ -741,6 +758,21 @@ void DkVideoRenderer::blit_quick_text(const char* s, int x, int y) {
     }
     SDL_UnlockSurface(surf);
     SDL_FreeSurface(surf);
+}
+
+void DkVideoRenderer::blit_quick_text(const char* s, int x, int y) {
+    blit_quick_text_font(hud_font_, s, x, y);
+}
+
+void DkVideoRenderer::blit_session_text(const char* s, int x, int y) {
+    blit_quick_text_font(session_font_ ? session_font_ : hud_font_, s, x, y);
+}
+
+void DkVideoRenderer::blit_session_small_text(const char* s, int x, int y) {
+    TTF_Font* font = session_small_font_ ? session_small_font_
+                                        : (session_font_ ? session_font_
+                                                         : hud_font_);
+    blit_quick_text_font(font, s, x, y);
 }
 
 void DkVideoRenderer::rasterize_guide() {
@@ -973,7 +1005,7 @@ void DkVideoRenderer::rasterize_quick_menu() {
         QuickRect mouse_help = local(kQuickMouseHelpRect);
         fill(mouse_help.x, mouse_help.y, mouse_help.w, mouse_help.h,
              rgba(24, 21, 34, 235));
-        blit_quick_text("MOUSE: TOUCH / (-)+R STICK   ALT+TAB: (-)+X",
+        blit_quick_text("MOUSE: DRAG=TRACKPAD  TAP=CLICK  ALT+TAB: (-)+X",
                         mouse_help.x + 10, mouse_help.y + 8);
     }
 
@@ -981,19 +1013,21 @@ void DkVideoRenderer::rasterize_quick_menu() {
         QuickRect menu = local(kSessionPanelRect);
         fill(menu.x, menu.y, menu.w, menu.h, panel);
         frame(menu.x, menu.y, menu.w, menu.h, 3, accent);
-        blit_quick_text("ZERODROID CONTROL CENTER", menu.x + 20,
-                        menu.y + 14);
+        blit_session_text("ZERODROID CONTROL CENTER", menu.x + 18,
+                          menu.y + 16);
 
         const uint32_t connected = rgba(92, 214, 133, 255);
         const uint32_t warning = rgba(251, 191, 36, 255);
         const bool healthy = quick_state_.sessionStatus == "CONNECTED" ||
                              quick_state_.sessionStatus == "STREAMING";
-        fill(menu.x + menu.w - 172, menu.y + 12, 150, 38,
+        const int badgeW = 128;
+        fill(menu.x + menu.w - badgeW - 18, menu.y + 14, badgeW, 34,
              rgba(28, 54, 40, 238));
-        frame(menu.x + menu.w - 172, menu.y + 12, 150, 38, 2,
+        frame(menu.x + menu.w - badgeW - 18, menu.y + 14, badgeW, 34, 2,
               healthy ? connected : warning);
-        blit_quick_text(healthy ? "CONNECTED" : "CHECKING",
-                        menu.x + menu.w - 158, menu.y + 17);
+        blit_session_small_text(healthy ? "CONNECTED" : "CHECKING",
+                                menu.x + menu.w - badgeW - 8,
+                                menu.y + 20);
 
         QuickRect status = local(kSessionStatusRect);
         QuickRect actions = local(kSessionActionsRect);
@@ -1002,8 +1036,8 @@ void DkVideoRenderer::rasterize_quick_menu() {
              rgba(24, 21, 34, 238));
         frame(status.x, status.y, status.w, status.h, 2, edge);
         frame(actions.x, actions.y, actions.w, actions.h, 2, edge);
-        blit_quick_text("LIVE SESSION", status.x + 14, status.y + 12);
-        blit_quick_text("CONTROLS", actions.x + 14, actions.y + 12);
+        blit_session_text("LIVE SESSION", status.x + 14, status.y + 10);
+        blit_session_text("CONTROLS", actions.x + 14, actions.y + 10);
 
         const auto compact = [](const std::string& value, std::size_t limit) {
             if (value.size() <= limit) return value;
@@ -1011,15 +1045,16 @@ void DkVideoRenderer::rasterize_quick_menu() {
             return value.substr(0, limit - 3) + "...";
         };
         char value[96];
-        int sy = status.y + 58;
-        const auto stat_line = [&](const char* label, const std::string& textValue) {
-            blit_quick_text(label, status.x + 14, sy);
-            blit_quick_text(textValue.c_str(), status.x + 14, sy + 28);
-            sy += 66;
+        int sy = status.y + 48;
+        const auto stat_line = [&](const char* label,
+                                   const std::string& textValue) {
+            blit_session_small_text(label, status.x + 14, sy);
+            blit_session_text(textValue.c_str(), status.x + 14, sy + 21);
+            sy += 58;
         };
         stat_line("GAME", compact(quick_state_.currentGame.empty()
                                       ? std::string("Boosteroid session")
-                                      : quick_state_.currentGame, 20));
+                                      : quick_state_.currentGame, 24));
         std::snprintf(value, sizeof(value), "%dx%d -> %dx%d",
                       quick_state_.streamWidth, quick_state_.streamHeight,
                       quick_state_.outputWidth, quick_state_.outputHeight);
@@ -1039,17 +1074,16 @@ void DkVideoRenderer::rasterize_quick_menu() {
         stat_line("SESSION TIME", value);
         stat_line("GATEWAY", compact(quick_state_.gatewayLabel.empty()
                                          ? std::string("automatic")
-                                         : quick_state_.gatewayLabel, 20));
+                                         : quick_state_.gatewayLabel, 24));
 
         const auto action_button = [&](const QuickRect& absolute,
                                        const char* label,
                                        uint32_t border,
                                        bool activeState = false) {
             QuickRect r = local(absolute);
-            fill(r.x, r.y, r.w, r.h,
-                 activeState ? active : surface);
+            fill(r.x, r.y, r.w, r.h, activeState ? active : surface);
             frame(r.x, r.y, r.w, r.h, 2, border);
-            blit_quick_text(label, r.x + 18, r.y + 14);
+            blit_session_small_text(label, r.x + 14, r.y + 14);
         };
         action_button(kSessionGuideRect, "XBOX GUIDE", edge);
         action_button(kSessionAltTabRect, "ALT + TAB", accent);
@@ -1065,39 +1099,41 @@ void DkVideoRenderer::rasterize_quick_menu() {
         QuickRect help = local(kSessionHelpRect);
         fill(help.x, help.y, help.w, help.h, rgba(45, 39, 61, 245));
         frame(help.x, help.y, help.w, help.h, 2, accent);
-        blit_quick_text("MOUSE: touch/drag or hold (-) + right stick",
-                        help.x + 12, help.y + 10);
-        blit_quick_text("(-)+ZR left click   (-)+R3 right click",
-                        help.x + 12, help.y + 44);
-        blit_quick_text("(-)+X ALT+TAB   B closes this overlay",
-                        help.x + 12, help.y + 78);
-        std::snprintf(value, sizeof(value), "TX mouse %llu/%llu  keyboard %llu",
+        blit_session_small_text("TOUCHPAD: drag anywhere to move the cursor",
+                                help.x + 12, help.y + 8);
+        blit_session_small_text("QUICK TAP: left click at the current cursor",
+                                help.x + 12, help.y + 36);
+        blit_session_small_text("(-)+R stick move | ZR left | R3 right",
+                                help.x + 12, help.y + 64);
+        blit_session_small_text("(-)+X ALT+TAB | B closes this overlay",
+                                help.x + 12, help.y + 92);
+        std::snprintf(value, sizeof(value), "TX mouse %llu/%llu | keyboard %llu",
                       static_cast<unsigned long long>(quick_state_.mouseMoves),
                       static_cast<unsigned long long>(quick_state_.mouseClicks),
                       static_cast<unsigned long long>(quick_state_.keyboardEvents));
-        blit_quick_text(value, help.x + 12, help.y + 108);
+        blit_session_small_text(value, help.x + 12, help.y + 124);
 
         if (quick_state_.reconnectConfirmOpen) {
             QuickRect confirm = local(kReconnectConfirmPanelRect);
             fill(confirm.x, confirm.y, confirm.w, confirm.h,
                  rgba(13, 11, 22, 252));
             frame(confirm.x, confirm.y, confirm.w, confirm.h, 3, warning);
-            blit_quick_text("RECONNECT SAME SESSION?", confirm.x + 34,
-                            confirm.y + 24);
-            blit_quick_text("Only local audio/video/control will close.",
-                            confirm.x + 24, confirm.y + 82);
-            blit_quick_text("The Boosteroid machine must stay running.",
-                            confirm.x + 24, confirm.y + 118);
-            blit_quick_text("Experimental: verify after reconnecting.",
-                            confirm.x + 24, confirm.y + 154);
+            blit_session_text("RECONNECT SAME SESSION?", confirm.x + 30,
+                              confirm.y + 24);
+            blit_session_small_text("Only local audio/video/control will close.",
+                                    confirm.x + 24, confirm.y + 82);
+            blit_session_small_text("The Boosteroid machine must stay running.",
+                                    confirm.x + 24, confirm.y + 116);
+            blit_session_small_text("Experimental: verify after reconnecting.",
+                                    confirm.x + 24, confirm.y + 150);
             QuickRect cancel = local(kReconnectCancelRect);
             QuickRect accept = local(kReconnectConfirmRect);
             fill(cancel.x, cancel.y, cancel.w, cancel.h, surface);
             fill(accept.x, accept.y, accept.w, accept.h, active);
             frame(cancel.x, cancel.y, cancel.w, cancel.h, 2, edge);
             frame(accept.x, accept.y, accept.w, accept.h, 2, warning);
-            blit_quick_text("CANCEL", cancel.x + 46, cancel.y + 12);
-            blit_quick_text("RECONNECT", accept.x + 28, accept.y + 12);
+            blit_session_text("CANCEL", cancel.x + 42, cancel.y + 12);
+            blit_session_text("RECONNECT", accept.x + 22, accept.y + 12);
         }
     }
 

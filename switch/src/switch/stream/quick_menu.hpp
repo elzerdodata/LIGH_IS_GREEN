@@ -16,7 +16,7 @@ struct QuickRect {
     int h;
 };
 
-// v0.8.4.4 keeps the picture settings panel and replaces the compact
+// v0.8.4.5 keeps the picture settings panel and refines the full
 // session-actions popup with a full session-control overlay opened from the
 // always-visible lilac Xbox/X touch icon.
 inline constexpr QuickRect kQuickTextureRect{1160, 8, 672, 928};
@@ -53,16 +53,16 @@ inline constexpr QuickRect kQuickMouseHelpRect{1180, 862, 468, 46};
 // remains inside the existing 672x928 quick texture, avoiding an additional GPU
 // texture and keeping the change safe for handheld memory limits.
 inline constexpr QuickRect kSessionPanelRect{1172, 92, 648, 838};
-inline constexpr QuickRect kSessionStatusRect{1192, 154, 296, 590};
-inline constexpr QuickRect kSessionActionsRect{1502, 154, 298, 590};
-inline constexpr QuickRect kSessionGuideRect{1520, 204, 262, 58};
-inline constexpr QuickRect kSessionAltTabRect{1520, 276, 262, 58};
-inline constexpr QuickRect kSessionKeyboardRect{1520, 348, 262, 58};
-inline constexpr QuickRect kSessionMouseRect{1520, 420, 262, 58};
-inline constexpr QuickRect kSessionReconnectRect{1520, 492, 262, 58};
-inline constexpr QuickRect kSessionSettingsRect{1520, 564, 262, 58};
-inline constexpr QuickRect kSessionCloseRect{1520, 636, 262, 58};
-inline constexpr QuickRect kSessionHelpRect{1192, 762, 590, 138};
+inline constexpr QuickRect kSessionStatusRect{1192, 170, 330, 560};
+inline constexpr QuickRect kSessionActionsRect{1536, 170, 264, 560};
+inline constexpr QuickRect kSessionGuideRect{1552, 218, 232, 52};
+inline constexpr QuickRect kSessionAltTabRect{1552, 284, 232, 52};
+inline constexpr QuickRect kSessionKeyboardRect{1552, 350, 232, 52};
+inline constexpr QuickRect kSessionMouseRect{1552, 416, 232, 52};
+inline constexpr QuickRect kSessionReconnectRect{1552, 482, 232, 52};
+inline constexpr QuickRect kSessionSettingsRect{1552, 548, 232, 52};
+inline constexpr QuickRect kSessionCloseRect{1552, 614, 232, 52};
+inline constexpr QuickRect kSessionHelpRect{1192, 750, 592, 160};
 
 // Reconnect is destructive to the local transport and therefore requires an
 // explicit second tap. The remote Boosteroid machine is intentionally not

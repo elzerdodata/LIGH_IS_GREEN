@@ -615,6 +615,10 @@ int main(int argc, char* argv[]) {
     int touchDownY = 0;
     int touchLastX = 0;
     int touchLastY = 0;
+    int touchTravel = 0;
+    uint64_t touchDownTick = 0;
+    bool touchClickSyntheticDown = false;
+    uint64_t touchClickReleaseAt = 0;
     uint64_t guideTouchUntil = 0;
     bool minusTapPending = false;
     bool minusMouseUsed = false;
@@ -848,6 +852,10 @@ int main(int argc, char* argv[]) {
                 stream->send_controller_button(6, false);
                 minusSyntheticDown = false;
             }
+            if (touchClickSyntheticDown && nowTicks >= touchClickReleaseAt) {
+                stream->send_mouse_button(0, false);
+                touchClickSyntheticDown = false;
+            }
             if (kDown & HidNpadButton_Minus) {
                 minusTapPending = true;
                 minusMouseUsed = false;
@@ -863,33 +871,43 @@ int main(int argc, char* argv[]) {
                 if (!touchWasDown) {
                     touchDownX = x;
                     touchDownY = y;
+                    touchLastX = x;
+                    touchLastY = y;
+                    touchTravel = 0;
+                    touchDownTick = nowTicks;
                     touchCapturedByOverlay = quickMenuState.open ||
                         quickMenuState.sessionActionsOpen ||
                         point_in_rect(x, y, gnx::stream::kQuickToggleRect) ||
                         point_in_rect(x, y, gnx::stream::kGuideButtonRect);
                     touchMouseActive = !touchCapturedByOverlay &&
                         quickMenuState.mouseModeEnabled;
-                    if (touchMouseActive) {
-                        virtualMouseX = std::clamp(
-                            static_cast<float>(x) / gnx::gfx::kWidth,
-                            0.0f, 1.0f);
-                        virtualMouseY = std::clamp(
-                            static_cast<float>(y) / gnx::gfx::kHeight,
-                            0.0f, 1.0f);
-                        stream->send_mouse_position(
-                            virtualMouseX, virtualMouseY, true);
-                        stream->send_mouse_button(0, true);
-                    }
+                    // Trackpad semantics: touching a new place never teleports
+                    // the remote cursor and never presses a button immediately.
                 } else if (touchMouseActive &&
                            (x != touchLastX || y != touchLastY)) {
+                    const int deltaX = x - touchLastX;
+                    const int deltaY = y - touchLastY;
+                    touchTravel += std::abs(deltaX) + std::abs(deltaY);
+                    static constexpr float touchGains[3] = {0.75f, 1.0f, 1.35f};
+                    const int speedIndex = std::clamp(
+                        quickMenuState.mouseSpeed,
+                        static_cast<int>(gnx::stream::MousePrecise),
+                        static_cast<int>(gnx::stream::MouseFast));
+                    const float gain = touchGains[speedIndex];
                     virtualMouseX = std::clamp(
-                        static_cast<float>(x) / gnx::gfx::kWidth,
+                        virtualMouseX +
+                            (static_cast<float>(deltaX) / gnx::gfx::kWidth) * gain,
                         0.0f, 1.0f);
                     virtualMouseY = std::clamp(
-                        static_cast<float>(y) / gnx::gfx::kHeight,
+                        virtualMouseY +
+                            (static_cast<float>(deltaY) / gnx::gfx::kHeight) * gain,
                         0.0f, 1.0f);
                     stream->send_mouse_position(
                         virtualMouseX, virtualMouseY, true);
+                } else if (!touchMouseActive &&
+                           (x != touchLastX || y != touchLastY)) {
+                    touchTravel += std::abs(x - touchLastX) +
+                                   std::abs(y - touchLastY);
                 }
                 touchWasDown = true;
                 touchLastX = x;
@@ -897,15 +915,21 @@ int main(int argc, char* argv[]) {
             } else if (touchWasDown) {
                 touchWasDown = false;
                 if (touchMouseActive) {
-                    virtualMouseX = std::clamp(
-                        static_cast<float>(touchLastX) / gnx::gfx::kWidth,
-                        0.0f, 1.0f);
-                    virtualMouseY = std::clamp(
-                        static_cast<float>(touchLastY) / gnx::gfx::kHeight,
-                        0.0f, 1.0f);
-                    stream->send_mouse_position(
-                        virtualMouseX, virtualMouseY, true);
-                    stream->send_mouse_button(0, false);
+                    constexpr uint64_t kTapMaxMs = 260;
+                    constexpr int kTapMaxTravel = 30;
+                    const uint64_t heldMs = nowTicks - touchDownTick;
+                    if (heldMs <= kTapMaxMs && touchTravel <= kTapMaxTravel) {
+                        // A quick tap clicks exactly where the cursor already is;
+                        // it does not jump to the finger's absolute position.
+                        stream->send_mouse_position(
+                            virtualMouseX, virtualMouseY, true);
+                        if (touchClickSyntheticDown)
+                            stream->send_mouse_button(0, false);
+                        stream->send_mouse_button(0, true);
+                        touchClickSyntheticDown = true;
+                        touchClickReleaseAt = nowTicks + 45;
+                    }
+                    touchMouseActive = false;
                 } else if (touchCapturedByOverlay) {
                     const int dx = std::abs(touchLastX - touchDownX);
                     const int dy = std::abs(touchLastY - touchDownY);
@@ -1188,7 +1212,7 @@ int main(int argc, char* argv[]) {
                 // transport. Unlike a normal Stop, this path deliberately does
                 // not send terminating/hangup/dequeue, allowing Boosteroid to
                 // keep the existing VM and game alive for the new attachment.
-                if (touchMouseActive) stream->send_mouse_button(0, false);
+                if (touchClickSyntheticDown) stream->send_mouse_button(0, false);
                 if (mouseLeftDown) stream->send_mouse_button(0, false);
                 if (mouseRightDown) stream->send_mouse_button(2, false);
                 if (minusSyntheticDown) {
@@ -1200,6 +1224,8 @@ int main(int argc, char* argv[]) {
                 touchWasDown = false;
                 touchCapturedByOverlay = false;
                 touchMouseActive = false;
+                touchClickSyntheticDown = false;
+                touchTravel = 0;
                 guideTouchUntil = 0;
                 minusTapPending = false;
                 minusMouseUsed = false;
@@ -1235,7 +1261,7 @@ int main(int argc, char* argv[]) {
             const auto streamState = stream->state();
             if (leaveStream || streamState == gnx::stream::EngineState::Failed ||
                 streamState == gnx::stream::EngineState::Stopped) {
-                if (touchMouseActive) stream->send_mouse_button(0, false);
+                if (touchClickSyntheticDown) stream->send_mouse_button(0, false);
                 if (mouseLeftDown) stream->send_mouse_button(0, false);
                 if (mouseRightDown) stream->send_mouse_button(2, false);
                 if (minusSyntheticDown) stream->send_controller_button(6, false);
@@ -1246,6 +1272,8 @@ int main(int argc, char* argv[]) {
                 touchWasDown = false;
                 touchCapturedByOverlay = false;
                 touchMouseActive = false;
+                touchClickSyntheticDown = false;
+                touchTravel = 0;
                 guideTouchUntil = 0;
                 minusTapPending = false;
                 minusMouseUsed = false;
@@ -1354,6 +1382,8 @@ int main(int argc, char* argv[]) {
                 touchWasDown = false;
                 touchCapturedByOverlay = false;
                 touchMouseActive = false;
+                touchClickSyntheticDown = false;
+                touchTravel = 0;
                 minusTapPending = false;
                 minusMouseUsed = false;
                 minusSyntheticDown = false;
@@ -2066,8 +2096,8 @@ int main(int argc, char* argv[]) {
                          180, 218, gnx::gfx::FontSize::Small,
                          gnx::gfx::kTextDim);
                 gfx.text(fit_text(gfx,
-                            ui("MOUSE: tactil o (-)+stick der.; (-)+ZR clic; (-)+R3 derecho; (-)+X ALT+TAB; toca X para sesion",
-                               "MOUSE: touch or (-)+R stick; (-)+ZR click; (-)+R3 right; (-)+X ALT+TAB; tap X for session"),
+                            ui("MOUSE: arrastra como trackpad; toque rapido=clic; (-)+stick der./ZR/R3; (-)+X ALT+TAB",
+                               "MOUSE: drag like a trackpad; quick tap=click; (-)+R stick/ZR/R3; (-)+X ALT+TAB"),
                             1560, gnx::gfx::FontSize::Small),
                          180, 246, gnx::gfx::FontSize::Small,
                          gnx::gfx::kFocus);
