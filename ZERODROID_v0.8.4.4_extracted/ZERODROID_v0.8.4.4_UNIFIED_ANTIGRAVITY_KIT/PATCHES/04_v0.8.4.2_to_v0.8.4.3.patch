@@ -1,0 +1,821 @@
+diff --git a/ZERODROID_v0.8.4.2/.github/workflows/build-v0.8.4.2.yml b/ZERODROID_v0.8.4.3/.github/workflows/build-v0.8.4.3.yml
+similarity index 67%
+rename from ZERODROID_v0.8.4.2/.github/workflows/build-v0.8.4.2.yml
+rename to ZERODROID_v0.8.4.3/.github/workflows/build-v0.8.4.3.yml
+index ef8fd81..68aec9a 100644
+--- a/ZERODROID_v0.8.4.2/.github/workflows/build-v0.8.4.2.yml
++++ b/ZERODROID_v0.8.4.3/.github/workflows/build-v0.8.4.3.yml
+@@ -1,14 +1,14 @@
+-name: Build ZERODROID v0.8.4.2
++name: Build ZERODROID v0.8.4.3
+ 
+ on:
+   workflow_dispatch:
+   push:
+     branches:
+-      - build/zerodroid-v0.8.4.2
++      - build/zerodroid-v0.8.4.3
+       - main
+     paths:
+       - 'switch/**'
+-      - '.github/workflows/build-v0.8.4.2.yml'
++      - '.github/workflows/build-v0.8.4.3.yml'
+ 
+ jobs:
+   build:
+@@ -32,14 +32,14 @@ jobs:
+           cd switch
+           make clean || true
+           make -j"$(nproc)"
+-          test -f ZERODROID_v0.8.4.2.nro
+-          sha256sum ZERODROID_v0.8.4.2.nro > ZERODROID_v0.8.4.2.sha256
++          test -f ZERODROID_v0.8.4.3.nro
++          sha256sum ZERODROID_v0.8.4.3.nro > ZERODROID_v0.8.4.3.sha256
+ 
+-      - name: Upload v0.8.4.2 artifact
++      - name: Upload v0.8.4.3 artifact
+         uses: actions/upload-artifact@v4
+         with:
+-          name: ZERODROID-v0.8.4.2
++          name: ZERODROID-v0.8.4.3
+           path: |
+-            switch/ZERODROID_v0.8.4.2.nro
+-            switch/ZERODROID_v0.8.4.2.sha256
++            switch/ZERODROID_v0.8.4.3.nro
++            switch/ZERODROID_v0.8.4.3.sha256
+           if-no-files-found: error
+diff --git a/ZERODROID_v0.8.4.2/BUILD_V0.8.4.2.md b/ZERODROID_v0.8.4.3/BUILD_V0.8.4.3.md
+similarity index 86%
+rename from ZERODROID_v0.8.4.2/BUILD_V0.8.4.2.md
+rename to ZERODROID_v0.8.4.3/BUILD_V0.8.4.3.md
+index fd0c523..b474b05 100644
+--- a/ZERODROID_v0.8.4.2/BUILD_V0.8.4.2.md
++++ b/ZERODROID_v0.8.4.3/BUILD_V0.8.4.3.md
+@@ -1,4 +1,4 @@
+-# Building ZERODROID v0.8.4.2
++# Building ZERODROID v0.8.4.3
+ 
+ The source archive includes the prebuilt Switch WebRTC dependency bundle under
+ `switch/deps/switch/` and the generated deko3d shaders under
+@@ -15,14 +15,14 @@ make -j4
+ The expected output is:
+ 
+ ```text
+-switch/ZERODROID_v0.8.4.2.nro
++switch/ZERODROID_v0.8.4.3.nro
+ ```
+ 
+ ## GitHub Actions
+ 
+-The included `.github/workflows/build-v0.8.4.2.yml` builds the same NRO inside the
++The included `.github/workflows/build-v0.8.4.3.yml` builds the same NRO inside the
+ official `devkitpro/devkita64` container and uploads it as a workflow artifact.
+-It can be started manually with **Actions → Build ZERODROID v0.8.4.2 → Run
++It can be started manually with **Actions → Build ZERODROID v0.8.4.3 → Run
+ workflow**.
+ 
+ ## Runtime notes
+diff --git a/ZERODROID_v0.8.4.2/CHANGELOG.md b/ZERODROID_v0.8.4.3/CHANGELOG.md
+index 216177c..9072953 100644
+--- a/ZERODROID_v0.8.4.2/CHANGELOG.md
++++ b/ZERODROID_v0.8.4.3/CHANGELOG.md
+@@ -1,5 +1,14 @@
+ # ZERODROID changelog
+ 
++## v0.8.4.3 - Desktop input and session recovery
++
++- Sends mouse and keyboard events with Boosteroid's browser-style `id_cmd` / `from_udp` control envelope even while the media path is native UDP.
++- Adds ALT+TAB through **Minus + X** and through the touch session-actions panel.
++- Adds controller left click/drag through **Minus + ZR** or **Minus + ZL**; **Minus + R3** remains right click.
++- Changes the always-visible Xbox/X touch icon into a session-actions launcher while preserving Guide/Home as an explicit action.
++- Adds an experimental Reconnect Same Session path that closes local media/control resources without terminating or dequeuing the remote VM, then starts a fresh attachment to the active Boosteroid session.
++- Adds visible bilingual mouse, ALT+TAB and session-action instructions.
++
+ ## v0.8.4.2 - Analog input and virtual mouse
+ 
+ - Compares analog input against the last value actually transmitted instead of the previous physical sample, so gradual stick movement accumulates correctly.
+diff --git a/ZERODROID_v0.8.4.3/INPUT_SESSION_TECHNICAL_NOTES.md b/ZERODROID_v0.8.4.3/INPUT_SESSION_TECHNICAL_NOTES.md
+new file mode 100644
+index 0000000..ea86643
+--- /dev/null
++++ b/ZERODROID_v0.8.4.3/INPUT_SESSION_TECHNICAL_NOTES.md
+@@ -0,0 +1,42 @@
++# ZERODROID v0.8.4.3 desktop input and session notes
++
++## Mouse failure found in v0.8.4.2
++
++The virtual mouse generated the expected `mouse/move` and `mouse/button` JSON,
++but the native `/native` media path sent it as plain Android-TV control JSON.
++Boosteroid's browser desktop-input path uses an `id_cmd` sequence and
++`from_udp` marker. v0.8.4.3 keeps controller traffic unchanged and applies that
++browser envelope to mouse and keyboard packets over the control WebSocket.
++
++Expected first-use log entries:
++
++```text
++mouse input enabled with browser envelope on control WSS
++keyboard input enabled with browser envelope on control WSS
++```
++
++## ALT+TAB
++
++The sequence is Alt down, Tab down, Tab up, Alt up, with a short delay between
++states. It is available from `Minus + X` and the touch session-actions panel.
++
++## Reconnect Same Session
++
++Normal Stop sends controller disconnect, `settings/terminating`, gateway
++hangup and the Boosteroid API stop/dequeue operation. Reconnect closes the local
++control/media/decoder resources but intentionally skips terminating, hangup and
++API stop. A fresh Engine then launches the same app ID; the existing API code
++polls the last/active-session endpoints while waiting for the session signal.
++
++This path is experimental because the service can still decide that the old
++session is no longer attachable. On failure, ZERODROID returns to the library
++with the API or gateway error rather than silently claiming success.
++
++## Controls
++
++- Touch or drag the Switch screen: absolute pointer + left click/drag.
++- Hold Minus + right stick: virtual pointer.
++- Hold Minus + ZR or ZL: left click/drag.
++- Hold Minus + R3: right click.
++- Hold Minus + X: ALT+TAB.
++- Touch Xbox/X icon: open Guide, ALT+TAB, Reconnect and Close actions.
+diff --git a/ZERODROID_v0.8.4.3/INPUT_SESSION_TEST_PLAN.md b/ZERODROID_v0.8.4.3/INPUT_SESSION_TEST_PLAN.md
+new file mode 100644
+index 0000000..bc1d39b
+--- /dev/null
++++ b/ZERODROID_v0.8.4.3/INPUT_SESSION_TEST_PLAN.md
+@@ -0,0 +1,39 @@
++# ZERODROID v0.8.4.3 input/session test plan
++
++Test with title takeover, not Album/applet mode. Keep `stream.log` after each
++failed test.
++
++## 1. Mouse transport
++
++1. Launch a game that exposes a launcher or Windows desktop.
++2. Touch four corners of the screen and verify the pointer follows.
++3. Tap a button, then drag a window or slider.
++4. Hold Minus and move the right stick.
++5. Verify `Minus + ZR` left click/drag and `Minus + R3` right click.
++6. Confirm `stream.log` contains the browser-envelope mouse entry.
++
++## 2. ALT+TAB
++
++1. Hold Minus and press X once.
++2. Verify the Windows task switcher appears and no X gamepad press reaches the
++   game.
++3. Open the touch Xbox/X panel and select ALT+TAB.
++4. Confirm the log contains `sending ALT+TAB` and the keyboard-envelope entry.
++
++## 3. Reconnect Same Session
++
++1. Play until the remote VM is fully active.
++2. Touch Xbox/X, choose Reconnect Same Session.
++3. Verify ZERODROID returns briefly to its connecting panel.
++4. Confirm the same remote desktop/game state resumes rather than starting a
++   fresh game.
++5. Inspect the log for `local transport closed; preserving remote session`.
++6. If reconnection fails, preserve the complete new `stream.log`.
++
++## 4. Regression
++
++- Plain Minus still sends View/Back.
++- L + R + Minus still closes streaming normally.
++- Both stick clicks still send Guide/Home.
++- Gamepad right stick, X, ZL/ZR and R3 work normally when Minus is not held.
++- Video remains stable for at least 20 minutes at 720p and 1080p.
+diff --git a/ZERODROID_v0.8.4.2/README.md b/ZERODROID_v0.8.4.3/README.md
+index 0a17d65..b5349dc 100644
+--- a/ZERODROID_v0.8.4.2/README.md
++++ b/ZERODROID_v0.8.4.3/README.md
+@@ -3,7 +3,7 @@
+ **Zero Data · Nintendo Switch cloud gaming client**
+ 
+ ZERODROID is an open-source, unofficial Boosteroid client for Nintendo Switch
+-homebrew. Version 0.8.4.2 provides QR login, a controller-first game library,
++homebrew. Version 0.8.4.3 provides QR login, a controller-first game library,
+ native H.264 video, Opus audio and complete controller input.
+ 
+ > [!IMPORTANT]
+@@ -11,7 +11,16 @@ native H.264 video, Opus audio and complete controller input.
+ > Nintendo. It requires a legitimate Boosteroid account and does not provide,
+ > download or bypass access to games, subscriptions, DRM or Nintendo software.
+ 
+-## New in v0.8.4.2
++## New in v0.8.4.3
++
++- Fixes desktop mouse/keyboard packets on native `/native` streams by using the browser-style `id_cmd` and `from_udp` envelope expected by Boosteroid.
++- Adds **Minus + X** for ALT+TAB, matching the browser client's keyboard event sequence.
++- Adds left click/drag with **Minus + ZR** or **Minus + ZL**, while **Minus + R3** remains right click.
++- Touching the always-visible Xbox/X icon opens a session-actions panel with Guide/Home, ALT+TAB, Reconnect Same Session and Close.
++- Reconnect Same Session closes only the local Switch transport, preserves the remote Boosteroid VM, and starts a fresh attachment to the active session.
++- Expands the bilingual on-screen control reminder for mouse, click, ALT+TAB and session actions.
++
++## Included from v0.8.4.2
+ 
+ - Fixes gradual-stick updates that could leave the remote game at a partial movement value and make a running character fall back to walking.
+ - Applies a radial dead zone, expands the useful Joy-Con outer range to full scale and refreshes held axes periodically.
+@@ -95,10 +104,12 @@ not include or install custom firmware.
+ - **R3 in the library:** refresh the Boosteroid library.
+ - **Touch/drag during streaming:** move the remote mouse and hold/release left click.
+ - **Hold Minus + right stick:** move the remote mouse without touching the screen.
++- **Hold Minus + ZR or ZL:** press/hold the remote left mouse button for click and drag.
+ - **Hold Minus + R3:** press/release the remote right mouse button.
++- **Hold Minus + X:** send ALT+TAB to the remote Windows desktop.
+ - **Tap Minus:** send the normal View/Back controller button.
+ - **Two dots during streaming:** open the touch settings panel and choose mouse speed.
+-- **Touch Xbox symbol:** send Xbox Guide/Home.
++- **Touch Xbox/X symbol:** open session actions: Guide/Home, ALT+TAB, reconnect or close.
+ - **Press both sticks:** send Xbox Guide/Home without touch.
+ - **L + R + Minus:** stop streaming and return to the library.
+ 
+diff --git a/ZERODROID_v0.8.4.2/RECOVERY_TEST_PLAN.md b/ZERODROID_v0.8.4.3/RECOVERY_TEST_PLAN.md
+index 786c906..bb91b1e 100644
+--- a/ZERODROID_v0.8.4.2/RECOVERY_TEST_PLAN.md
++++ b/ZERODROID_v0.8.4.3/RECOVERY_TEST_PLAN.md
+@@ -1,4 +1,4 @@
+-# ZERODROID v0.8.4.2 recovery regression test plan
++# ZERODROID v0.8.4.3 recovery regression test plan
+ 
+ The hotfix was prepared from the v0.8.4 source and the two uploaded session logs.
+ Both logs reached native 1920×1080 correctly and then entered the same sequence-gap state while controller messages continued.
+@@ -14,7 +14,7 @@ make -j"$(nproc)"
+ Expected output:
+ 
+ ```text
+-switch/ZERODROID_v0.8.4.2.nro
++switch/ZERODROID_v0.8.4.3.nro
+ ```
+ 
+ ## First validation
+diff --git a/ZERODROID_v0.8.4.2/switch/Makefile b/ZERODROID_v0.8.4.3/switch/Makefile
+index 50e17b7..66ba63f 100644
+--- a/ZERODROID_v0.8.4.2/switch/Makefile
++++ b/ZERODROID_v0.8.4.3/switch/Makefile
+@@ -11,10 +11,10 @@ include $(DEVKITPRO)/libnx/switch_rules
+ 
+ APP_TITLE   := ZERODROID
+ APP_AUTHOR  := Zero Data
+-APP_VERSION := 0.8.4.2
++APP_VERSION := 0.8.4.3
+ APP_ICON    := icon.jpg
+ 
+-TARGET   := ZERODROID_v0.8.4.2
++TARGET   := ZERODROID_v0.8.4.3
+ BUILD    := build-switch
+ SOURCES  := src/core src/switch
+ INCLUDES := src vendor deps/shim/include
+diff --git a/ZERODROID_v0.8.4.2/switch/src/switch/main.cpp b/ZERODROID_v0.8.4.3/switch/src/switch/main.cpp
+index a9d0e25..0161d13 100644
+--- a/ZERODROID_v0.8.4.2/switch/src/switch/main.cpp
++++ b/ZERODROID_v0.8.4.3/switch/src/switch/main.cpp
+@@ -619,13 +619,19 @@ int main(int argc, char* argv[]) {
+     bool minusTapPending = false;
+     bool minusMouseUsed = false;
+     bool minusSyntheticDown = false;
++    bool mouseLeftDown = false;
+     bool mouseRightDown = false;
++    bool reconnectRequested = false;
+     uint64_t minusSyntheticReleaseAt = 0;
+     uint64_t mouseMoveTick = SDL_GetTicks64();
+     float virtualMouseX = 0.5f;
+     float virtualMouseY = 0.5f;
+     std::string launchingTitle;
+     int launchingGameId = 0;
++    std::string activeStreamTitle;
++    int activeStreamGameId = 0;
++    int activeStreamWidth = 1280;
++    int activeStreamHeight = 720;
+ 
+     const auto gameFromVisible = [&](const VisibleGame& visible)
+         -> ZERODROID::GameItem* {
+@@ -855,6 +861,7 @@ int main(int argc, char* argv[]) {
+                     touchDownX = x;
+                     touchDownY = y;
+                     touchCapturedByOverlay = quickMenuState.open ||
++                        quickMenuState.sessionActionsOpen ||
+                         point_in_rect(x, y, gnx::stream::kQuickToggleRect) ||
+                         point_in_rect(x, y, gnx::stream::kGuideButtonRect);
+                     touchMouseActive = !touchCapturedByOverlay;
+@@ -899,26 +906,68 @@ int main(int argc, char* argv[]) {
+                     const int dx = std::abs(touchLastX - touchDownX);
+                     const int dy = std::abs(touchLastY - touchDownY);
+                     if (dx < 100 && dy < 100) {
+-                        const bool wasOpen = quickMenuState.open;
+-                        bool layoutChanged = false;
+-                        bool persistentChanged = false;
+-                        const bool quickTouch = handle_stream_settings_touch(
+-                            quickMenuState, touchLastX, touchLastY,
+-                            layoutChanged, persistentChanged);
+-                        if (quickTouch || wasOpen != quickMenuState.open) {
+-                            stream->set_quick_menu_state(quickMenuState);
+-                        }
+-                        if (layoutChanged) {
+-                            serverSettings.xboxFaceLayout =
+-                                quickMenuState.xboxFaceLayout;
+-                            stream->set_xbox_face_layout(
+-                                serverSettings.xboxFaceLayout);
+-                        }
+-                        if (persistentChanged) persistQuickMenu();
+-                        if (!quickTouch && point_in_rect(
+-                                touchLastX, touchLastY,
++                        const int tapX = touchLastX;
++                        const int tapY = touchLastY;
++                        bool menuStateChanged = false;
++
++                        if (point_in_rect(
++                                tapX, tapY,
+                                 gnx::stream::kGuideButtonRect)) {
+-                            guideTouchUntil = nowTicks + 160;
++                            // The always-visible Xbox/X touch icon is now the
++                            // session-actions launcher. Guide/Home remains the
++                            // first action inside the panel.
++                            quickMenuState.sessionActionsOpen =
++                                !quickMenuState.sessionActionsOpen;
++                            quickMenuState.open = false;
++                            menuStateChanged = true;
++                        } else if (quickMenuState.sessionActionsOpen) {
++                            if (point_in_rect(
++                                    tapX, tapY,
++                                    gnx::stream::kSessionGuideRect)) {
++                                guideTouchUntil = nowTicks + 160;
++                                quickMenuState.sessionActionsOpen = false;
++                            } else if (point_in_rect(
++                                           tapX, tapY,
++                                           gnx::stream::kSessionAltTabRect)) {
++                                stream->send_alt_tab();
++                                quickMenuState.sessionActionsOpen = false;
++                            } else if (point_in_rect(
++                                           tapX, tapY,
++                                           gnx::stream::kSessionReconnectRect)) {
++                                reconnectRequested = true;
++                                quickMenuState.sessionActionsOpen = false;
++                            } else {
++                                // CLOSE or a tap outside the panel.
++                                quickMenuState.sessionActionsOpen = false;
++                            }
++                            menuStateChanged = true;
++                        } else {
++                            const bool wasOpen = quickMenuState.open;
++                            bool layoutChanged = false;
++                            bool persistentChanged = false;
++                            const bool quickTouch =
++                                handle_stream_settings_touch(
++                                    quickMenuState, tapX, tapY,
++                                    layoutChanged, persistentChanged);
++                            if (point_in_rect(
++                                    tapX, tapY,
++                                    gnx::stream::kQuickToggleRect)) {
++                                quickMenuState.sessionActionsOpen = false;
++                            }
++                            if (quickTouch || wasOpen != quickMenuState.open) {
++                                menuStateChanged = true;
++                            }
++                            if (layoutChanged) {
++                                serverSettings.xboxFaceLayout =
++                                    quickMenuState.xboxFaceLayout;
++                                stream->set_xbox_face_layout(
++                                    serverSettings.xboxFaceLayout);
++                            }
++                            if (persistentChanged) persistQuickMenu();
++                        }
++
++                        if (menuStateChanged) {
++                            stream->set_quick_menu_state(quickMenuState);
+                         }
+                     }
+                 }
+@@ -941,11 +990,28 @@ int main(int argc, char* argv[]) {
+             mouseMoveTick = nowTicks;
+ 
+             if (minusHeld) {
+-                // Minus owns the right stick and R3 while held. Zeroing both in
+-                // the gamepad packet prevents simultaneous camera movement or
+-                // a controller-stick click at the remote machine.
++                // Minus owns desktop-input controls while held. Suppress their
++                // normal gamepad meaning so the remote game never receives a
++                // camera movement, trigger, X button or stick click at the same
++                // time as mouse/keyboard input.
+                 gameRightStick = {};
+-                gameButtons &= ~HidNpadButton_StickR;
++                gameButtons &= ~(HidNpadButton_StickR | HidNpadButton_X |
++                                 HidNpadButton_ZR | HidNpadButton_ZL);
++
++                if (kDown & HidNpadButton_X) {
++                    stream->send_alt_tab();
++                    minusMouseUsed = true;
++                    minusTapPending = false;
++                }
++
++                const bool wantsLeftClick =
++                    (kHeld & (HidNpadButton_ZR | HidNpadButton_ZL)) != 0;
++                if (wantsLeftClick != mouseLeftDown) {
++                    stream->send_mouse_button(0, wantsLeftClick);
++                    mouseLeftDown = wantsLeftClick;
++                    minusMouseUsed = true;
++                    minusTapPending = false;
++                }
+ 
+                 const bool wantsRightClick =
+                     (kHeld & HidNpadButton_StickR) != 0;
+@@ -983,6 +1049,10 @@ int main(int argc, char* argv[]) {
+                     minusTapPending = false;
+                 }
+             } else {
++                if (mouseLeftDown) {
++                    stream->send_mouse_button(0, false);
++                    mouseLeftDown = false;
++                }
+                 if (mouseRightDown) {
+                     stream->send_mouse_button(2, false);
+                     mouseRightDown = false;
+@@ -1002,10 +1072,59 @@ int main(int argc, char* argv[]) {
+             stream->send_gamepad(leftStick, gameRightStick, gameButtons);
+             stream->pump_video();
+ 
++            if (reconnectRequested && activeStreamGameId > 0) {
++                // Release every synthetic input before dropping the local
++                // transport. Unlike a normal Stop, this path deliberately does
++                // not send terminating/hangup/dequeue, allowing Boosteroid to
++                // keep the existing VM and game alive for the new attachment.
++                if (touchMouseActive) stream->send_mouse_button(0, false);
++                if (mouseLeftDown) stream->send_mouse_button(0, false);
++                if (mouseRightDown) stream->send_mouse_button(2, false);
++                if (minusSyntheticDown) {
++                    stream->send_controller_button(6, false);
++                }
++                stream->end_deko_output();
++                stream->disconnect_for_reconnect();
++                dekoStreaming = false;
++                touchWasDown = false;
++                touchCapturedByOverlay = false;
++                touchMouseActive = false;
++                guideTouchUntil = 0;
++                minusTapPending = false;
++                minusMouseUsed = false;
++                minusSyntheticDown = false;
++                mouseLeftDown = false;
++                mouseRightDown = false;
++                reconnectRequested = false;
++                quickMenuState.open = false;
++                quickMenuState.sessionActionsOpen = false;
++                if (!gfx.resume()) break;
++
++                stream = std::make_unique<gnx::stream::Engine>(
++                    api, gfx.renderer());
++                stream->set_xbox_face_layout(
++                    serverSettings.xboxFaceLayout);
++                stream->set_quick_menu_state(quickMenuState);
++                covers = std::make_unique<gnx::Covers>(
++                    gfx, "sdmc:/switch/ZERODROID/covers");
++
++                launchingTitle = ui("Reconectando: ", "Reconnecting: ") +
++                                 activeStreamTitle;
++                launchingGameId = 0;
++                libraryNotice = ui(
++                    "Reconectando a la sesion que sigue abierta...",
++                    "Reconnecting to the session that is still running...");
++                launchPanel = true;
++                stream->start(activeStreamGameId, activeStreamWidth,
++                              activeStreamHeight);
++                continue;
++            }
++
+             const auto streamState = stream->state();
+             if (leaveStream || streamState == gnx::stream::EngineState::Failed ||
+                 streamState == gnx::stream::EngineState::Stopped) {
+                 if (touchMouseActive) stream->send_mouse_button(0, false);
++                if (mouseLeftDown) stream->send_mouse_button(0, false);
+                 if (mouseRightDown) stream->send_mouse_button(2, false);
+                 if (minusSyntheticDown) stream->send_controller_button(6, false);
+                 const std::string streamError = stream->error();
+@@ -1019,8 +1138,11 @@ int main(int argc, char* argv[]) {
+                 minusTapPending = false;
+                 minusMouseUsed = false;
+                 minusSyntheticDown = false;
++                mouseLeftDown = false;
+                 mouseRightDown = false;
++                reconnectRequested = false;
+                 quickMenuState.open = false;
++                quickMenuState.sessionActionsOpen = false;
+                 if (!gfx.resume()) break;
+                 stream = std::make_unique<gnx::stream::Engine>(api, gfx.renderer());
+                 stream->set_xbox_face_layout(serverSettings.xboxFaceLayout);
+@@ -1122,7 +1244,10 @@ int main(int argc, char* argv[]) {
+                 minusTapPending = false;
+                 minusMouseUsed = false;
+                 minusSyntheticDown = false;
++                mouseLeftDown = false;
+                 mouseRightDown = false;
++                reconnectRequested = false;
++                quickMenuState.sessionActionsOpen = false;
+                 mouseMoveTick = SDL_GetTicks64();
+                 virtualMouseX = 0.5f;
+                 virtualMouseY = 0.5f;
+@@ -1443,6 +1568,10 @@ int main(int argc, char* argv[]) {
+                 stream->set_quick_menu_state(quickMenuState);
+                 const auto dimensions = stream_dimensions(
+                     serverSettings.resolutionMode);
++                activeStreamGameId = game->id;
++                activeStreamTitle = game->title;
++                activeStreamWidth = dimensions.first;
++                activeStreamHeight = dimensions.second;
+                 stream->start(game->id, dimensions.first, dimensions.second);
+             }
+         }
+@@ -1823,8 +1952,8 @@ int main(int argc, char* argv[]) {
+                          180, 218, gnx::gfx::FontSize::Small,
+                          gnx::gfx::kTextDim);
+                 gfx.text(fit_text(gfx,
+-                            ui("MOUSE: toca/arrastra la pantalla o manten (-) + stick derecho; (-)+R3: clic derecho",
+-                               "MOUSE: touch/drag the screen or hold (-) + right stick; (-)+R3: right click"),
++                            ui("MOUSE: tactil o (-)+stick der.; (-)+ZR clic; (-)+R3 derecho; (-)+X ALT+TAB; toca X para sesion",
++                               "MOUSE: touch or (-)+R stick; (-)+ZR click; (-)+R3 right; (-)+X ALT+TAB; tap X for session"),
+                             1560, gnx::gfx::FontSize::Small),
+                          180, 246, gnx::gfx::FontSize::Small,
+                          gnx::gfx::kFocus);
+@@ -2029,8 +2158,8 @@ int main(int argc, char* argv[]) {
+                            : (launchPanel
+                                 ? ui("(B) Cancelar inicio   (+) Salir",
+                                      "(B) Cancel launch   (+) Exit")
+-                                : ui("(Y) Buscar   (X) Favorito   (-) Settings   Mouse: tactil o (-)+stick der.   (+) Salir",
+-                                     "(Y) Search   (X) Favorite   (-) Settings   Mouse: touch or (-)+R stick   (+) Exit")))
++                                : ui("(Y) Buscar   (X) Favorito   Mouse: tactil o (-)+stick der.   (-)+X ALT+TAB   X tactil: sesion",
++                                     "(Y) Search   (X) Favorite   Mouse: touch or (-)+R stick   (-)+X ALT+TAB   touch X: session")))
+                      : ui("(Y) Renovar QR   (+) Salir al menu principal",
+                           "(Y) Refresh QR   (+) Exit to HOME menu"),
+                  40, gnx::gfx::kHeight - 50, gnx::gfx::FontSize::Body,
+diff --git a/ZERODROID_v0.8.4.2/switch/src/switch/stream/dk_video_renderer.cpp b/ZERODROID_v0.8.4.3/switch/src/switch/stream/dk_video_renderer.cpp
+index a28c37f..a525409 100644
+--- a/ZERODROID_v0.8.4.2/switch/src/switch/stream/dk_video_renderer.cpp
++++ b/ZERODROID_v0.8.4.3/switch/src/switch/stream/dk_video_renderer.cpp
+@@ -148,6 +148,7 @@ void DkVideoRenderer::set_quick_menu_state(const QuickMenuState& state) {
+         next.sharpness != quick_state_.sharpness;
+     bool menu_changed =
+         next.open != quick_state_.open ||
++        next.sessionActionsOpen != quick_state_.sessionActionsOpen ||
+         next.performance != quick_state_.performance ||
+         next.xboxFaceLayout != quick_state_.xboxFaceLayout ||
+         next.mouseSpeed != quick_state_.mouseSpeed ||
+@@ -822,7 +823,7 @@ void DkVideoRenderer::rasterize_quick_menu() {
+     // are visible; active state is conveyed by color, never by a square frame.
+     circle(toggle.x + 23, toggle.y + toggle.h / 2 + 2, 9, glyph_shadow);
+     circle(toggle.x + 49, toggle.y + toggle.h / 2 + 2, 9, glyph_shadow);
+-    const uint32_t dot = quick_state_.open ? accent : text;
++    const uint32_t dot = (quick_state_.open || quick_state_.sessionActionsOpen) ? accent : text;
+     circle(toggle.x + 23, toggle.y + toggle.h / 2, 6, dot);
+     circle(toggle.x + 49, toggle.y + toggle.h / 2, 6, dot);
+ 
+@@ -956,10 +957,30 @@ void DkVideoRenderer::rasterize_quick_menu() {
+         QuickRect mouse_help = local(kQuickMouseHelpRect);
+         fill(mouse_help.x, mouse_help.y, mouse_help.w, mouse_help.h,
+              rgba(24, 21, 34, 235));
+-        blit_quick_text("MOUSE: TOUCH OR HOLD MINUS + R STICK",
++        blit_quick_text("MOUSE: TOUCH / (-)+R STICK   ALT+TAB: (-)+X",
+                         mouse_help.x + 10, mouse_help.y + 8);
+     }
+ 
++    if (quick_state_.sessionActionsOpen) {
++        QuickRect menu = local(kSessionPanelRect);
++        fill(menu.x, menu.y, menu.w, menu.h, panel);
++        frame(menu.x, menu.y, menu.w, menu.h, 3, accent);
++        blit_quick_text("SESSION ACTIONS", menu.x + 24, menu.y + 18);
++
++        const auto action_button = [&](const QuickRect& absolute,
++                                       const char* label,
++                                       uint32_t border) {
++            QuickRect r = local(absolute);
++            fill(r.x, r.y, r.w, r.h, surface);
++            frame(r.x, r.y, r.w, r.h, 2, border);
++            blit_quick_text(label, r.x + 26, r.y + 14);
++        };
++        action_button(kSessionGuideRect, "XBOX GUIDE / HOME", edge);
++        action_button(kSessionAltTabRect, "ALT + TAB", accent);
++        action_button(kSessionReconnectRect, "RECONNECT SAME SESSION", accent);
++        action_button(kSessionCloseRect, "CLOSE", edge);
++    }
++
+     if (quick_cpu_)
+         std::memcpy(quick_cpu_, quick_pixels_.data(),
+                     quick_pixels_.size() * sizeof(uint32_t));
+diff --git a/ZERODROID_v0.8.4.2/switch/src/switch/stream/engine.cpp b/ZERODROID_v0.8.4.3/switch/src/switch/stream/engine.cpp
+index 9470c65..742cdac 100644
+--- a/ZERODROID_v0.8.4.2/switch/src/switch/stream/engine.cpp
++++ b/ZERODROID_v0.8.4.3/switch/src/switch/stream/engine.cpp
+@@ -427,6 +427,8 @@ void Engine::start(int appId, int streamWidth, int streamHeight,
+     dataChannelOpened_ = false;
+     padInitialized_ = false;
+     inputLogged_ = false;
++    mouseInputLogged_ = false;
++    keyboardInputLogged_ = false;
+     previousGuide_ = false;
+     previousLeft_ = {};
+     previousRight_ = {};
+@@ -485,7 +487,11 @@ void Engine::start(int appId, int streamWidth, int streamHeight,
+     decodeThread_ = std::thread(&Engine::decode_loop, this);
+ }
+ 
+-void Engine::stop() {
++void Engine::stop() { shutdown(false); }
++
++void Engine::disconnect_for_reconnect() { shutdown(true); }
++
++void Engine::shutdown(bool preserveRemoteSession) {
+     quit_ = true;
+     videoCv_.notify_all();
+     if (control_.connected()) {
+@@ -495,8 +501,13 @@ void Engine::stop() {
+                 {"type", "controller"}, {"action", "disconnected"},
+                 {"id", id}}).dump());
+         }
+-        control_.send_text(nlohmann::json({
+-            {"type", "settings"}, {"action", "terminating"}}).dump());
++        // "terminating", gateway hangup and API dequeue explicitly end the VM.
++        // Skip all three during a reconnect so Boosteroid can keep the desktop
++        // and game alive while the Switch creates a fresh transport.
++        if (!preserveRemoteSession) {
++            control_.send_text(nlohmann::json({
++                {"type", "settings"}, {"action", "terminating"}}).dump());
++        }
+     }
+     control_.close();
+     stop_native_udp();
+@@ -516,7 +527,8 @@ void Engine::stop() {
+         if (presentFrame_) av_frame_free(&presentFrame_);
+         sharedFrameValid_ = false;
+     }
+-    if (!gatewayApiBase_.empty() && !peerId_.empty() && !sessionId_.empty()) {
++    if (!preserveRemoteSession && !gatewayApiBase_.empty() &&
++        !peerId_.empty() && !sessionId_.empty()) {
+         try {
+             gnx::Http http;
+             http.get(gatewayApiBase_ + "/api/hangup?peerid=" +
+@@ -525,7 +537,12 @@ void Engine::stop() {
+         } catch (...) {
+         }
+     }
+-    if (!sessionId_.empty()) api_.stopStreamingSession(sessionId_);
++    if (!preserveRemoteSession && !sessionId_.empty()) {
++        api_.stopStreamingSession(sessionId_);
++    }
++    if (preserveRemoteSession && !sessionId_.empty()) {
++        log("local transport closed; preserving remote session " + sessionId_);
++    }
+     sessionId_.clear();
+     if (g_active_engine == this) {
+         gnx_peer_log_set(nullptr);
+@@ -1520,24 +1537,38 @@ void Engine::send_input_json(nlohmann::json payload) {
+                               now).count();
+     }
+ 
+-    // Native Android TV sends controller packets as plain JSON over the
+-    // control WSS. id_cmd/from_udp belong to the browser/WebRTC input path and
+-    // make this packet differ from the TV protocol.
+     const bool native = nativeMediaStarted_.load();
++    const std::string inputType = payload.value("type", std::string());
++    const bool desktopInput = inputType == "mouse" || inputType == "keyboard";
++
++    // Android-TV controller packets are accepted as plain JSON. Boosteroid's
++    // browser mouse/keyboard path, however, includes id_cmd/from_udp even when
++    // carried by the control WebSocket. v0.8.4.2 sent desktop input as native
++    // controller-shaped JSON, which the gateway silently ignored.
+     nlohmann::json controlPayload = payload;
+-    if (!native) {
++    if (!native || desktopInput) {
+         controlPayload["id_cmd"] = sequence;
+         controlPayload["from_udp"] = false;
+     }
+     const bool sent = control_.send_text(controlPayload.dump());
+     if (sent && !inputLogged_) {
+         inputLogged_ = true;
+-        log("first input sent type=" +
+-            payload.value("type", std::string("?")) + " action=" +
++        log("first input sent type=" + inputType + " action=" +
+             payload.value("action", std::string("?")) +
+             " native=" + (native ? std::string("yes") : std::string("no")));
+     }
++    if (sent && inputType == "mouse" && !mouseInputLogged_) {
++        mouseInputLogged_ = true;
++        log("mouse input enabled with browser envelope on control WSS");
++    }
++    if (sent && inputType == "keyboard" && !keyboardInputLogged_) {
++        keyboardInputLogged_ = true;
++        log("keyboard input enabled with browser envelope on control WSS");
++    }
+ 
++    // WebRTC mode keeps the original reliable data-channel duplicate. Native
++    // /native sessions have no ClientDataChannel, so the WSS packet above is
++    // the authoritative desktop-input path.
+     if (native) return;
+     payload["id_cmd"] = sequence;
+     payload["from_udp"] = true;
+@@ -1578,6 +1609,26 @@ void Engine::send_mouse_button(int button, bool pressed) {
+                      {"btn", button}, {"isPressed", pressed}});
+ }
+ 
++void Engine::send_keyboard_button(int keyCode, bool pressed) {
++    if (!control_.connected()) return;
++    std::lock_guard<std::mutex> lock(inputMutex_);
++    send_input_json({{"type", "keyboard"}, {"action", "button"},
++                     {"isPressed", pressed}, {"code", keyCode}});
++}
++
++void Engine::send_alt_tab() {
++    // Match the browser client sequence: hold Alt, tap Tab, then release Alt.
++    // Small gaps prevent Windows from coalescing the four state transitions.
++    log("sending ALT+TAB");
++    send_keyboard_button(18, true);
++    std::this_thread::sleep_for(std::chrono::milliseconds(45));
++    send_keyboard_button(9, true);
++    std::this_thread::sleep_for(std::chrono::milliseconds(45));
++    send_keyboard_button(9, false);
++    std::this_thread::sleep_for(std::chrono::milliseconds(45));
++    send_keyboard_button(18, false);
++}
++
+ void Engine::send_gamepad(HidAnalogStickState left,
+                           HidAnalogStickState right, u64 buttons) {
+     const int id = controllerId_.load();
+diff --git a/ZERODROID_v0.8.4.2/switch/src/switch/stream/engine.hpp b/ZERODROID_v0.8.4.3/switch/src/switch/stream/engine.hpp
+index 86c494c..20bfe1b 100644
+--- a/ZERODROID_v0.8.4.2/switch/src/switch/stream/engine.hpp
++++ b/ZERODROID_v0.8.4.3/switch/src/switch/stream/engine.hpp
+@@ -49,6 +49,9 @@ public:
+     void start(int appId, int streamWidth = 1280, int streamHeight = 720,
+                const std::string& preferredGateway = {});
+     void stop();
++    // Close only the local transport and preserve the remote Boosteroid VM so
++    // the same app can be attached again immediately.
++    void disconnect_for_reconnect();
+ 
+     EngineState state() const { return state_.load(); }
+     std::string status() const;
+@@ -63,6 +66,8 @@ public:
+     void send_controller_button(int button, bool pressed);
+     void send_mouse_position(float x, float y, bool visible = true);
+     void send_mouse_button(int button, bool pressed);
++    void send_keyboard_button(int keyCode, bool pressed);
++    void send_alt_tab();
+     void set_xbox_face_layout(bool enabled) { xboxFaceLayout_ = enabled; }
+     void set_guide_button_pressed(bool pressed) {
+         guidePressed_ = pressed;
+@@ -131,6 +136,7 @@ private:
+     void request_keyframe_locked();
+     void request_native_keyframe(const char* reason);
+     void begin_native_recovery(const char* reason, bool hardWait);
++    void shutdown(bool preserveRemoteSession);
+ 
+     static void on_video(uint8_t* data, size_t size, void* user);
+     static void on_audio(uint8_t* data, size_t size, void* user);
+@@ -228,6 +234,8 @@ private:
+     std::mutex inputMutex_;
+     bool padInitialized_{false};
+     bool inputLogged_{false};
++    bool mouseInputLogged_{false};
++    bool keyboardInputLogged_{false};
+     bool previousGuide_{false};
+     HidAnalogStickState previousLeft_{};
+     HidAnalogStickState previousRight_{};
+diff --git a/ZERODROID_v0.8.4.2/switch/src/switch/stream/quick_menu.hpp b/ZERODROID_v0.8.4.3/switch/src/switch/stream/quick_menu.hpp
+index d217f65..2bd2919 100644
+--- a/ZERODROID_v0.8.4.2/switch/src/switch/stream/quick_menu.hpp
++++ b/ZERODROID_v0.8.4.3/switch/src/switch/stream/quick_menu.hpp
+@@ -14,9 +14,8 @@ struct QuickRect {
+     int h;
+ };
+ 
+-// v0.8.4.2 keeps the panel inside the same safe area while fitting a dedicated
+-// mouse-speed row. Rows are slightly more compact, but preserve large touch
+-// targets on the Switch display.
++// v0.8.4.3 keeps the settings panel and adds a compact session-actions panel
++// opened from the always-visible Xbox/X touch icon.
+ inline constexpr QuickRect kQuickTextureRect{1160, 8, 672, 928};
+ inline constexpr QuickRect kQuickToggleRect{1760, 8, 72, 72};
+ inline constexpr QuickRect kGuideButtonRect{1840, 8, 72, 72};
+@@ -46,6 +45,15 @@ inline constexpr QuickRect kQuickNoticeRect{1180, 700, 468, 76};
+ inline constexpr QuickRect kQuickResetRect{1280, 798, 268, 54};
+ inline constexpr QuickRect kQuickMouseHelpRect{1180, 862, 468, 46};
+ 
++// Touching the top-right Xbox/X icon opens this panel instead of immediately
++// sending Guide. This preserves Guide while exposing recovery and desktop
++// actions required by Boosteroid launchers.
++inline constexpr QuickRect kSessionPanelRect{1260, 104, 500, 390};
++inline constexpr QuickRect kSessionGuideRect{1290, 166, 440, 58};
++inline constexpr QuickRect kSessionAltTabRect{1290, 238, 440, 58};
++inline constexpr QuickRect kSessionReconnectRect{1290, 310, 440, 58};
++inline constexpr QuickRect kSessionCloseRect{1290, 406, 440, 54};
++
+ enum QuickRow {
+     QuickPerformance = 0,
+     QuickController = 1,
+@@ -83,6 +91,7 @@ enum MouseSpeed {
+ 
+ struct QuickMenuState {
+     bool open = false;
++    bool sessionActionsOpen = false;
+     bool performance = false;
+     bool xboxFaceLayout = false;
+     int mouseSpeed = MouseNormal;

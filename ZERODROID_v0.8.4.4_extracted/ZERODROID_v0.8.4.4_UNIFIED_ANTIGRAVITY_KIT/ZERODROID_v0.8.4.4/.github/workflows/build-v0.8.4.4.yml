@@ -1,0 +1,45 @@
+name: Build ZERODROID v0.8.4.4
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - build/zerodroid-v0.8.4.4
+      - main
+    paths:
+      - 'switch/**'
+      - '.github/workflows/build-v0.8.4.4.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Verify bundled streaming dependencies
+        shell: bash
+        run: |
+          test -f switch/deps/switch/lib/libpeer.a
+          test -f switch/deps/switch/lib/libsrtp2.a
+          test -f switch/deps/switch/lib/libusrsctp.a
+
+      - name: Build clean NRO
+        shell: bash
+        run: |
+          cd switch
+          make clean || true
+          make -j"$(nproc)"
+          test -f ZERODROID_v0.8.4.4.nro
+          sha256sum ZERODROID_v0.8.4.4.nro > ZERODROID_v0.8.4.4.sha256
+
+      - name: Upload v0.8.4.4 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZERODROID-v0.8.4.4
+          path: |
+            switch/ZERODROID_v0.8.4.4.nro
+            switch/ZERODROID_v0.8.4.4.sha256
+          if-no-files-found: error

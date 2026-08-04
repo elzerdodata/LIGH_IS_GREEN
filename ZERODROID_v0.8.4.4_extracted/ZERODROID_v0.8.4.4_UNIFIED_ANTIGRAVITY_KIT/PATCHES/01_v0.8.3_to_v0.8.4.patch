@@ -1,0 +1,2903 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 944c82a..d06f5f4 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,29 @@
+ # ZERODROID changelog
+ 
++## v0.8.4 - Display quality and library redesign
++
++- Added Auto, 720p, 1080p and experimental 1440p streaming profiles.
++- Auto requests 720p handheld and 1080p docked; 1440p is decoded and downscaled to the active Switch output.
++- Added Natural, Sharp, Vivid, Cinema, Soft and Custom picture presets to the in-stream two-dot menu.
++- Persisted resolution and image controls across launches.
++- Loaded true small/body/title/note fonts instead of falling back to the oversized body font.
++- Changed the game grid to four columns with two-line titles and clearer metadata.
++- Preferred higher-resolution horizontal artwork and changed card rendering from crop/cover to contain.
++
++## v0.8.3 - Complete catalog and clean video recovery
++
++- Removed the fixed 50-game request and added guarded pagination for every page
++  of both the installed library and complete Boosteroid catalog.
++- Added separate My Games, Favorites, Recent, Catalog and Install sections.
++- Added Boosteroid's official add-to-library action for catalog entries.
++- Added catalog state badges for My Game, Install, Free and License Required.
++- Ordered native UDP video groups before decoding and detected stalled/missing
++  Reed-Solomon groups instead of feeding later predictive frames out of order.
++- Kept the last good video frame on loss/corruption and resumed only from a
++  clean H.264 IDR; corrupt FFmpeg frames are no longer presented.
++- Reduced the video decode queue safety bound and treats overflow as a resync
++  event instead of silently continuing with broken references.
++
+ ## v0.8.2 - Library organization
+ 
+ - Added native game search through the Nintendo Switch software keyboard.
+diff --git a/README.md b/README.md
+index b207753..c2569b1 100644
+--- a/README.md
++++ b/README.md
+@@ -3,7 +3,7 @@
+ **Zero Data · Nintendo Switch cloud gaming client**
+ 
+ ZERODROID is an open-source, unofficial Boosteroid client for Nintendo Switch
+-homebrew. Version 0.8.2 provides QR login, a controller-first game library,
++homebrew. Version 0.8.4 provides QR login, a controller-first game library,
+ native H.264 video, Opus audio and complete controller input.
+ 
+ > [!IMPORTANT]
+@@ -11,7 +11,31 @@ native H.264 video, Opus audio and complete controller input.
+ > Nintendo. It requires a legitimate Boosteroid account and does not provide,
+ > download or bypass access to games, subscriptions, DRM or Nintendo software.
+ 
+-## New in v0.8.2
++## New in v0.8.4
++
++- Added selectable Auto, 720p, 1080p and experimental 1440p stream profiles.
++- Auto now requests 720p in handheld mode and 1080p while docked.
++- Added Natural, Sharp, Vivid, Cinema, Soft and Custom picture presets to the in-stream two-dot menu.
++- Added persistent brightness, contrast, saturation, gamma and sharpness controls.
++- Reworked the library to four columns, real compact font sizes and two-line game titles.
++- Horizontal high-resolution artwork is preferred and rendered with contain scaling, so covers are no longer cropped.
++
++## Included from v0.8.3
++
++- Removed the 50-game ceiling: **My Games** and the Boosteroid catalog now
++  traverse every available API page, with duplicate and loop protection.
++- Added separate My Games, Favorites, Recently Played, Catalog and Install
++  sections designed for Joy-Con/Pro Controller navigation.
++- Catalog cards identify games already in My Games, free titles, Install and
++  Play entries and titles that require a legitimate store license.
++- Pressing **A** on an uninstalled catalog title uses Boosteroid's official
++  add-to-library action. Game purchases remain in each authorized external
++  store; ZERODROID does not sell, bundle or unlock licenses.
++- Hardened native UDP and WebRTC H.264 recovery: frames are kept in sequence,
++  incomplete access units are dropped, corrupt decoder output is never shown,
++  and playback resumes on a clean IDR while the last good frame stays visible.
++
++## Included from v0.8.2
+ 
+ - Search the library with the native Nintendo Switch keyboard.
+ - All, Favorites and Recently Played library tabs.
+@@ -48,9 +72,10 @@ not include or install custom firmware.
+ ## Controls
+ 
+ - **Minus in the library:** ZERODROID Settings.
+-- **ZL / ZR:** switch between All, Favorites and Recent.
++- **ZL / ZR:** switch between My Games, Favorites, Recent, Catalog and Install.
+ - **Y in the library:** search using the system keyboard.
+-- **X in the library:** add or remove the selected game from Favorites.
++- **A in Catalog/Install:** add a title to My Games; press again to play.
++- **X in any library section:** add or remove the selected game from Favorites.
+ - **R3 in the library:** refresh the Boosteroid library.
+ - **Two dots during streaming:** open the touch settings panel.
+ - **Touch Xbox symbol:** send Xbox Guide/Home.
+@@ -87,7 +112,7 @@ ignored `switch/deps/switch/` directory.
+ 
+ Service-side API or streaming changes can temporarily break an unofficial
+ client. Please include the ZERODROID version, server region and relevant lines
+-from `sdmc:/switch/ZERODROID/zerodroid.log` in reproducible bug reports. Remove
++from `sdmc:/switch/ZERODROID/stream.log` in reproducible bug reports. Remove
+ any personal information before posting logs publicly.
+ 
+ Licensed under Apache-2.0. Third-party components remain under their respective
+diff --git a/switch/Makefile b/switch/Makefile
+index 1bafebc..4682d27 100644
+--- a/switch/Makefile
++++ b/switch/Makefile
+@@ -11,10 +11,10 @@ include $(DEVKITPRO)/libnx/switch_rules
+ 
+ APP_TITLE   := ZERODROID
+ APP_AUTHOR  := Zero Data
+-APP_VERSION := 0.8.2
++APP_VERSION := 0.8.4
+ APP_ICON    := icon.jpg
+ 
+-TARGET   := ZERODROID_v0.8.2
++TARGET   := ZERODROID_v0.8.4
+ BUILD    := build-switch
+ SOURCES  := src/core src/switch
+ INCLUDES := src vendor deps/shim/include
+diff --git a/switch/src/core/boosteroid_api.cpp b/switch/src/core/boosteroid_api.cpp
+index 71014a3..9da4439 100644
+--- a/switch/src/core/boosteroid_api.cpp
++++ b/switch/src/core/boosteroid_api.cpp
+@@ -20,6 +20,8 @@
+ #include <sys/stat.h>
+ #include <thread>
+ #include <unordered_set>
++#include <utility>
++#include <vector>
+ 
+ #if defined(__SWITCH__)
+ #include <switch.h>
+@@ -237,7 +239,8 @@ const nlohmann::json* find_game_array(
+     if (!value.is_object()) return nullptr;
+ 
+     for (const char* key : {
+-             "data", "applications", "games", "installed", "items", "results"}) {
++             "data", "applications", "games", "installed", "items", "results",
++             "collections"}) {
+         const auto nested = value.find(key);
+         if (nested == value.end()) continue;
+         if (nested->is_array()) return &(*nested);
+@@ -257,33 +260,82 @@ const nlohmann::json& nested_game(const nlohmann::json& value) {
+     return value;
+ }
+ 
+-std::string image_value(const nlohmann::json& value, int depth = 0) {
+-    if (depth > 4 || value.is_null()) return {};
+-    if (value.is_string()) return value.get<std::string>();
++bool looks_like_image_url(const std::string& value) {
++    if (value.empty()) return false;
++    return value.rfind("http://", 0) == 0 ||
++           value.rfind("https://", 0) == 0 ||
++           value.rfind("//", 0) == 0 || value.front() == '/';
++}
++
++int image_candidate_score(std::string context, std::string url) {
++    std::transform(context.begin(), context.end(), context.begin(),
++                   [](unsigned char c) {
++                       return static_cast<char>(std::tolower(c));
++                   });
++    std::transform(url.begin(), url.end(), url.begin(),
++                   [](unsigned char c) {
++                       return static_cast<char>(std::tolower(c));
++                   });
++    const std::string value = context + " " + url;
++    int score = 0;
++    const auto contains = [&](const char* token) {
++        return value.find(token) != std::string::npos;
++    };
++    if (contains("original")) score += 240;
++    if (contains("source")) score += 180;
++    if (contains("xlarge") || contains("xxl")) score += 170;
++    if (contains("large") || contains("desktop")) score += 140;
++    if (contains("full") || contains("hero")) score += 120;
++    if (contains("2560") || contains("1440")) score += 220;
++    if (contains("1920") || contains("1080")) score += 190;
++    if (contains("1600") || contains("1280")) score += 150;
++    if (contains("960") || contains("720")) score += 100;
++    if (contains("banner") || contains("horizontal")) score += 45;
++    if (contains("thumb") || contains("thumbnail")) score -= 220;
++    if (contains("small") || contains("preview")) score -= 140;
++    if (contains("icon") || contains("logo")) score -= 100;
++    if (contains("64") || contains("96") || contains("128x")) score -= 80;
++    return score;
++}
++
++void collect_image_candidates(const nlohmann::json& value,
++                              const std::string& context,
++                              int depth,
++                              std::vector<std::pair<int, std::string>>& out) {
++    if (depth > 6 || value.is_null()) return;
++    if (value.is_string()) {
++        const std::string url = value.get<std::string>();
++        if (looks_like_image_url(url)) {
++            out.emplace_back(image_candidate_score(context, url), url);
++        }
++        return;
++    }
+     if (value.is_array()) {
++        int index = 0;
+         for (const auto& entry : value) {
+-            const std::string found = image_value(entry, depth + 1);
+-            if (!found.empty()) return found;
++            collect_image_candidates(entry,
++                                     context + " array" + std::to_string(index++),
++                                     depth + 1, out);
+         }
+-        return {};
++        return;
+     }
+-    if (!value.is_object()) return {};
++    if (!value.is_object()) return;
+ 
+-    for (const char* key : {"url", "src", "href", "imageUrl", "image_url"}) {
+-        const auto nested = value.find(key);
+-        if (nested == value.end()) continue;
+-        const std::string found = image_value(*nested, depth + 1);
+-        if (!found.empty()) return found;
+-    }
+     for (auto nested = value.begin(); nested != value.end(); ++nested) {
+-        const std::string found = image_value(nested.value(), depth + 1);
+-        if (!found.empty() &&
+-            (found.rfind("http://", 0) == 0 || found.rfind("https://", 0) == 0 ||
+-             found.rfind("//", 0) == 0 || found.front() == '/')) {
+-            return found;
+-        }
++        collect_image_candidates(nested.value(),
++                                 context + " " + nested.key(), depth + 1, out);
+     }
+-    return {};
++}
++
++std::string image_value(const nlohmann::json& value, int depth = 0) {
++    std::vector<std::pair<int, std::string>> candidates;
++    collect_image_candidates(value, {}, depth, candidates);
++    if (candidates.empty()) return {};
++    return std::max_element(
++        candidates.begin(), candidates.end(),
++        [](const auto& left, const auto& right) {
++            return left.first < right.first;
++        })->second;
+ }
+ 
+ std::string image_from(
+@@ -330,9 +382,39 @@ std::string absolute_image_url(
+     return imageUrl;
+ }
+ 
++bool json_bool(const nlohmann::json& object,
++               std::initializer_list<const char*> keys) {
++    if (!object.is_object()) return false;
++    for (const char* key : keys) {
++        const auto value = object.find(key);
++        if (value == object.end() || value->is_null()) continue;
++        if (value->is_boolean()) return value->get<bool>();
++        if (value->is_number()) return value->get<double>() != 0.0;
++        if (value->is_string()) {
++            std::string text = value->get<std::string>();
++            std::transform(text.begin(), text.end(), text.begin(),
++                           [](unsigned char c) {
++                               return static_cast<char>(std::tolower(c));
++                           });
++            if (text == "true" || text == "yes" || text == "1") return true;
++        }
++    }
++    return false;
++}
++
++bool json_text_contains(const nlohmann::json& value, const char* needle) {
++    std::string text = value.dump();
++    std::transform(text.begin(), text.end(), text.begin(),
++                   [](unsigned char c) {
++                       return static_cast<char>(std::tolower(c));
++                   });
++    return text.find(needle) != std::string::npos;
++}
++
+ bool parse_games(
+     const nlohmann::json& payload,
+     const std::string& baseUrl,
++    bool defaultInstalled,
+     std::vector<GameItem>& outGames) {
+     const nlohmann::json* items = find_game_array(payload);
+     if (!items) return false;
+@@ -395,12 +477,186 @@ bool parse_games(
+         if (game.platform.empty()) {
+             game.platform = object_label(raw, {"platform", "platformName"});
+         }
+-        game.isInstalled = true;
++        game.isInstalled = defaultInstalled ||
++            json_bool(source, {"installed", "isInstalled", "is_installed"}) ||
++            json_bool(raw, {"installed", "isInstalled", "is_installed"});
++        game.installAndPlay =
++            json_bool(source, {"installable", "isInstallable", "installAndPlay",
++                               "is_installable"}) ||
++            json_bool(raw, {"installable", "isInstallable", "installAndPlay",
++                            "is_installable"});
++        game.isFree =
++            json_bool(source, {"free", "isFree", "is_free"}) ||
++            json_bool(raw, {"free", "isFree", "is_free"});
++        const std::string monetization = object_label(
++            source, {"monetizeType", "monetization", "priceType"});
++        if (!game.isFree && !monetization.empty()) {
++            std::string normalized = monetization;
++            std::transform(normalized.begin(), normalized.end(),
++                           normalized.begin(), [](unsigned char c) {
++                               return static_cast<char>(std::tolower(c));
++                           });
++            game.isFree = normalized.find("free") != std::string::npos;
++        }
++        game.controllerFriendly =
++            json_bool(source, {"controller", "controllerSupport",
++                               "controller_supported", "gamepad"}) ||
++            json_bool(raw, {"controller", "controllerSupport",
++                            "controller_supported", "gamepad"}) ||
++            json_text_contains(source, "controller") ||
++            json_text_contains(source, "gamepad") ||
++            json_text_contains(source, "xinput");
+         outGames.push_back(std::move(game));
+     }
+     return true;
+ }
+ 
++bool append_unique_games(std::vector<GameItem>& destination,
++                         std::vector<GameItem>& source) {
++    std::unordered_set<int> known;
++    known.reserve(destination.size() + source.size());
++    for (const auto& game : destination) known.insert(game.id);
++    bool added = false;
++    for (auto& game : source) {
++        if (known.insert(game.id).second) {
++            destination.push_back(std::move(game));
++            added = true;
++        }
++    }
++    return added;
++}
++
++std::string find_install_collection_id(const nlohmann::json& payload) {
++    const nlohmann::json* items = find_game_array(payload);
++    if (!items) return {};
++    for (const auto& item : *items) {
++        const std::string label = object_label(
++            item, {"name", "title", "displayName", "collectionName", "slug"});
++        std::string normalized = label;
++        std::transform(normalized.begin(), normalized.end(), normalized.begin(),
++                       [](unsigned char c) {
++                           return static_cast<char>(std::tolower(c));
++                       });
++        if (normalized.find("install") == std::string::npos &&
++            normalized.find("instalar") == std::string::npos) continue;
++        std::string id = first_string(
++            item, {"id", "collectionId", "collection_id", "value", "slug"});
++        if (!id.empty()) return id;
++        const int numeric = first_positive_int(
++            item, {"id", "collectionId", "collection_id", "value"});
++        if (numeric > 0) return std::to_string(numeric);
++    }
++    return {};
++}
++
++std::size_t pagination_total(const nlohmann::json& value, int depth = 0) {
++    if (depth > 5 || !value.is_object()) return 0;
++    for (const char* key : {"total", "totalCount", "total_count",
++                            "totalItems", "total_items"}) {
++        const auto found = value.find(key);
++        if (found == value.end()) continue;
++        try {
++            if (found->is_number_unsigned()) return found->get<std::size_t>();
++            if (found->is_number_integer()) {
++                const long long number = found->get<long long>();
++                if (number > 0) return static_cast<std::size_t>(number);
++            }
++            if (found->is_string()) {
++                return static_cast<std::size_t>(std::stoull(
++                    found->get<std::string>()));
++            }
++        } catch (...) {
++        }
++    }
++    for (const char* key : {"data", "meta", "pagination", "paginator"}) {
++        const auto nested = value.find(key);
++        if (nested == value.end()) continue;
++        const std::size_t found = pagination_total(*nested, depth + 1);
++        if (found > 0) return found;
++    }
++    return 0;
++}
++
++std::string upstream_error_message(const std::string& body);
++
++bool fetch_all_game_pages(gnx::Http& http,
++                          const std::string& baseUrl,
++                          const std::string& endpoint,
++                          const std::vector<std::string>& headers,
++                          bool installed,
++                          std::vector<GameItem>& outGames,
++                          std::string& error) {
++    constexpr int kPageSize = 50;
++    constexpr int kMaximumPages = 200;
++    outGames.clear();
++
++    for (int page = 1; page <= kMaximumPages; ++page) {
++        const std::string separator =
++            endpoint.find('?') == std::string::npos ? "?" : "&";
++        const std::string url = baseUrl + endpoint + separator + "page=" +
++            std::to_string(page) + "&paginate=" + std::to_string(kPageSize);
++        const auto response = http.get(url, headers);
++        std::fprintf(stderr, "%s page %d HTTP %ld (%zu bytes)\n",
++                     installed ? "Library" : "Catalog", page,
++                     response.status, response.body.size());
++        if (response.status != 200) {
++            error = upstream_error_message(response.body);
++            if (error.empty()) {
++                error = std::string(installed ? "La biblioteca" : "El catalogo") +
++                    " respondio HTTP " + std::to_string(response.status) +
++                    " en la pagina " + std::to_string(page) + ".";
++            }
++            return false;
++        }
++
++        const auto parsed = nlohmann::json::parse(response.body, nullptr, false);
++        if (parsed.is_discarded()) {
++            error = std::string(installed ? "La biblioteca" : "El catalogo") +
++                " devolvio datos no validos en la pagina " +
++                std::to_string(page) + ".";
++            return false;
++        }
++        const nlohmann::json* rawItems = find_game_array(parsed);
++        if (!rawItems) {
++            error = std::string("No se reconocio el formato de ") +
++                (installed ? "la biblioteca." : "el catalogo.");
++            return false;
++        }
++
++        std::vector<GameItem> pageGames;
++        if (!parse_games(parsed, baseUrl, installed, pageGames)) {
++            error = std::string("No se pudo leer ") +
++                (installed ? "la biblioteca." : "el catalogo.");
++            return false;
++        }
++        const bool added = append_unique_games(outGames, pageGames);
++        const std::size_t total = pagination_total(parsed);
++        if (total > 0 && outGames.size() >= total) return true;
++        if (!added) {
++            if (total > outGames.size()) {
++                error = std::string(installed ? "La biblioteca" : "El catalogo") +
++                    " repitio la pagina " + std::to_string(page) +
++                    " antes de alcanzar " + std::to_string(total) +
++                    " juegos.";
++                return false;
++            }
++            return true;
++        }
++        if (rawItems->size() < static_cast<std::size_t>(kPageSize)) {
++            if (total > outGames.size()) {
++                error = std::string(installed ? "La biblioteca" : "El catalogo") +
++                    " termino incompleto (" + std::to_string(outGames.size()) +
++                    "/" + std::to_string(total) + ").";
++                return false;
++            }
++            return true;
++        }
++    }
++
++    error = "Boosteroid supero el limite de seguridad de 10000 juegos.";
++    return false;
++}
++
+ std::string upstream_error_message(const std::string& body) {
+     const auto parsed = nlohmann::json::parse(body, nullptr, false);
+     if (parsed.is_discarded() || !parsed.is_object()) return {};
+@@ -927,51 +1183,154 @@ bool BoosteroidAPI::getInstalledGames(std::vector<GameItem>& outGames) {
+         gnx::Http http;
+         const auto headers = android_tv_headers(
+             false, m_authToken, m_userDataToken, m_deviceId);
+-        const auto response = http.get(
+-            m_baseUrl +
+-                "/api/v1/boostore/applications/installed?page=1&paginate=50",
+-            headers);
+-        std::fprintf(stderr, "Library HTTP %ld (%zu bytes)\n",
+-                     response.status, response.body.size());
++        const bool ok = fetch_all_game_pages(
++            http, m_baseUrl, "/api/v1/boostore/applications/installed",
++            headers, true, outGames, m_lastError);
++        std::fprintf(stderr, "Complete library parsed: %zu games\n",
++                     outGames.size());
++        if (ok) m_lastError.clear();
++        return ok;
++    } catch (const std::exception& error) {
++        m_lastError = error.what();
++        return false;
++    } catch (...) {
++        m_lastError = "Fallo desconocido al cargar la biblioteca.";
++        return false;
++    }
++}
++
++bool BoosteroidAPI::getCatalogGames(std::vector<GameItem>& outGames) {
++    outGames.clear();
++    m_lastError.clear();
++    if (!isAuthenticated()) {
++        m_lastError = "No hay una sesion de Boosteroid activa.";
++        return false;
++    }
++
++    try {
++        gnx::Http http;
++        const auto headers = android_tv_headers(
++            false, m_authToken, m_userDataToken, m_deviceId);
++        const bool ok = fetch_all_game_pages(
++            http, m_baseUrl, "/api/v1/boostore/applications", headers,
++            false, outGames, m_lastError);
++        if (ok) try {
++            // The official client exposes "Install" as a Boostore collection.
++            // Fetch that collection separately and annotate the matching full
++            // catalog entries; failure here must not hide the complete catalog.
++            const auto collections = http.get(
++                m_baseUrl + "/api/v1/boostore/applications/collections",
++                headers);
++            if (collections.ok()) {
++                const auto parsed = nlohmann::json::parse(
++                    collections.body, nullptr, false);
++                if (!parsed.is_discarded()) {
++                    const std::string collectionId =
++                        find_install_collection_id(parsed);
++                    if (!collectionId.empty()) {
++                        std::vector<GameItem> installGames;
++                        std::string ignoredError;
++                        if (fetch_all_game_pages(
++                                http, m_baseUrl,
++                                "/api/v1/boostore/applications?collection=" +
++                                    gnx::Http::urlencode(collectionId),
++                                headers, false, installGames, ignoredError)) {
++                            std::unordered_set<int> installIds;
++                            for (const auto& game : installGames) {
++                                installIds.insert(game.id);
++                            }
++                            for (auto& game : outGames) {
++                                if (installIds.count(game.id)) {
++                                    game.installAndPlay = true;
++                                }
++                            }
++                            std::fprintf(stderr,
++                                         "Install collection parsed: %zu games\n",
++                                         installIds.size());
++                        }
++                    }
++                }
++            }
++        } catch (const std::exception& error) {
++            std::fprintf(stderr, "Install collection annotation skipped: %s\n",
++                         error.what());
++        }
++        std::fprintf(stderr, "Complete catalog parsed: %zu games\n",
++                     outGames.size());
++        if (ok) m_lastError.clear();
++        return ok;
++    } catch (const std::exception& error) {
++        m_lastError = error.what();
++        return false;
++    } catch (...) {
++        m_lastError = "Fallo desconocido al cargar el catalogo.";
++        return false;
++    }
++}
++
++bool BoosteroidAPI::getBoostoreGames(const std::string& query,
++                                     std::vector<GameItem>& outGames) {
++    outGames.clear();
++    m_lastError.clear();
++    if (!isAuthenticated()) {
++        m_lastError = "No hay una sesion de Boosteroid activa.";
++        return false;
++    }
++    try {
++        gnx::Http http;
++        const auto headers = android_tv_headers(
++            false, m_authToken, m_userDataToken, m_deviceId);
++        const std::string url =
++            m_baseUrl + "/api/v1/boostore/applications/search?query=" +
++            gnx::Http::urlencode(query);
++        const auto response = http.get(url, headers);
+         if (response.status != 200) {
+             m_lastError = upstream_error_message(response.body);
+             if (m_lastError.empty()) {
+-                m_lastError = "La biblioteca respondio HTTP " +
+-                              std::to_string(response.status) + ".";
++                m_lastError = "La busqueda respondio HTTP " +
++                    std::to_string(response.status) + ".";
+             }
+             return false;
+         }
+-
+         const auto parsed = nlohmann::json::parse(response.body, nullptr, false);
+-        if (parsed.is_discarded()) {
+-            m_lastError = "Boosteroid devolvio una biblioteca no valida.";
++        if (parsed.is_discarded() ||
++            !parse_games(parsed, m_baseUrl, false, outGames)) {
++            m_lastError = "Boosteroid devolvio una busqueda no valida.";
+             return false;
+         }
+-        if (!parse_games(parsed, m_baseUrl, outGames)) {
+-            m_lastError = "No se reconocio el formato de la biblioteca de Boosteroid.";
+-            return false;
+-        }
+-        std::fprintf(stderr, "Library parsed: %zu games\n", outGames.size());
+-        m_lastError.clear();
+         return true;
+     } catch (const std::exception& error) {
+         m_lastError = error.what();
+         return false;
+-    } catch (...) {
+-        m_lastError = "Fallo desconocido al cargar la biblioteca.";
+-        return false;
+     }
+ }
+ 
+-bool BoosteroidAPI::getBoostoreGames(const std::string& query, std::vector<GameItem>& outGames) {
+-    outGames.clear();
+-    gnx::Http http;
+-    const auto headers = android_tv_headers(
+-        false, m_authToken, m_userDataToken, m_deviceId);
+-
+-    std::string url = m_baseUrl + "/api/v1/boostore/applications/search?query=" + gnx::Http::urlencode(query);
+-    auto response = http.get(url, headers);
+-    return (response.status == 200);
++bool BoosteroidAPI::addGameToLibrary(int appId) {
++    m_lastError.clear();
++    if (!isAuthenticated() || appId <= 0) {
++        m_lastError = "No hay una sesion o juego valido para agregar.";
++        return false;
++    }
++    try {
++        gnx::Http http;
++        const auto response = http.patch(
++            m_baseUrl + "/api/v1/boostore/applications/installed/" +
++                std::to_string(appId),
++            "{}", android_tv_headers(
++                true, m_authToken, m_userDataToken, m_deviceId));
++        if (!response.ok()) {
++            m_lastError = upstream_error_message(response.body);
++            if (m_lastError.empty()) {
++                m_lastError = "No se pudo agregar el juego (HTTP " +
++                    std::to_string(response.status) + ").";
++            }
++            return false;
++        }
++        return true;
++    } catch (const std::exception& error) {
++        m_lastError = error.what();
++        return false;
++    }
+ }
+ 
+ bool BoosteroidAPI::getStreamingGateways(
+diff --git a/switch/src/core/boosteroid_api.hpp b/switch/src/core/boosteroid_api.hpp
+index f6a549d..d95d31d 100644
+--- a/switch/src/core/boosteroid_api.hpp
++++ b/switch/src/core/boosteroid_api.hpp
+@@ -24,6 +24,9 @@ struct GameItem {
+     std::string store; // "steam", "epic", "ubisoft", etc.
+     std::string platform;
+     bool isInstalled{false};
++    bool installAndPlay{false};
++    bool isFree{false};
++    bool controllerFriendly{false};
+ };
+ 
+ struct DeviceCodeAuthArtifact {
+@@ -102,7 +105,9 @@ public:
+ 
+     // Catalog & Library
+     bool getInstalledGames(std::vector<GameItem>& outGames);
++    bool getCatalogGames(std::vector<GameItem>& outGames);
+     bool getBoostoreGames(const std::string& query, std::vector<GameItem>& outGames);
++    bool addGameToLibrary(int appId);
+ 
+     // WebRTC Streaming Launch
+     bool getStreamingGateways(std::vector<StreamGateway>& outGateways);
+diff --git a/switch/src/switch/gfx.cpp b/switch/src/switch/gfx.cpp
+index 58fc8d7..22072fa 100644
+--- a/switch/src/switch/gfx.cpp
++++ b/switch/src/switch/gfx.cpp
+@@ -12,7 +12,10 @@
+ namespace gnx::gfx {
+ 
+ namespace {
+-constexpr int kFontPx[5] = {24, 38, 54, 100, 30};
++// Sizes are expressed in the 1920x1080 design space. SDL scales the finished
++// interface down to the handheld's 1280x720 output, so these deliberately stay
++// compact enough for game cards while remaining readable on a television.
++constexpr int kFontPx[5] = {22, 30, 44, 84, 25};
+ }
+ 
+ bool Gfx::init() {
+@@ -38,8 +41,16 @@ bool Gfx::init() {
+     PlFontData shared_font;
+     if (R_SUCCEEDED(plGetSharedFontByType(&shared_font,
+                                           PlSharedFontType_Standard))) {
+-        SDL_RWops* rw = SDL_RWFromConstMem(shared_font.address, shared_font.size);
+-        font_body_ = TTF_OpenFontRW(rw, 1, kFontPx[1]);
++        const auto open_font = [&](int px) -> TTF_Font* {
++            SDL_RWops* rw = SDL_RWFromConstMem(shared_font.address,
++                                               shared_font.size);
++            return rw ? TTF_OpenFontRW(rw, 1, px) : nullptr;
++        };
++        font_small_ = open_font(kFontPx[0]);
++        font_body_ = open_font(kFontPx[1]);
++        font_title_ = open_font(kFontPx[2]);
++        font_huge_ = open_font(kFontPx[3]);
++        font_note_ = open_font(kFontPx[4]);
+     }
+ #endif
+     return true;
+@@ -50,6 +61,11 @@ void Gfx::shutdown() {
+         if (tex) SDL_DestroyTexture(tex);
+     }
+     text_cache_.clear();
++    if (font_small_) TTF_CloseFont(font_small_), font_small_ = nullptr;
++    if (font_body_) TTF_CloseFont(font_body_), font_body_ = nullptr;
++    if (font_title_) TTF_CloseFont(font_title_), font_title_ = nullptr;
++    if (font_huge_) TTF_CloseFont(font_huge_), font_huge_ = nullptr;
++    if (font_note_) TTF_CloseFont(font_note_), font_note_ = nullptr;
+     if (renderer_) SDL_DestroyRenderer(renderer_);
+     if (window_) SDL_DestroyWindow(window_);
+     IMG_Quit();
+diff --git a/switch/src/switch/main.cpp b/switch/src/switch/main.cpp
+index 66ca9d9..70a6ccc 100644
+--- a/switch/src/switch/main.cpp
++++ b/switch/src/switch/main.cpp
+@@ -13,6 +13,7 @@
+ #include <memory>
+ #include <string>
+ #include <sys/stat.h>
++#include <utility>
+ #include <vector>
+ #include "../core/boosteroid_api.hpp"
+ #include "../core/http.hpp"
+@@ -79,9 +80,19 @@ struct AsyncPollResult {
+ 
+ struct AsyncLibraryResult {
+     bool profileOk{false};
+-    bool gamesOk{false};
++    bool installedOk{false};
++    bool catalogOk{false};
+     ZERODROID::BoosteroidUser user;
+-    std::vector<ZERODROID::GameItem> games;
++    std::vector<ZERODROID::GameItem> installedGames;
++    std::vector<ZERODROID::GameItem> catalogGames;
++    std::string installedError;
++    std::string catalogError;
++    std::string profileError;
++};
++
++struct AsyncGameActionResult {
++    bool ok{false};
++    int gameId{0};
+     std::string error;
+ };
+ 
+@@ -103,14 +114,28 @@ struct ServerSettings {
+     std::string preferredLocationLabel{"Automatico"};
+     bool xboxFaceLayout{false};
+     int language{0};  // 0 = Espanol, 1 = English
++    int resolutionMode{gnx::stream::ResolutionAuto};
++    int picturePreset{gnx::stream::PresetNatural};
++    int brightness{0};
++    int contrast{100};
++    int saturation{100};
++    int gamma{100};
++    int sharpness{0};
+     std::vector<int> favoriteGameIds;
+     std::vector<int> recentGameIds;
+ };
+ 
+ enum class LibraryTab {
+-    All = 0,
++    MyGames = 0,
+     Favorites = 1,
+     Recent = 2,
++    Catalog = 3,
++    InstallAndPlay = 4,
++};
++
++struct VisibleGame {
++    bool catalog{false};
++    std::size_t index{0};
+ };
+ 
+ ServerSettings load_server_settings() {
+@@ -128,6 +153,17 @@ ServerSettings load_server_settings() {
+             "preferredLocationLabel", std::string("Automatico"));
+         settings.xboxFaceLayout = value.value("xboxFaceLayout", false);
+         settings.language = std::clamp(value.value("language", 0), 0, 1);
++        settings.resolutionMode = std::clamp(
++            value.value("resolutionMode", gnx::stream::ResolutionAuto),
++            gnx::stream::ResolutionAuto, gnx::stream::Resolution1440p);
++        settings.picturePreset = std::clamp(
++            value.value("picturePreset", gnx::stream::PresetNatural),
++            gnx::stream::PresetNatural, gnx::stream::PresetCustom);
++        settings.brightness = std::clamp(value.value("brightness", 0), -20, 20);
++        settings.contrast = std::clamp(value.value("contrast", 100), 70, 130);
++        settings.saturation = std::clamp(value.value("saturation", 100), 0, 150);
++        settings.gamma = std::clamp(value.value("gamma", 100), 50, 200);
++        settings.sharpness = std::clamp(value.value("sharpness", 0), 0, 3);
+         settings.favoriteGameIds = value.value(
+             "favoriteGameIds", std::vector<int>{});
+         settings.recentGameIds = value.value(
+@@ -143,12 +179,19 @@ bool save_server_settings(const ServerSettings& settings) {
+     std::ofstream file("sdmc:/switch/ZERODROID/settings.json");
+     if (!file.is_open()) return false;
+     file << nlohmann::json({
+-        {"version", 4},
++        {"version", 5},
+         {"allowDistantRegions", settings.allowDistantRegions},
+         {"preferredLocationId", settings.preferredLocationId},
+         {"preferredLocationLabel", settings.preferredLocationLabel},
+         {"xboxFaceLayout", settings.xboxFaceLayout},
+         {"language", settings.language},
++        {"resolutionMode", settings.resolutionMode},
++        {"picturePreset", settings.picturePreset},
++        {"brightness", settings.brightness},
++        {"contrast", settings.contrast},
++        {"saturation", settings.saturation},
++        {"gamma", settings.gamma},
++        {"sharpness", settings.sharpness},
+         {"favoriteGameIds", settings.favoriteGameIds},
+         {"recentGameIds", settings.recentGameIds},
+     }).dump(2);
+@@ -217,6 +260,83 @@ std::string fit_text(
+     return shortened + suffix;
+ }
+ 
++std::vector<std::string> wrap_text_lines(
++    gnx::gfx::Gfx& gfx,
++    const std::string& text,
++    int maxWidth,
++    int maxLines,
++    gnx::gfx::FontSize size = gnx::gfx::FontSize::Small) {
++    std::vector<std::string> lines;
++    std::string remaining = text;
++    while (!remaining.empty() && static_cast<int>(lines.size()) < maxLines) {
++        if (gfx.text_width(remaining, size) <= maxWidth) {
++            lines.push_back(remaining);
++            break;
++        }
++
++        std::size_t best = std::string::npos;
++        std::size_t position = 0;
++        while ((position = remaining.find(' ', position)) != std::string::npos) {
++            const std::string candidate = remaining.substr(0, position);
++            if (gfx.text_width(candidate, size) > maxWidth) break;
++            best = position;
++            ++position;
++        }
++
++        if (best == std::string::npos) {
++            lines.push_back(fit_text(gfx, remaining, maxWidth, size));
++            break;
++        }
++
++        lines.push_back(remaining.substr(0, best));
++        remaining.erase(0, best + 1);
++        while (!remaining.empty() && remaining.front() == ' ') {
++            remaining.erase(remaining.begin());
++        }
++
++        if (static_cast<int>(lines.size()) == maxLines && !remaining.empty()) {
++            lines.back() = fit_text(
++                gfx, lines.back() + " " + remaining, maxWidth, size);
++        }
++    }
++    return lines;
++}
++
++const char* resolution_label(int mode, bool english, bool compact = false) {
++    switch (mode) {
++        case gnx::stream::Resolution720p:
++            return compact ? "720P" :
++                (english ? "720p - performance" : "720p - rendimiento");
++        case gnx::stream::Resolution1080p:
++            return compact ? "1080P" :
++                (english ? "1080p - quality" : "1080p - calidad");
++        case gnx::stream::Resolution1440p:
++            return compact ? "1440P" :
++                (english ? "1440p - experimental" : "1440p - experimental");
++        case gnx::stream::ResolutionAuto:
++        default:
++            return compact ? "AUTO" :
++                (english ? "Automatic - 720p handheld / 1080p dock"
++                         : "Automatico - 720p portatil / 1080p dock");
++    }
++}
++
++std::pair<int, int> stream_dimensions(int mode) {
++    switch (mode) {
++        case gnx::stream::Resolution720p:
++            return {1280, 720};
++        case gnx::stream::Resolution1080p:
++            return {1920, 1080};
++        case gnx::stream::Resolution1440p:
++            return {2560, 1440};
++        case gnx::stream::ResolutionAuto:
++        default:
++            return appletGetOperationMode() == AppletOperationMode_Console
++                ? std::pair<int, int>{1920, 1080}
++                : std::pair<int, int>{1280, 720};
++    }
++}
++
+ bool point_in_rect(int x, int y, const gnx::stream::QuickRect& rect) {
+     return x >= rect.x && x < rect.x + rect.w &&
+            y >= rect.y && y < rect.y + rect.h;
+@@ -226,8 +346,10 @@ bool point_in_rect(int x, int y, const gnx::stream::QuickRect& rect) {
+ // belongs to the panel. A tap outside closes it and remains available to the
+ // independent Guide/Home target.
+ bool handle_stream_settings_touch(gnx::stream::QuickMenuState& state,
+-                                  int x, int y, bool& layoutChanged) {
++                                  int x, int y, bool& layoutChanged,
++                                  bool& persistentChanged) {
+     layoutChanged = false;
++    persistentChanged = false;
+     if (point_in_rect(x, y, gnx::stream::kQuickToggleRect)) {
+         state.open = !state.open;
+         return true;
+@@ -249,16 +371,15 @@ bool handle_stream_settings_touch(gnx::stream::QuickMenuState& state,
+                              gnx::stream::QuickController))) {
+         state.xboxFaceLayout = !state.xboxFaceLayout;
+         layoutChanged = true;
++        persistentChanged = true;
+         changed = true;
+     } else if (point_in_rect(x, y, gnx::stream::kQuickResetRect)) {
+-        state.brightness = 0;
+-        state.contrast = 100;
+-        state.saturation = 100;
+-        state.gamma = 100;
+-        state.sharpness = 0;
++        gnx::stream::apply_picture_preset(
++            state, gnx::stream::PresetNatural);
++        persistentChanged = true;
+         changed = true;
+     } else {
+-        for (int row = gnx::stream::QuickBrightness;
++        for (int row = gnx::stream::QuickResolution;
+              row <= gnx::stream::QuickSharpness; ++row) {
+             int direction = 0;
+             if (point_in_rect(x, y, gnx::stream::quick_minus_rect(row))) {
+@@ -266,19 +387,41 @@ bool handle_stream_settings_touch(gnx::stream::QuickMenuState& state,
+             } else if (point_in_rect(
+                            x, y, gnx::stream::quick_plus_rect(row))) {
+                 direction = 1;
++            } else if ((row == gnx::stream::QuickResolution ||
++                        row == gnx::stream::QuickPreset) &&
++                       point_in_rect(x, y,
++                                     gnx::stream::quick_row_rect(row))) {
++                direction = 1;
+             }
+             if (direction == 0) continue;
+-            if (row == gnx::stream::QuickBrightness) {
+-                state.brightness += direction * 5;
+-            } else if (row == gnx::stream::QuickContrast) {
+-                state.contrast += direction * 10;
+-            } else if (row == gnx::stream::QuickSaturation) {
+-                state.saturation += direction * 10;
+-            } else if (row == gnx::stream::QuickGamma) {
+-                state.gamma += direction * 5;
++
++            if (row == gnx::stream::QuickResolution) {
++                state.resolutionMode =
++                    (state.resolutionMode + direction + 4) % 4;
++            } else if (row == gnx::stream::QuickPreset) {
++                int preset = state.picturePreset;
++                if (preset == gnx::stream::PresetCustom) {
++                    preset = direction > 0 ? gnx::stream::PresetNatural
++                                           : gnx::stream::PresetSoft;
++                } else {
++                    preset = (preset + direction + 5) % 5;
++                }
++                gnx::stream::apply_picture_preset(state, preset);
+             } else {
+-                state.sharpness = (state.sharpness + direction + 4) % 4;
++                state.picturePreset = gnx::stream::PresetCustom;
++                if (row == gnx::stream::QuickBrightness) {
++                    state.brightness += direction * 5;
++                } else if (row == gnx::stream::QuickContrast) {
++                    state.contrast += direction * 5;
++                } else if (row == gnx::stream::QuickSaturation) {
++                    state.saturation += direction * 5;
++                } else if (row == gnx::stream::QuickGamma) {
++                    state.gamma += direction * 5;
++                } else {
++                    state.sharpness = (state.sharpness + direction + 4) % 4;
++                }
+             }
++            persistentChanged = true;
+             changed = true;
+             break;
+         }
+@@ -300,17 +443,20 @@ void draw_cover_texture(
+         return;
+     }
+ 
+-    SDL_Rect source{0, 0, width, height};
++    // "Contain" instead of "cover": keep the complete artwork visible and
++    // letterbox the unused area. Previous versions deliberately cropped the
++    // source to fill the card, which cut faces, logos and game titles.
++    SDL_Rect fitted = destination;
+     const long long sourceRatio = static_cast<long long>(width) * destination.h;
+     const long long targetRatio = static_cast<long long>(height) * destination.w;
+     if (sourceRatio > targetRatio) {
+-        source.w = std::max(1, height * destination.w / destination.h);
+-        source.x = (width - source.w) / 2;
++        fitted.h = std::max(1, destination.w * height / width);
++        fitted.y += (destination.h - fitted.h) / 2;
+     } else if (sourceRatio < targetRatio) {
+-        source.h = std::max(1, width * destination.h / destination.w);
+-        source.y = (height - source.h) / 2;
++        fitted.w = std::max(1, destination.h * width / height);
++        fitted.x += (destination.w - fitted.w) / 2;
+     }
+-    SDL_RenderCopy(renderer, texture, &source, &destination);
++    SDL_RenderCopy(renderer, texture, nullptr, &fitted);
+ }
+ 
+ void initialize_log() {
+@@ -376,6 +522,26 @@ int main(int argc, char* argv[]) {
+     };
+     gnx::stream::QuickMenuState quickMenuState;
+     quickMenuState.xboxFaceLayout = serverSettings.xboxFaceLayout;
++    quickMenuState.resolutionMode = serverSettings.resolutionMode;
++    quickMenuState.picturePreset = serverSettings.picturePreset;
++    quickMenuState.brightness = serverSettings.brightness;
++    quickMenuState.contrast = serverSettings.contrast;
++    quickMenuState.saturation = serverSettings.saturation;
++    quickMenuState.gamma = serverSettings.gamma;
++    quickMenuState.sharpness = serverSettings.sharpness;
++    quickMenuState = gnx::stream::normalized_quick_menu(quickMenuState);
++
++    const auto persistQuickMenu = [&]() {
++        serverSettings.xboxFaceLayout = quickMenuState.xboxFaceLayout;
++        serverSettings.resolutionMode = quickMenuState.resolutionMode;
++        serverSettings.picturePreset = quickMenuState.picturePreset;
++        serverSettings.brightness = quickMenuState.brightness;
++        serverSettings.contrast = quickMenuState.contrast;
++        serverSettings.saturation = quickMenuState.saturation;
++        serverSettings.gamma = quickMenuState.gamma;
++        serverSettings.sharpness = quickMenuState.sharpness;
++        save_server_settings(serverSettings);
++    };
+     auto stream = std::make_unique<gnx::stream::Engine>(api, gfx.renderer());
+     stream->set_xbox_face_layout(serverSettings.xboxFaceLayout);
+     stream->set_quick_menu_state(quickMenuState);
+@@ -405,14 +571,20 @@ int main(int argc, char* argv[]) {
+     bool libraryInFlight = false;
+     bool libraryReady = false;
+     bool libraryOk = false;
++    bool catalogOk = false;
+     ZERODROID::BoosteroidUser libraryUser;
+     std::vector<ZERODROID::GameItem> libraryGames;
+-    std::vector<std::size_t> visibleGames;
++    std::vector<ZERODROID::GameItem> catalogGames;
++    std::vector<VisibleGame> visibleGames;
+     std::string libraryError;
++    std::string catalogError;
+     std::string libraryNotice;
+     std::string searchQuery;
+-    LibraryTab libraryTab = LibraryTab::All;
++    LibraryTab libraryTab = LibraryTab::MyGames;
+     std::size_t selectedGame = 0;
++    std::future<AsyncGameActionResult> gameActionFuture;
++    bool gameActionInFlight = false;
++    int gameActionId = 0;
+     bool settingsOpen = false;
+     bool serverConfigReady = false;
+     bool serverConfigInFlight = false;
+@@ -420,7 +592,7 @@ int main(int argc, char* argv[]) {
+     std::vector<ZERODROID::ServerLocation> serverLocations;
+     std::string serverConfigError;
+     std::size_t selectedLocation = 0;  // 0 = automatic
+-    int selectedSettingsRow = 0;       // regions, controller, location, language, logout
++    int selectedSettingsRow = 0;       // regions, controller, resolution, location, language, logout
+     bool serverSaveInFlight = false;
+     std::future<AsyncServerSaveResult> serverSaveFuture;
+     bool launchPanel = false;
+@@ -434,14 +606,27 @@ int main(int argc, char* argv[]) {
+     std::string launchingTitle;
+     int launchingGameId = 0;
+ 
++    const auto gameFromVisible = [&](const VisibleGame& visible)
++        -> ZERODROID::GameItem* {
++        auto& source = visible.catalog ? catalogGames : libraryGames;
++        return visible.index < source.size() ? &source[visible.index] : nullptr;
++    };
++
+     auto rebuildVisibleGames = [&]() {
+         visibleGames.clear();
+         const std::string normalizedQuery = lowercase_ascii(searchQuery);
+         const auto matchesSearch = [&](const ZERODROID::GameItem& game) {
+             return normalizedQuery.empty() ||
+-                   lowercase_ascii(game.title).find(normalizedQuery) !=
++                   lowercase_ascii(game.title + " " + game.store + " " +
++                                   game.platform).find(normalizedQuery) !=
+                        std::string::npos;
+         };
++        const auto appendMatches = [&](bool catalog, std::size_t index) {
++            const auto& source = catalog ? catalogGames : libraryGames;
++            if (index < source.size() && matchesSearch(source[index])) {
++                visibleGames.push_back({catalog, index});
++            }
++        };
+         if (libraryTab == LibraryTab::Recent) {
+             for (int gameId : serverSettings.recentGameIds) {
+                 const auto found = std::find_if(
+@@ -450,18 +635,36 @@ int main(int argc, char* argv[]) {
+                         return game.id == gameId;
+                     });
+                 if (found != libraryGames.end() && matchesSearch(*found)) {
+-                    visibleGames.push_back(static_cast<std::size_t>(
+-                        std::distance(libraryGames.begin(), found)));
++                    visibleGames.push_back({false, static_cast<std::size_t>(
++                        std::distance(libraryGames.begin(), found))});
+                 }
+             }
+-        } else {
++        } else if (libraryTab == LibraryTab::Favorites) {
++            std::vector<int> added;
+             for (std::size_t index = 0; index < libraryGames.size(); ++index) {
+                 const auto& game = libraryGames[index];
+-                if (libraryTab == LibraryTab::Favorites &&
+-                    !contains_game_id(serverSettings.favoriteGameIds, game.id)) {
+-                    continue;
++                if (contains_game_id(serverSettings.favoriteGameIds, game.id)) {
++                    appendMatches(false, index);
++                    added.push_back(game.id);
++                }
++            }
++            for (std::size_t index = 0; index < catalogGames.size(); ++index) {
++                const auto& game = catalogGames[index];
++                if (!contains_game_id(added, game.id) &&
++                    contains_game_id(serverSettings.favoriteGameIds, game.id)) {
++                    appendMatches(true, index);
+                 }
+-                if (matchesSearch(game)) visibleGames.push_back(index);
++            }
++        } else if (libraryTab == LibraryTab::Catalog ||
++                   libraryTab == LibraryTab::InstallAndPlay) {
++            for (std::size_t index = 0; index < catalogGames.size(); ++index) {
++                if (libraryTab == LibraryTab::InstallAndPlay &&
++                    !catalogGames[index].installAndPlay) continue;
++                appendMatches(true, index);
++            }
++        } else {
++            for (std::size_t index = 0; index < libraryGames.size(); ++index) {
++                appendMatches(false, index);
+             }
+         }
+         selectedGame = visibleGames.empty()
+@@ -502,24 +705,54 @@ int main(int argc, char* argv[]) {
+     };
+ 
+     auto startLibraryLoad = [&]() {
+-        if (!hasSession || libraryInFlight) return;
++        if (!hasSession || libraryInFlight || gameActionInFlight) return;
+         libraryInFlight = true;
+         libraryReady = false;
+         libraryOk = false;
+         libraryError.clear();
++        catalogError.clear();
+         libraryNotice.clear();
+         std::fprintf(stderr, "Starting Boosteroid library load\n");
+         libraryFuture = std::async(std::launch::async, [&api]() {
+             AsyncLibraryResult result;
+             result.profileOk = api.getUserProfile(result.user);
+-            const std::string profileError = api.lastError();
+-            result.gamesOk = api.getInstalledGames(result.games);
+-            if (!result.gamesOk) result.error = api.lastError();
+-            if (result.error.empty() && !result.profileOk) result.error = profileError;
++            if (!result.profileOk) result.profileError = api.lastError();
++            result.installedOk = api.getInstalledGames(result.installedGames);
++            if (!result.installedOk) result.installedError = api.lastError();
++            result.catalogOk = api.getCatalogGames(result.catalogGames);
++            if (!result.catalogOk) result.catalogError = api.lastError();
++            if (result.catalogOk) {
++                for (auto& catalogGame : result.catalogGames) {
++                    const auto installed = std::find_if(
++                        result.installedGames.begin(), result.installedGames.end(),
++                        [&](const ZERODROID::GameItem& game) {
++                            return game.id == catalogGame.id;
++                        });
++                    if (installed != result.installedGames.end()) {
++                        catalogGame.isInstalled = true;
++                    }
++                }
++            }
+             return result;
+         });
+     };
+ 
++    auto startAddToLibrary = [&](const ZERODROID::GameItem& game) {
++        if (gameActionInFlight || libraryInFlight || game.id <= 0) return;
++        gameActionInFlight = true;
++        gameActionId = game.id;
++        libraryNotice = ui("Agregando a Mis juegos...",
++                           "Adding to My games...");
++        gameActionFuture = std::async(
++            std::launch::async, [&api, gameId = game.id]() {
++                AsyncGameActionResult result;
++                result.gameId = gameId;
++                result.ok = api.addGameToLibrary(gameId);
++                if (!result.ok) result.error = api.lastError();
++                return result;
++            });
++    };
++
+     auto createNewQr = [&]() {
+         if (pollInFlight) return;
+         if (api.requestDeviceCode(authArtifact)) {
+@@ -535,7 +768,8 @@ int main(int argc, char* argv[]) {
+     };
+ 
+     auto logout = [&]() {
+-        if (libraryInFlight || serverConfigInFlight || serverSaveInFlight) {
++        if (libraryInFlight || gameActionInFlight || serverConfigInFlight ||
++            serverSaveInFlight) {
+             libraryNotice = ui(
+                 "Espera a que terminen las consultas para cerrar la sesion.",
+                 "Wait for the pending requests before signing out.");
+@@ -545,13 +779,16 @@ int main(int argc, char* argv[]) {
+         hasSession = false;
+         libraryReady = false;
+         libraryOk = false;
++        catalogOk = false;
+         libraryGames.clear();
++        catalogGames.clear();
+         visibleGames.clear();
+         libraryUser = ZERODROID::BoosteroidUser();
+         libraryError.clear();
++        catalogError.clear();
+         libraryNotice.clear();
+         searchQuery.clear();
+-        libraryTab = LibraryTab::All;
++        libraryTab = LibraryTab::MyGames;
+         selectedGame = 0;
+         settingsOpen = false;
+         covers->drop_textures();
+@@ -589,8 +826,10 @@ int main(int argc, char* argv[]) {
+                 if (dx < 100 && dy < 100) {
+                     const bool wasOpen = quickMenuState.open;
+                     bool layoutChanged = false;
++                    bool persistentChanged = false;
+                     const bool quickTouch = handle_stream_settings_touch(
+-                        quickMenuState, touchLastX, touchLastY, layoutChanged);
++                        quickMenuState, touchLastX, touchLastY, layoutChanged,
++                        persistentChanged);
+                     if (quickTouch || wasOpen != quickMenuState.open) {
+                         stream->set_quick_menu_state(quickMenuState);
+                     }
+@@ -599,7 +838,9 @@ int main(int argc, char* argv[]) {
+                             quickMenuState.xboxFaceLayout;
+                         stream->set_xbox_face_layout(
+                             serverSettings.xboxFaceLayout);
+-                        save_server_settings(serverSettings);
++                    }
++                    if (persistentChanged) {
++                        persistQuickMenu();
+                     }
+                     if (!quickTouch && point_in_rect(
+                             touchLastX, touchLastY,
+@@ -777,10 +1018,16 @@ int main(int argc, char* argv[]) {
+                 std::future_status::ready) {
+             try {
+                 AsyncLibraryResult completed = libraryFuture.get();
+-                libraryGames = std::move(completed.games);
++                libraryGames = std::move(completed.installedGames);
++                catalogGames = std::move(completed.catalogGames);
+                 libraryUser = std::move(completed.user);
+-                libraryOk = completed.gamesOk;
+-                libraryError = std::move(completed.error);
++                libraryOk = completed.installedOk;
++                catalogOk = completed.catalogOk;
++                libraryError = std::move(completed.installedError);
++                catalogError = std::move(completed.catalogError);
++                if (libraryError.empty() && !completed.profileOk) {
++                    libraryError = std::move(completed.profileError);
++                }
+                 if (!libraryOk && libraryError.empty()) {
+                     libraryError = ui(
+                         "No se pudo cargar la biblioteca de Boosteroid.",
+@@ -788,9 +1035,10 @@ int main(int argc, char* argv[]) {
+                 }
+                 selectedGame = 0;
+                 rebuildVisibleGames();
+-                std::fprintf(stderr, "Library load finished: ok=%d games=%zu error=%s\n",
++                std::fprintf(stderr,
++                             "Content load finished: library=%d/%zu catalog=%d/%zu\n",
+                              libraryOk ? 1 : 0, libraryGames.size(),
+-                             libraryError.c_str());
++                             catalogOk ? 1 : 0, catalogGames.size());
+             } catch (const std::exception& error) {
+                 libraryOk = false;
+                 libraryError = error.what();
+@@ -806,6 +1054,43 @@ int main(int argc, char* argv[]) {
+             libraryReady = true;
+         }
+ 
++        if (hasSession && gameActionInFlight &&
++            gameActionFuture.wait_for(std::chrono::milliseconds(0)) ==
++                std::future_status::ready) {
++            try {
++                AsyncGameActionResult completed = gameActionFuture.get();
++                if (completed.ok) {
++                    auto catalogGame = std::find_if(
++                        catalogGames.begin(), catalogGames.end(),
++                        [&](const ZERODROID::GameItem& game) {
++                            return game.id == completed.gameId;
++                        });
++                    if (catalogGame != catalogGames.end()) {
++                        catalogGame->isInstalled = true;
++                        const auto installed = std::find_if(
++                            libraryGames.begin(), libraryGames.end(),
++                            [&](const ZERODROID::GameItem& game) {
++                                return game.id == completed.gameId;
++                            });
++                        if (installed == libraryGames.end()) {
++                            libraryGames.push_back(*catalogGame);
++                        }
++                    }
++                    libraryNotice = ui(
++                        "Agregado a Mis juegos. Presiona A otra vez para jugar.",
++                        "Added to My games. Press A again to play.");
++                    rebuildVisibleGames();
++                } else {
++                    libraryNotice = ui("No se pudo agregar: ",
++                                       "Could not add: ") + completed.error;
++                }
++            } catch (const std::exception& error) {
++                libraryNotice = error.what();
++            }
++            gameActionInFlight = false;
++            gameActionId = 0;
++        }
++
+         if (!hasSession && (kDown & HidNpadButton_Y)) {
+             createNewQr();
+         }
+@@ -832,7 +1117,7 @@ int main(int argc, char* argv[]) {
+                 selectedSettingsRow = std::max(0, selectedSettingsRow - 1);
+             }
+             if (kDown & HidNpadButton_Down) {
+-                selectedSettingsRow = std::min(4, selectedSettingsRow + 1);
++                selectedSettingsRow = std::min(5, selectedSettingsRow + 1);
+             }
+             if (selectedSettingsRow == 0 && serverConfigReady &&
+                 (kDown & (HidNpadButton_Left | HidNpadButton_Right |
+@@ -851,14 +1136,27 @@ int main(int argc, char* argv[]) {
+                     serverSettings.xboxFaceLayout;
+                 stream->set_xbox_face_layout(serverSettings.xboxFaceLayout);
+                 stream->set_quick_menu_state(quickMenuState);
+-                save_server_settings(serverSettings);
++                persistQuickMenu();
+                 libraryNotice = serverSettings.xboxFaceLayout
+                     ? ui("Controles configurados con disposicion fisica Xbox.",
+                          "Controls now use the physical Xbox layout.")
+                     : ui("Controles configurados con etiquetas Nintendo.",
+                          "Controls now use Nintendo button labels.");
+             }
+-            if (selectedSettingsRow == 2 && locationCount > 0) {
++            if (selectedSettingsRow == 2 &&
++                (kDown & (HidNpadButton_Left | HidNpadButton_Right |
++                          HidNpadButton_A))) {
++                const int direction = (kDown & HidNpadButton_Left) ? -1 : 1;
++                serverSettings.resolutionMode =
++                    (serverSettings.resolutionMode + direction + 4) % 4;
++                quickMenuState.resolutionMode = serverSettings.resolutionMode;
++                stream->set_quick_menu_state(quickMenuState);
++                persistQuickMenu();
++                libraryNotice = ui(
++                    "La resolucion se aplicara al iniciar el proximo juego.",
++                    "The resolution applies when the next game starts.");
++            }
++            if (selectedSettingsRow == 3 && locationCount > 0) {
+                 if ((kDown & HidNpadButton_Left) && selectedLocation > 0) {
+                     --selectedLocation;
+                 }
+@@ -869,7 +1167,7 @@ int main(int argc, char* argv[]) {
+             }
+             if ((kDown & HidNpadButton_Y) && !serverConfigInFlight &&
+                 !serverSaveInFlight) startServerConfigLoad();
+-            if (selectedSettingsRow == 2 &&
++            if (selectedSettingsRow == 3 &&
+                 (kDown & HidNpadButton_A) && serverConfigReady &&
+                 !serverConfigInFlight && !serverSaveInFlight) {
+                 serverSettings.preferredLocationId = selectedLocation == 0
+@@ -880,7 +1178,7 @@ int main(int argc, char* argv[]) {
+                 save_server_settings(serverSettings);
+                 startServerSave();
+             }
+-            if (selectedSettingsRow == 3 &&
++            if (selectedSettingsRow == 4 &&
+                 (kDown & (HidNpadButton_Left | HidNpadButton_Right |
+                           HidNpadButton_A))) {
+                 serverSettings.language = serverSettings.language == 0 ? 1 : 0;
+@@ -888,7 +1186,7 @@ int main(int argc, char* argv[]) {
+                 libraryNotice = ui("Idioma cambiado a Espanol.",
+                                    "Language changed to English.");
+             }
+-            if (selectedSettingsRow == 4 && (kDown & HidNpadButton_A)) {
++            if (selectedSettingsRow == 5 && (kDown & HidNpadButton_A)) {
+                 logout();
+             }
+             if (kDown & HidNpadButton_B) settingsOpen = false;
+@@ -902,18 +1200,18 @@ int main(int argc, char* argv[]) {
+         }
+ 
+         if (!settingsOpen && !launchPanel && hasSession && libraryReady &&
+-            libraryOk) {
+-            constexpr std::size_t kColumns = 5;
+-            constexpr std::size_t kPageSize = 10;
++            (libraryOk || catalogOk)) {
++            constexpr std::size_t kColumns = 4;
++            constexpr std::size_t kPageSize = 8;
+             if (kDown & HidNpadButton_ZL) {
+                 const int tab = static_cast<int>(libraryTab);
+-                libraryTab = static_cast<LibraryTab>((tab + 2) % 3);
++                libraryTab = static_cast<LibraryTab>((tab + 4) % 5);
+                 selectedGame = 0;
+                 rebuildVisibleGames();
+             }
+             if (kDown & HidNpadButton_ZR) {
+                 const int tab = static_cast<int>(libraryTab);
+-                libraryTab = static_cast<LibraryTab>((tab + 1) % 3);
++                libraryTab = static_cast<LibraryTab>((tab + 1) % 5);
+                 selectedGame = 0;
+                 rebuildVisibleGames();
+             }
+@@ -927,10 +1225,12 @@ int main(int argc, char* argv[]) {
+                 startLibraryLoad();
+             }
+             if (!visibleGames.empty() && (kDown & HidNpadButton_X)) {
+-                const auto& game = libraryGames[visibleGames[selectedGame]];
++                ZERODROID::GameItem* game =
++                    gameFromVisible(visibleGames[selectedGame]);
++                if (!game) continue;
+                 const bool wasFavorite = contains_game_id(
+-                    serverSettings.favoriteGameIds, game.id);
+-                toggle_game_id(serverSettings.favoriteGameIds, game.id);
++                    serverSettings.favoriteGameIds, game->id);
++                toggle_game_id(serverSettings.favoriteGameIds, game->id);
+                 save_server_settings(serverSettings);
+                 libraryNotice = wasFavorite
+                     ? ui("Quitado de Favoritos.", "Removed from Favorites.")
+@@ -963,10 +1263,15 @@ int main(int argc, char* argv[]) {
+                 selectedGame += kPageSize;
+             }
+             if (!visibleGames.empty() && (kDown & HidNpadButton_A)) {
+-                const ZERODROID::GameItem& game =
+-                    libraryGames[visibleGames[selectedGame]];
+-                launchingTitle = game.title;
+-                launchingGameId = game.id;
++                ZERODROID::GameItem* game =
++                    gameFromVisible(visibleGames[selectedGame]);
++                if (!game) continue;
++                if (!game->isInstalled) {
++                    startAddToLibrary(*game);
++                    continue;
++                }
++                launchingTitle = game->title;
++                launchingGameId = game->id;
+                 libraryNotice.clear();
+                 launchPanel = true;
+                 quickMenuState.open = false;
+@@ -974,7 +1279,9 @@ int main(int argc, char* argv[]) {
+                     serverSettings.xboxFaceLayout;
+                 stream->set_xbox_face_layout(serverSettings.xboxFaceLayout);
+                 stream->set_quick_menu_state(quickMenuState);
+-                stream->start(game.id);
++                const auto dimensions = stream_dimensions(
++                    serverSettings.resolutionMode);
++                stream->start(game->id, dimensions.first, dimensions.second);
+             }
+         }
+ 
+@@ -1016,76 +1323,100 @@ int main(int argc, char* argv[]) {
+                 gfx.fill(cardRect, gnx::gfx::kSurface);
+                 gfx.frame(cardRect, gnx::gfx::kChipEdge, 2);
+                 gfx.text(ui("CONFIGURACION DE ZERODROID", "ZERODROID SETTINGS"),
+-                         220, 155,
+-                         gnx::gfx::FontSize::Title, gnx::gfx::kText);
+-
+-                SDL_Rect distantRow = {205, 205, 1510, 100};
+-                gfx.fill(distantRow, selectedSettingsRow == 0
+-                    ? gnx::gfx::kSurfaceHi : gnx::gfx::kChip);
+-                gfx.frame(distantRow, selectedSettingsRow == 0
+-                    ? gnx::gfx::kFocus : gnx::gfx::kChipEdge,
+-                    selectedSettingsRow == 0 ? 3 : 1);
+-                gfx.text(ui("Permitir conexion a regiones lejanas",
+-                            "Allow connections to distant regions"),
+-                         245, 218, gnx::gfx::FontSize::Body, gnx::gfx::kText);
+-                gfx.text(ui("Ofrece mas maquinas, con posible aumento de latencia.",
+-                            "Finds more machines, potentially with higher latency."),
+-                         245, 266, gnx::gfx::FontSize::Small,
++                         220, 150, gnx::gfx::FontSize::Title,
++                         gnx::gfx::kText);
++
++                const auto drawSettingsRow = [&](const SDL_Rect& row,
++                                                 int index,
++                                                 gnx::gfx::Color selectedColor =
++                                                     gnx::gfx::kSurfaceHi) {
++                    gfx.fill(row, selectedSettingsRow == index
++                        ? selectedColor : gnx::gfx::kChip);
++                    gfx.frame(row, selectedSettingsRow == index
++                        ? gnx::gfx::kFocus : gnx::gfx::kChipEdge,
++                        selectedSettingsRow == index ? 3 : 1);
++                };
++
++                SDL_Rect distantRow = {205, 205, 1510, 82};
++                drawSettingsRow(distantRow, 0);
++                gfx.text(ui("Permitir regiones lejanas",
++                            "Allow distant regions"),
++                         245, 214, gnx::gfx::FontSize::Body,
++                         gnx::gfx::kText);
++                gfx.text(ui("Mas disponibilidad, con posible aumento de latencia.",
++                            "More availability, potentially with higher latency."),
++                         245, 252, gnx::gfx::FontSize::Small,
+                          gnx::gfx::kTextDim);
+-                SDL_Rect toggleTrack = {1550, 232, 100, 46};
++                SDL_Rect toggleTrack = {1550, 222, 100, 46};
+                 gfx.fill(toggleTrack, serverSettings.allowDistantRegions
+                     ? gnx::gfx::Color{16, 150, 95}
+                     : gnx::gfx::Color{70, 74, 88});
+                 SDL_Rect toggleKnob = {
+                     serverSettings.allowDistantRegions ? 1608 : 1556,
+-                    238, 34, 34};
++                    228, 34, 34};
+                 gfx.fill(toggleKnob, gnx::gfx::kText);
+ 
+-                SDL_Rect controllerRow = {205, 320, 1510, 100};
+-                gfx.fill(controllerRow, selectedSettingsRow == 1
+-                    ? gnx::gfx::kSurfaceHi : gnx::gfx::kChip);
+-                gfx.frame(controllerRow, selectedSettingsRow == 1
+-                    ? gnx::gfx::kFocus : gnx::gfx::kChipEdge,
+-                    selectedSettingsRow == 1 ? 3 : 1);
++                SDL_Rect controllerRow = {205, 300, 1510, 82};
++                drawSettingsRow(controllerRow, 1);
+                 gfx.text(ui("Disposicion de botones A / B / X / Y",
+                             "A / B / X / Y button layout"),
+-                         245, 333,
+-                         gnx::gfx::FontSize::Body, gnx::gfx::kText);
++                         245, 309, gnx::gfx::FontSize::Body,
++                         gnx::gfx::kText);
+                 gfx.text(serverSettings.xboxFaceLayout
+-                             ? ui("Xbox: coincide con la posicion fisica del mando Xbox.",
+-                                  "Xbox: matches the physical Xbox controller layout.")
+-                             : ui("Nintendo: conserva las letras impresas en la Switch.",
+-                                  "Nintendo: keeps the letters printed on the Switch."),
+-                         245, 381,
+-                         gnx::gfx::FontSize::Small, gnx::gfx::kTextDim);
+-                SDL_Rect layoutChip = {1390, 340, 260, 60};
++                             ? ui("Xbox: coincide con la posicion fisica del mando.",
++                                  "Xbox: matches the controller's physical positions.")
++                             : ui("Nintendo: conserva las letras de la consola.",
++                                  "Nintendo: keeps the console's printed labels."),
++                         245, 347, gnx::gfx::FontSize::Small,
++                         gnx::gfx::kTextDim);
++                SDL_Rect layoutChip = {1390, 311, 260, 58};
+                 gfx.fill(layoutChip, serverSettings.xboxFaceLayout
+                     ? gnx::gfx::Color{16, 110, 80} : gnx::gfx::kBar);
+                 gfx.frame(layoutChip, gnx::gfx::kFocus, 2);
+-                gfx.text_centered(serverSettings.xboxFaceLayout ? "XBOX" : "NINTENDO",
++                gfx.text_centered(serverSettings.xboxFaceLayout
++                                      ? "XBOX" : "NINTENDO",
+                                   layoutChip.x + layoutChip.w / 2,
+-                                  layoutChip.y + 16,
++                                  layoutChip.y + 14,
+                                   gnx::gfx::FontSize::Small,
+                                   gnx::gfx::kText);
+ 
+-                SDL_Rect locationRow = {205, 435, 1510, 155};
+-                gfx.fill(locationRow, selectedSettingsRow == 2
+-                    ? gnx::gfx::kSurfaceHi : gnx::gfx::kChip);
+-                gfx.frame(locationRow, selectedSettingsRow == 2
+-                    ? gnx::gfx::kFocus : gnx::gfx::kChipEdge,
+-                    selectedSettingsRow == 2 ? 3 : 1);
++                SDL_Rect resolutionRow = {205, 395, 1510, 96};
++                drawSettingsRow(resolutionRow, 2);
++                gfx.text(ui("Resolucion de streaming",
++                            "Streaming resolution"),
++                         245, 404, gnx::gfx::FontSize::Body,
++                         gnx::gfx::kText);
++                gfx.text(ui("1440p recibe mas detalle y lo reduce a la pantalla; es experimental.",
++                            "1440p receives extra detail and downsamples it; experimental."),
++                         245, 444, gnx::gfx::FontSize::Small,
++                         gnx::gfx::kTextDim);
++                SDL_Rect resolutionChip = {1030, 410, 620, 62};
++                gfx.fill(resolutionChip, gnx::gfx::kBar);
++                gfx.frame(resolutionChip, gnx::gfx::kFocus, 2);
++                gfx.text("<", 1052, 421, gnx::gfx::FontSize::Body,
++                         gnx::gfx::kFocus);
++                gfx.text_centered(
++                    resolution_label(serverSettings.resolutionMode,
++                                     serverSettings.language == 1),
++                    resolutionChip.x + resolutionChip.w / 2,
++                    resolutionChip.y + 16,
++                    gnx::gfx::FontSize::Small, gnx::gfx::kText);
++                gfx.text(">", 1610, 421, gnx::gfx::FontSize::Body,
++                         gnx::gfx::kFocus);
++
++                SDL_Rect locationRow = {205, 505, 1510, 125};
++                drawSettingsRow(locationRow, 3);
+                 gfx.text(ui("Ubicacion de servidor preferida",
+                             "Preferred server location"),
+-                         245, 446,
+-                         gnx::gfx::FontSize::Body, gnx::gfx::kText);
+-                gfx.text(ui("Se aplicara en el proximo inicio del juego.",
++                         245, 516, gnx::gfx::FontSize::Body,
++                         gnx::gfx::kText);
++                gfx.text(ui("Se aplica en el proximo inicio del juego.",
+                             "Applies the next time a game starts."),
+-                         245, 488,
+-                         gnx::gfx::FontSize::Small, gnx::gfx::kTextDim);
+-                gfx.text(ui("(Y) ACTUALIZAR", "(Y) REFRESH"), 1425, 449,
++                         245, 556, gnx::gfx::FontSize::Small,
++                         gnx::gfx::kTextDim);
++                gfx.text(ui("(Y) ACTUALIZAR", "(Y) REFRESH"), 1425, 516,
+                          gnx::gfx::FontSize::Small, gnx::gfx::kFocus);
+-
+-                SDL_Rect locationSelect = {245, 520, 650, 55};
++                SDL_Rect locationSelect = {880, 558, 770, 55};
+                 gfx.fill(locationSelect, gnx::gfx::kBar);
+                 gfx.frame(locationSelect, gnx::gfx::kChipEdge, 2);
+                 std::string locationLabel = ui("Automatico (recomendado)",
+@@ -1098,67 +1429,64 @@ int main(int argc, char* argv[]) {
+                         locationLabel += " (" + location.country + ")";
+                     }
+                 }
+-                gfx.text("<", 275, 526, gnx::gfx::FontSize::Body,
++                gfx.text("<", 902, 565, gnx::gfx::FontSize::Body,
+                          gnx::gfx::kFocus);
+-                gfx.text(fit_text(gfx, locationLabel, 500), 335, 526,
+-                         gnx::gfx::FontSize::Body, gnx::gfx::kText);
+-                gfx.text(">", 845, 526, gnx::gfx::FontSize::Body,
++                gfx.text_centered(fit_text(gfx, locationLabel, 620),
++                                  locationSelect.x + locationSelect.w / 2,
++                                  locationSelect.y + 13,
++                                  gnx::gfx::FontSize::Small,
++                                  gnx::gfx::kText);
++                gfx.text(">", 1610, 565, gnx::gfx::FontSize::Body,
+                          gnx::gfx::kFocus);
+ 
+-                SDL_Rect languageRow = {205, 605, 1510, 100};
+-                gfx.fill(languageRow, selectedSettingsRow == 3
+-                    ? gnx::gfx::kSurfaceHi : gnx::gfx::kChip);
+-                gfx.frame(languageRow, selectedSettingsRow == 3
+-                    ? gnx::gfx::kFocus : gnx::gfx::kChipEdge,
+-                    selectedSettingsRow == 3 ? 3 : 1);
++                SDL_Rect languageRow = {205, 645, 1510, 82};
++                drawSettingsRow(languageRow, 4);
+                 gfx.text(ui("Idioma de la interfaz", "Interface language"),
+-                         245, 618, gnx::gfx::FontSize::Body, gnx::gfx::kText);
+-                gfx.text(ui("Cambia inmediatamente y se guarda para el proximo inicio.",
+-                            "Changes immediately and is saved for the next launch."),
+-                         245, 666, gnx::gfx::FontSize::Small,
++                         245, 654, gnx::gfx::FontSize::Body,
++                         gnx::gfx::kText);
++                gfx.text(ui("Se guarda para el proximo inicio.",
++                            "Saved for the next launch."),
++                         245, 692, gnx::gfx::FontSize::Small,
+                          gnx::gfx::kTextDim);
+-                SDL_Rect languageChip = {1390, 625, 260, 60};
++                SDL_Rect languageChip = {1390, 656, 260, 58};
+                 gfx.fill(languageChip, gnx::gfx::kBar);
+                 gfx.frame(languageChip, gnx::gfx::kFocus, 2);
+                 gfx.text_centered(serverSettings.language == 1
+                                       ? "ENGLISH" : "ESPANOL",
+                                   languageChip.x + languageChip.w / 2,
+-                                  languageChip.y + 16,
++                                  languageChip.y + 14,
+                                   gnx::gfx::FontSize::Small,
+                                   gnx::gfx::kText);
+ 
+-                SDL_Rect logoutRow = {205, 720, 1510, 90};
+-                gfx.fill(logoutRow, selectedSettingsRow == 4
+-                    ? gnx::gfx::Color{72, 32, 48} : gnx::gfx::kChip);
+-                gfx.frame(logoutRow, selectedSettingsRow == 4
+-                    ? gnx::gfx::kError : gnx::gfx::kChipEdge,
+-                    selectedSettingsRow == 4 ? 3 : 1);
+-                gfx.text(ui("Cerrar sesion", "Sign out"), 245, 733,
++                SDL_Rect logoutRow = {205, 742, 1510, 72};
++                drawSettingsRow(logoutRow, 5,
++                                gnx::gfx::Color{72, 32, 48});
++                gfx.text(ui("Cerrar sesion", "Sign out"), 245, 754,
+                          gnx::gfx::FontSize::Body, gnx::gfx::kText);
+-                gfx.text(ui("Tus favoritos y recientes permanecen guardados en la consola.",
+-                            "Favorites and recent games remain saved on this console."),
+-                         245, 778, gnx::gfx::FontSize::Small,
++                gfx.text(ui("Favoritos y recientes permanecen en la consola.",
++                            "Favorites and recent games remain on the console."),
++                         520, 761, gnx::gfx::FontSize::Small,
+                          gnx::gfx::kTextDim);
+-                gfx.text("(A)", 1570, 742, gnx::gfx::FontSize::Body,
++                gfx.text("(A)", 1570, 754, gnx::gfx::FontSize::Body,
+                          gnx::gfx::kError);
+ 
+                 if (serverConfigInFlight) {
+                     gfx.text(ui("Cargando ubicaciones oficiales de Boosteroid...",
+                                 "Loading official Boosteroid locations..."),
+-                             220, 850, gnx::gfx::FontSize::Small,
++                             220, 844, gnx::gfx::FontSize::Small,
+                              gnx::gfx::kWarn);
+                 } else if (serverSaveInFlight) {
+                     gfx.text(ui("Guardando en tu cuenta de Boosteroid...",
+                                 "Saving to your Boosteroid account..."),
+-                             220, 850, gnx::gfx::FontSize::Small,
++                             220, 844, gnx::gfx::FontSize::Small,
+                              gnx::gfx::kWarn);
+                 } else if (!serverConfigError.empty()) {
+-                    gfx.text(fit_text(gfx, serverConfigError, 1450), 220, 850,
++                    gfx.text(fit_text(gfx, serverConfigError, 1450), 220, 844,
+                              gnx::gfx::FontSize::Small, gnx::gfx::kError);
+                 } else {
+                     gfx.text(ui("Izquierda/derecha cambia; (A) selecciona o guarda.",
+                                 "Left/right changes; (A) selects or saves."),
+-                             220, 850, gnx::gfx::FontSize::Small,
++                             220, 844, gnx::gfx::FontSize::Small,
+                              gnx::gfx::kTextDim);
+                 }
+             } else if (launchPanel) {
+@@ -1193,9 +1521,17 @@ int main(int argc, char* argv[]) {
+                         : ui(" | solo mi region", " | my region only"));
+                 gfx.text(fit_text(gfx, route, 1240), 330, 570,
+                          gnx::gfx::FontSize::Small, gnx::gfx::kTextDim);
++                const auto dimensions = stream_dimensions(
++                    serverSettings.resolutionMode);
++                const std::string videoMode = std::string(
++                    ui("Video solicitado: ", "Requested video: ")) +
++                    std::to_string(dimensions.first) + "x" +
++                    std::to_string(dimensions.second);
++                gfx.text(videoMode, 330, 610,
++                         gnx::gfx::FontSize::Small, gnx::gfx::kFocus);
+                 gfx.text(ui("La asignacion de una maquina puede tardar varios minutos.",
+                             "Machine assignment may take several minutes."),
+-                         330, 650, gnx::gfx::FontSize::Small,
++                         330, 665, gnx::gfx::FontSize::Small,
+                          gnx::gfx::kTextDim);
+                 gfx.text(ui("(B) Cancelar / volver a la biblioteca",
+                             "(B) Cancel / return to library"), 330, 745,
+@@ -1211,19 +1547,19 @@ int main(int argc, char* argv[]) {
+                 gfx.text(ui("Sesion iniciada correctamente",
+                             "Signed in successfully"), 220, 220,
+                          gnx::gfx::FontSize::Title, gnx::gfx::kFocus);
+-                gfx.text(std::string(ui("Cargando tu biblioteca",
+-                                        "Loading your library")) +
++                gfx.text(std::string(ui("Cargando Mis juegos y el catalogo completo",
++                                        "Loading My games and the full catalog")) +
+                              std::string(dotCount, '.'), 220, 310,
+-                         gnx::gfx::FontSize::Body, gnx::gfx::kText);
+-                gfx.text(ui("Consultando tus juegos sin bloquear la interfaz.",
+-                            "Fetching your games without freezing the interface."),
++                          gnx::gfx::FontSize::Body, gnx::gfx::kText);
++                gfx.text(ui("Cargando todas las paginas; puede tardar unos segundos.",
++                            "Loading every page; this may take a few seconds."),
+                          220, 390,
+                          gnx::gfx::FontSize::Body, gnx::gfx::kTextDim);
+                 if (!libraryNotice.empty()) {
+                     gfx.text(fit_text(gfx, libraryNotice, 1450), 220, 470,
+                              gnx::gfx::FontSize::Small, gnx::gfx::kWarn);
+                 }
+-            } else if (!libraryOk) {
++            } else if (!libraryOk && !catalogOk) {
+                 SDL_Rect cardRect = {160, 150, 1600, 780};
+                 gfx.fill(cardRect, gnx::gfx::kSurface);
+                 gfx.frame(cardRect, gnx::gfx::kError, 3);
+@@ -1236,45 +1572,54 @@ int main(int argc, char* argv[]) {
+                 gfx.text(ui("Presiona (Y) para reintentar o entra en Settings para cerrar sesion.",
+                             "Press (Y) to retry or open Settings to sign out."),
+                          220, 420, gnx::gfx::FontSize::Body, gnx::gfx::kTextDim);
+-            } else if (libraryGames.empty()) {
++            } else if (libraryGames.empty() && catalogGames.empty() &&
++                       libraryOk && catalogOk) {
+                 SDL_Rect cardRect = {160, 150, 1600, 780};
+                 gfx.fill(cardRect, gnx::gfx::kSurface);
+                 gfx.frame(cardRect, gnx::gfx::kFocus, 2);
+                 gfx.text(ui("Tu biblioteca esta conectada",
+                             "Your library is connected"), 220, 220,
+                          gnx::gfx::FontSize::Title, gnx::gfx::kFocus);
+-                gfx.text(ui("Boosteroid no devolvio juegos instalados en esta cuenta.",
+-                            "Boosteroid returned no installed games for this account."),
++                gfx.text(ui("Boosteroid no devolvio juegos ni catalogo para esta cuenta.",
++                            "Boosteroid returned no games or catalog for this account."),
+                          220, 320, gnx::gfx::FontSize::Body, gnx::gfx::kText);
+-                gfx.text(ui("Agrega juegos a Mi biblioteca y presiona R3 para recargar.",
+-                            "Add games to My Library and press R3 to refresh."),
++                gfx.text(ui("Presiona R3 para volver a consultar todas las paginas.",
++                            "Press R3 to query every page again."),
+                          220, 400, gnx::gfx::FontSize::Body, gnx::gfx::kTextDim);
+             } else {
+-                constexpr int kColumns = 5;
++                constexpr int kColumns = 4;
+                 constexpr int kRows = 2;
+                 constexpr int kPageSize = kColumns * kRows;
+-                constexpr int kCardWidth = 288;
+-                constexpr int kCardHeight = 305;
+-                constexpr int kGapX = 20;
+-                constexpr int kGapY = 20;
+-                constexpr int kGridX = 200;
+-                constexpr int kGridY = 280;
+-
+-                const std::string owner = libraryUser.nickname.empty()
+-                    ? ui("Mi biblioteca", "My library")
+-                    : std::string(ui("Biblioteca de ", "Library of ")) +
+-                          libraryUser.nickname;
++                constexpr int kCardWidth = 372;
++                constexpr int kCardHeight = 310;
++                constexpr int kGapX = 24;
++                constexpr int kGapY = 24;
++                constexpr int kGridX = 180;
++                constexpr int kGridY = 276;
++
++                const bool catalogView =
++                    libraryTab == LibraryTab::Catalog ||
++                    libraryTab == LibraryTab::InstallAndPlay;
++                const std::size_t sourceTotal = catalogView
++                    ? catalogGames.size() : libraryGames.size();
++                const std::string owner = catalogView
++                    ? ui("Catalogo completo de Boosteroid",
++                         "Full Boosteroid catalog")
++                    : (libraryUser.nickname.empty()
++                        ? ui("Mis juegos", "My games")
++                        : std::string(ui("Juegos de ", "Games of ")) +
++                              libraryUser.nickname);
+                 gfx.text(owner, 180, 112, gnx::gfx::FontSize::Title,
+                          gnx::gfx::kText);
+                 gfx.text(std::to_string(visibleGames.size()) + " / " +
+-                             std::to_string(libraryGames.size()) + " " +
++                             std::to_string(sourceTotal) + " " +
+                              ui("juegos", "games"),
+                          1440, 118,
+                          gnx::gfx::FontSize::Body, gnx::gfx::kFocus);
+ 
+                 const auto drawTab = [&](LibraryTab tab, int x,
+                                          const std::string& label) {
+-                    SDL_Rect tabRect = {x, 160, 215, 48};
++                    SDL_Rect tabRect = {x, 160, 170, 48};
+                     const bool active = libraryTab == tab;
+                     gfx.fill(tabRect, active ? gnx::gfx::kSurfaceHi
+                                              : gnx::gfx::kChip);
+@@ -1287,13 +1632,18 @@ int main(int argc, char* argv[]) {
+                                       active ? gnx::gfx::kText
+                                              : gnx::gfx::kTextDim);
+                 };
+-                drawTab(LibraryTab::All, 180, ui("TODOS", "ALL"));
+-                drawTab(LibraryTab::Favorites, 410,
++                drawTab(LibraryTab::MyGames, 180,
++                        ui("MIS JUEGOS", "MY GAMES"));
++                drawTab(LibraryTab::Favorites, 365,
+                         ui("FAVORITOS", "FAVORITES"));
+-                drawTab(LibraryTab::Recent, 640,
++                drawTab(LibraryTab::Recent, 550,
+                         ui("RECIENTES", "RECENT"));
++                drawTab(LibraryTab::Catalog, 735,
++                        ui("CATALOGO", "CATALOG"));
++                drawTab(LibraryTab::InstallAndPlay, 920,
++                        ui("INSTALAR", "INSTALL"));
+ 
+-                SDL_Rect searchRect = {900, 160, 840, 48};
++                SDL_Rect searchRect = {1120, 160, 620, 48};
+                 gfx.fill(searchRect, gnx::gfx::kBar);
+                 gfx.frame(searchRect, searchQuery.empty()
+                     ? gnx::gfx::kChipEdge : gnx::gfx::kFocus, 2);
+@@ -1306,8 +1656,8 @@ int main(int argc, char* argv[]) {
+                          searchQuery.empty() ? gnx::gfx::kTextDim
+                                              : gnx::gfx::kText);
+ 
+-                gfx.text(ui("ZL/ZR: pestana   L/R: pagina   A: jugar   X: favorito   R3: recargar",
+-                            "ZL/ZR: tab   L/R: page   A: play   X: favorite   R3: refresh"),
++                gfx.text(ui("ZL/ZR: seccion   L/R: pagina   A: jugar/agregar   X: favorito   R3: recargar",
++                            "ZL/ZR: section   L/R: page   A: play/add   X: favorite   R3: refresh"),
+                          180, 225, gnx::gfx::FontSize::Small,
+                          gnx::gfx::kTextDim);
+ 
+@@ -1317,7 +1667,21 @@ int main(int argc, char* argv[]) {
+                     gfx.frame(emptyRect, gnx::gfx::kChipEdge, 2);
+                     std::string emptyTitle;
+                     std::string emptyHelp;
+-                    if (!searchQuery.empty()) {
++                    if (catalogView && !catalogOk) {
++                        emptyTitle = ui("No se pudo cargar el catalogo completo",
++                                        "Could not load the full catalog");
++                        emptyHelp = catalogError.empty()
++                            ? ui("Presiona R3 para reintentar.",
++                                 "Press R3 to retry.")
++                            : catalogError;
++                    } else if (!catalogView && !libraryOk) {
++                        emptyTitle = ui("No se pudo cargar Mis juegos",
++                                        "Could not load My games");
++                        emptyHelp = libraryError.empty()
++                            ? ui("Presiona R3 para reintentar.",
++                                 "Press R3 to retry.")
++                            : libraryError;
++                    } else if (!searchQuery.empty()) {
+                         emptyTitle = ui("No encontramos juegos con esa busqueda",
+                                         "No games matched your search");
+                         emptyHelp = ui("Presiona (Y) y borra el texto para mostrar todo.",
+@@ -1325,13 +1689,28 @@ int main(int argc, char* argv[]) {
+                     } else if (libraryTab == LibraryTab::Favorites) {
+                         emptyTitle = ui("Todavia no tienes favoritos",
+                                         "You do not have favorites yet");
+-                        emptyHelp = ui("En Todos o Recientes, presiona (X) sobre un juego.",
+-                                       "In All or Recent, press (X) on a game.");
+-                    } else {
++                        emptyHelp = ui("En cualquier seccion, presiona (X) sobre un juego.",
++                                       "Press (X) on a game in any section.");
++                    } else if (libraryTab == LibraryTab::Recent) {
+                         emptyTitle = ui("Todavia no hay juegos recientes",
+                                         "There are no recent games yet");
+                         emptyHelp = ui("Los juegos apareceran aqui cuando los inicies.",
+                                        "Games appear here after you launch them.");
++                    } else if (libraryTab == LibraryTab::InstallAndPlay) {
++                        emptyTitle = ui("No se encontro la coleccion Instalar y jugar",
++                                        "No Install and Play collection was found");
++                        emptyHelp = ui("El catalogo completo sigue disponible en CATALOGO.",
++                                       "The full catalog remains available in CATALOG.");
++                    } else if (libraryTab == LibraryTab::Catalog) {
++                        emptyTitle = ui("El catalogo esta vacio",
++                                        "The catalog is empty");
++                        emptyHelp = ui("Presiona R3 para volver a consultar Boosteroid.",
++                                       "Press R3 to query Boosteroid again.");
++                    } else {
++                        emptyTitle = ui("Todavia no hay juegos en Mis juegos",
++                                        "There are no games in My games yet");
++                        emptyHelp = ui("Abre CATALOGO y presiona A para agregar uno.",
++                                       "Open CATALOG and press A to add one.");
+                     }
+                     gfx.text_centered(emptyTitle,
+                                       emptyRect.x + emptyRect.w / 2,
+@@ -1367,26 +1746,32 @@ int main(int argc, char* argv[]) {
+                                                  : gnx::gfx::kChipEdge,
+                                   selected ? 4 : 2);
+ 
+-                        const ZERODROID::GameItem& game =
+-                            libraryGames[visibleGames[index]];
+-                        const std::string& coverUrl = game.posterUrl.empty()
+-                            ? game.bannerUrl
+-                            : game.posterUrl;
+-                        const std::string coverKey = std::to_string(game.id);
++                        ZERODROID::GameItem* gamePtr =
++                            gameFromVisible(visibleGames[index]);
++                        if (!gamePtr) continue;
++                        const ZERODROID::GameItem& game = *gamePtr;
++                        // Cards are horizontal, so use Boosteroid's banner/hero
++                        // artwork first. The v084 cache namespace prevents old
++                        // low-resolution portrait downloads from being reused.
++                        const std::string& coverUrl = game.bannerUrl.empty()
++                            ? game.posterUrl
++                            : game.bannerUrl;
++                        const std::string coverKey =
++                            "v084-banner-" + std::to_string(game.id);
+                         SDL_Rect coverRect = {card.x + 8, card.y + 8,
+-                                              card.w - 16, 190};
++                                              card.w - 16, 174};
++                        gfx.fill(coverRect, gnx::gfx::kChip);
+                         SDL_Texture* cover = covers->get(coverKey, coverUrl);
+                         if (cover) {
+                             draw_cover_texture(gfx.renderer(), cover, coverRect);
+                         } else {
+-                            gfx.fill(coverRect, gnx::gfx::kChip);
+                             const bool unavailable = coverUrl.empty() ||
+                                                      covers->has_result(coverKey);
+                             gfx.text_centered(
+                                 unavailable ? ui("Sin caratula", "No cover")
+                                             : ui("Cargando imagen", "Loading image"),
+                                 coverRect.x + coverRect.w / 2,
+-                                coverRect.y + 70,
++                                coverRect.y + 68,
+                                 gnx::gfx::FontSize::Small,
+                                 gnx::gfx::kFaint);
+                         }
+@@ -1404,15 +1789,46 @@ int main(int argc, char* argv[]) {
+                                               gnx::gfx::kText);
+                         }
+ 
+-                        gfx.text(fit_text(gfx, game.title, card.w - 22),
+-                                 card.x + 11, card.y + 208,
+-                                 gnx::gfx::FontSize::Small,
+-                                 gnx::gfx::kText);
++                        if (catalogView) {
++                            const char* chipText =
++                                gameActionInFlight && game.id == gameActionId
++                                    ? ui("AGREGANDO", "ADDING")
++                                    : (game.isInstalled
++                                        ? ui("MI JUEGO", "MY GAME")
++                                        : (game.installAndPlay
++                                            ? ui("INSTALAR", "INSTALL")
++                                            : (game.isFree
++                                                ? ui("GRATIS", "FREE")
++                                                : ui("LICENCIA", "LICENSE"))));
++                            SDL_Rect stateChip = {
++                                card.x + 12, card.y + 144, 132, 34};
++                            gfx.fill(stateChip, game.isInstalled
++                                ? gnx::gfx::Color{64, 115, 101}
++                                : gnx::gfx::Color{67, 55, 92});
++                            gfx.frame(stateChip, game.isInstalled
++                                ? gnx::gfx::kFocus : gnx::gfx::kChipEdge, 1);
++                            gfx.text_centered(chipText,
++                                              stateChip.x + stateChip.w / 2,
++                                              stateChip.y + 5,
++                                              gnx::gfx::FontSize::Small,
++                                              gnx::gfx::kText);
++                        }
++
++                        const auto titleLines = wrap_text_lines(
++                            gfx, game.title, card.w - 22, 2,
++                            gnx::gfx::FontSize::Small);
++                        for (std::size_t line = 0;
++                             line < titleLines.size(); ++line) {
++                            gfx.text(titleLines[line], card.x + 11,
++                                     card.y + 192 + static_cast<int>(line) * 29,
++                                     gnx::gfx::FontSize::Small,
++                                     gnx::gfx::kText);
++                        }
+                         std::string platform = game.store.empty()
+                             ? game.platform : game.store;
+                         if (platform.empty()) platform = "Boosteroid Cloud";
+                         gfx.text(fit_text(gfx, platform, card.w - 22),
+-                                 card.x + 11, card.y + 258,
++                                 card.x + 11, card.y + 274,
+                                  gnx::gfx::FontSize::Small,
+                                  selected ? gnx::gfx::kFocus
+                                           : gnx::gfx::kTextDim);
+@@ -1424,12 +1840,12 @@ int main(int argc, char* argv[]) {
+                     gfx.text(std::string(ui("Pagina ", "Page ")) +
+                                  std::to_string(page) + " " + ui("de", "of") +
+                                  " " + std::to_string(pages),
+-                             180, 940, gnx::gfx::FontSize::Small,
++                             180, 946, gnx::gfx::FontSize::Small,
+                              gnx::gfx::kTextDim);
+                 }
+ 
+                 if (!libraryNotice.empty()) {
+-                    gfx.text(fit_text(gfx, libraryNotice, 1180), 560, 940,
++                    gfx.text(fit_text(gfx, libraryNotice, 1180), 560, 946,
+                              gnx::gfx::FontSize::Small, gnx::gfx::kWarn);
+                 }
+             }
+@@ -1458,6 +1874,7 @@ int main(int argc, char* argv[]) {
+ 
+     if (pollInFlight) pollFuture.wait();
+     if (libraryInFlight) libraryFuture.wait();
++    if (gameActionInFlight) gameActionFuture.wait();
+     if (serverConfigInFlight) serverConfigFuture.wait();
+     if (serverSaveInFlight) serverSaveFuture.wait();
+     std::fprintf(stderr, "ZERODROID shutting down\n");
+diff --git a/switch/src/switch/stream/dk_video_renderer.cpp b/switch/src/switch/stream/dk_video_renderer.cpp
+index f541f1b..fe5423a 100644
+--- a/switch/src/switch/stream/dk_video_renderer.cpp
++++ b/switch/src/switch/stream/dk_video_renderer.cpp
+@@ -75,12 +75,12 @@ constexpr Vertex kGuideQuad[] = {
+     {{+0.9917f, +0.9852f, 0.0f}, {1.0f, 0.0f}},
+ };
+ 
+-// Transparent 672x812 quick-menu texture in shared 1920x1080 design space.
++// Transparent 672x928 quick-menu texture in shared 1920x1080 design space.
+ // It spans from the panel to the relocated two-dot handle.
+ constexpr Vertex kQuickQuad[] = {
+     {{+0.2083f, +0.9852f, 0.0f}, {0.0f, 0.0f}},
+-    {{+0.2083f, -0.5185f, 0.0f}, {0.0f, 1.0f}},
+-    {{+0.9083f, -0.5185f, 0.0f}, {1.0f, 1.0f}},
++    {{+0.2083f, -0.7333f, 0.0f}, {0.0f, 1.0f}},
++    {{+0.9083f, -0.7333f, 0.0f}, {1.0f, 1.0f}},
+     {{+0.9083f, +0.9852f, 0.0f}, {1.0f, 0.0f}},
+ };
+ 
+@@ -149,7 +149,9 @@ void DkVideoRenderer::set_quick_menu_state(const QuickMenuState& state) {
+     bool menu_changed =
+         next.open != quick_state_.open ||
+         next.performance != quick_state_.performance ||
+-        next.xboxFaceLayout != quick_state_.xboxFaceLayout || picture_changed;
++        next.xboxFaceLayout != quick_state_.xboxFaceLayout ||
++        next.resolutionMode != quick_state_.resolutionMode ||
++        next.picturePreset != quick_state_.picturePreset || picture_changed;
+     quick_state_ = next;
+     hud_enabled_ = next.performance;
+     if (picture_changed) transform_dirty_ = true;
+@@ -850,8 +852,12 @@ void DkVideoRenderer::rasterize_quick_menu() {
+         blit_quick_text("ZERODROID SETTINGS", menu.x + 20, menu.y + 16);
+ 
+         const char* labels[kQuickRowCount] = {
+-            "Performance", "Button layout", "Brightness", "Contrast", "Saturation",
+-            "Gamma", "Sharpness"};
++            "Performance", "Button layout", "Resolution", "Picture preset",
++            "Brightness", "Contrast", "Saturation", "Gamma", "Sharpness"};
++        const char* resolution_labels[4] = {
++            "AUTO", "720P", "1080P", "1440P"};
++        const char* preset_labels[6] = {
++            "NATURAL", "SHARP", "VIVID", "CINEMA", "SOFT", "CUSTOM"};
+         const char* sharp_labels[4] = {"Off", "Low", "Medium", "High"};
+ 
+         for (int row = 0; row < kQuickRowCount; ++row) {
+@@ -882,6 +888,24 @@ void DkVideoRenderer::rasterize_quick_menu() {
+                 continue;
+             }
+ 
++            if (row == QuickResolution || row == QuickPreset) {
++                QuickRect minus = local(quick_minus_rect(row));
++                QuickRect plus = local(quick_plus_rect(row));
++                fill(minus.x, minus.y + 4, minus.w, minus.h - 8,
++                     rgba(42, 49, 60, 240));
++                fill(plus.x, plus.y + 4, plus.w, plus.h - 8,
++                     rgba(42, 49, 60, 240));
++                frame(minus.x, minus.y + 4, minus.w, minus.h - 8, 2, edge);
++                frame(plus.x, plus.y + 4, plus.w, plus.h - 8, 2, edge);
++                blit_quick_text("-", minus.x + 25, minus.y + 10);
++                blit_quick_text("+", plus.x + 22, plus.y + 10);
++                const char* value = row == QuickResolution
++                    ? resolution_labels[quick_state_.resolutionMode]
++                    : preset_labels[quick_state_.picturePreset];
++                blit_quick_text(value, rr.x + 300, rr.y + 12);
++                continue;
++            }
++
+             QuickRect minus = local(quick_minus_rect(row));
+             QuickRect plus = local(quick_plus_rect(row));
+             fill(minus.x, minus.y + 4, minus.w, minus.h - 8, rgba(42, 49, 60, 240));
+@@ -907,14 +931,14 @@ void DkVideoRenderer::rasterize_quick_menu() {
+             blit_quick_text(value, rr.x + 300, rr.y + 12);
+         }
+ 
+-        QuickRect warning_box = local({1180, 632, 468, 88});
++        QuickRect warning_box = local(kQuickNoticeRect);
+         fill(warning_box.x, warning_box.y, warning_box.w, warning_box.h,
+              rgba(45, 39, 61, 245));
+         frame(warning_box.x, warning_box.y, warning_box.w, warning_box.h, 2,
+               accent);
+-        blit_quick_text("SERVER & REGION", warning_box.x + 14,
++        blit_quick_text("RESOLUTION", warning_box.x + 14,
+                         warning_box.y + 6);
+-        blit_quick_text("Configure from library with Minus",
++        blit_quick_text("Applies on the next game launch",
+                         warning_box.x + 14, warning_box.y + 44);
+ 
+         QuickRect reset = local(kQuickResetRect);
+diff --git a/switch/src/switch/stream/dk_video_renderer.hpp b/switch/src/switch/stream/dk_video_renderer.hpp
+index 9daf584..ccdba2e 100644
+--- a/switch/src/switch/stream/dk_video_renderer.hpp
++++ b/switch/src/switch/stream/dk_video_renderer.hpp
+@@ -238,7 +238,7 @@ private:
+     // One transparent RGBA texture covers both shapes and costs one overlay
+     // draw call regardless of whether the panel is open.
+     static constexpr uint32_t kQuickTexW = 672;
+-    static constexpr uint32_t kQuickTexH = 812;
++    static constexpr uint32_t kQuickTexH = 928;
+     dk::UniqueMemBlock quick_memblock_;
+     dk::Image quick_image_;
+     dk::ImageDescriptor quick_desc_;
+diff --git a/switch/src/switch/stream/engine.cpp b/switch/src/switch/stream/engine.cpp
+index b3b7216..297d91d 100644
+--- a/switch/src/switch/stream/engine.cpp
++++ b/switch/src/switch/stream/engine.cpp
+@@ -69,6 +69,32 @@ std::string lower_ascii(std::string value) {
+     return value;
+ }
+ 
++bool sequence_newer16(uint16_t value, uint16_t reference) {
++    const uint16_t distance = static_cast<uint16_t>(value - reference);
++    return distance != 0 && distance < 0x8000U;
++}
++
++bool annexb_video_info(const uint8_t* data, size_t size, bool* hasIdr) {
++    if (hasIdr) *hasIdr = false;
++    bool hasSlice = false;
++    for (size_t at = 0; at + 4 < size; ++at) {
++        size_t nal = 0;
++        if (data[at] == 0 && data[at + 1] == 0 && data[at + 2] == 1) {
++            nal = at + 3;
++        } else if (data[at] == 0 && data[at + 1] == 0 &&
++                   data[at + 2] == 0 && data[at + 3] == 1) {
++            nal = at + 4;
++        } else {
++            continue;
++        }
++        if (nal >= size) continue;
++        const uint8_t type = data[nal] & 0x1fU;
++        if (type == 1 || type == 5) hasSlice = true;
++        if (type == 5 && hasIdr) *hasIdr = true;
++    }
++    return hasSlice;
++}
++
+ std::string query_session_id(const std::string& query) {
+     const std::string lowered = lower_ascii(query);
+     for (const char* name : {"sessionid=", "session="}) {
+@@ -347,9 +373,12 @@ void Engine::global_shutdown() {
+     peer_deinit();
+ }
+ 
+-void Engine::start(int appId, const std::string& preferredGateway) {
++void Engine::start(int appId, int streamWidth, int streamHeight,
++                   const std::string& preferredGateway) {
+     stop();
+     appId_ = appId;
++    streamWidth_ = std::clamp(streamWidth, 640, 2560);
++    streamHeight_ = std::clamp(streamHeight, 360, 1440);
+     preferredGateway_ = preferredGateway;
+     sessionId_.clear();
+     gatewayHost_.clear();
+@@ -383,7 +412,15 @@ void Engine::start(int appId, const std::string& preferredGateway) {
+         nativeVideoPort_ = 0;
+         nativeAudioPort_ = 0;
+         nativeGroups_.clear();
+-    }
++        nativeSequenceStarted_ = false;
++        nativeAnyQueued_ = false;
++        nativeNextGroup_ = 0;
++    }
++    nativeWaitingKeyframe_ = true;
++    nativeDroppedGroups_ = 0;
++    nativeRecoveredGroups_ = 0;
++    decoderResyncRequested_ = false;
++    decoderFlushOnKeyframe_ = false;
+     jitter_.reset();
+     nextPresentCounter_ = 0;
+     presentedSequence_ = 0;
+@@ -469,7 +506,8 @@ void Engine::stop() {
+ 
+ void Engine::worker() {
+     ZERODROID::StreamSessionConfig config;
+-    log("launch appId=" + std::to_string(appId_));
++    log("launch appId=" + std::to_string(appId_) + " resolution=" +
++        std::to_string(streamWidth_) + "x" + std::to_string(streamHeight_));
+     if (!api_.startStreamingSession(
+             appId_, config, &quit_, [this](const std::string& message) {
+                 log("api| " + message);
+@@ -667,13 +705,17 @@ bool Engine::connect_gateway(const ZERODROID::StreamSessionConfig& config) {
+     }
+ 
+     gatewayApiBase_ = "https://" + without_port(gatewayHost_) + "/webrtc";
+-    // Exact Android TV control route and device identity.  1280x720 matches
+-    // the Switch handheld output while retaining the official native suffix.
++    // Exact Android TV control route and device identity. The requested video
++    // dimensions come from the user's display profile: 720p, 1080p, or the
++    // experimental 1440p supersampling mode.
+     const std::string path = "/native?" + query +
+-        "&x=1280&y=720&lang=es&tv=1&clientType=native&devType=tv&os=atv";
++        "&x=" + std::to_string(streamWidth_) +
++        "&y=" + std::to_string(streamHeight_) +
++        "&lang=es&tv=1&clientType=native&devType=tv&os=atv";
+     std::string error;
+     log("gateway=" + gatewayHost_ + " queryLength=" +
+-        std::to_string(query.size()) + " controlPath=/native device=tv");
++        std::to_string(query.size()) + " controlPath=/native device=tv video=" +
++        std::to_string(streamWidth_) + "x" + std::to_string(streamHeight_));
+     if (!control_.connect(gatewayHost_, path, "romfs:/cacert.pem", error)) {
+         fail(error.empty() ? "No se pudo abrir el canal de control." : error);
+         return false;
+@@ -916,11 +958,93 @@ bool Engine::recover_native_group(NativeVideoGroup& group) {
+                        [](bool value) { return value; });
+ }
+ 
++void Engine::process_native_video_group(NativeVideoGroup complete) {
++    const auto failGroup = [&](const std::string& reason) {
++        nativeWaitingKeyframe_ = true;
++        ++nativeDroppedGroups_;
++        {
++            std::lock_guard<std::mutex> lock(videoMutex_);
++            videoQueue_.clear();
++        }
++        log("native frame dropped: " + reason + " group=" +
++            std::to_string(complete.id));
++    };
++    const bool allOriginal = std::all_of(
++        complete.received.begin(),
++        complete.received.begin() + complete.dataPackets,
++        [](bool value) { return value; });
++    if (!allOriginal) {
++        if (!recover_native_group(complete)) {
++            failGroup("Reed-Solomon recovery failed");
++            return;
++        }
++        ++nativeRecoveredGroups_;
++    }
++
++    std::vector<uint8_t> accessUnit;
++    accessUnit.reserve(static_cast<size_t>(complete.dataPackets) * 1408);
++    for (uint16_t index = 0; index < complete.dataPackets; ++index) {
++        const auto& chunk = complete.chunks[index];
++        if (chunk.size() != 1410) {
++            failGroup("invalid shard size");
++            return;
++        }
++        const uint16_t payloadBytes = read_le16(chunk.data());
++        if (payloadBytes > 1408) {
++            failGroup("invalid plaintext length");
++            return;
++        }
++        std::vector<uint8_t> plaintext;
++        if (!decrypt_native_chunk(complete.id, index, chunk.data() + 2,
++                                  1408, plaintext)) {
++            failGroup("AES decrypt failed");
++            return;
++        }
++        if (payloadBytes > plaintext.size()) {
++            failGroup("decrypted shard too short");
++            return;
++        }
++        accessUnit.insert(accessUnit.end(), plaintext.begin(),
++                          plaintext.begin() + payloadBytes);
++    }
++    bool hasIdr = false;
++    if (accessUnit.empty() ||
++        !annexb_video_info(accessUnit.data(), accessUnit.size(), &hasIdr)) {
++        failGroup("invalid Annex-B");
++        return;
++    }
++
++    const bool resetDecoder = nativeWaitingKeyframe_.load();
++    if (resetDecoder && !hasIdr) return;
++    if (hasIdr) nativeWaitingKeyframe_ = false;
++    if (!gotAccessUnit_.exchange(true)) {
++        log("first complete native H264 access unit bytes=" +
++            std::to_string(accessUnit.size()));
++    }
++    {
++        std::lock_guard<std::mutex> lock(videoMutex_);
++        if (videoQueue_.size() >= 16) {
++            videoQueue_.clear();
++            nativeWaitingKeyframe_ = true;
++            ++nativeDroppedGroups_;
++            return;
++        }
++        VideoAccessUnit unit;
++        unit.data = std::move(accessUnit);
++        unit.timestamp = complete.id;
++        unit.native = true;
++        unit.resetDecoder = resetDecoder;
++        videoQueue_.push_back(std::move(unit));
++    }
++    videoCv_.notify_one();
++}
++
+ void Engine::handle_native_video_packet(const uint8_t* data, size_t size) {
+     // Android TV's native transport uses a 10-byte Reed-Solomon header plus
+     // a 2-byte plaintext length and one 1408-byte AES-CBC block.
+     if (!data || size != 1420) return;
+-    lastMediaTicks_ = SDL_GetTicks64();
++    const uint64_t now = SDL_GetTicks64();
++    lastMediaTicks_ = now;
+     if (!gotVideoPacket_.exchange(true)) {
+         log("first native video UDP packet bytes=" + std::to_string(size));
+     }
+@@ -932,13 +1056,25 @@ void Engine::handle_native_video_packet(const uint8_t* data, size_t size) {
+         dataPackets > 1024 || totalPackets > 1024 ||
+         packetIndex >= totalPackets) return;
+ 
+-    NativeVideoGroup complete;
++    constexpr uint64_t kNativeHoldMs = 140;
++    constexpr uint16_t kMaximumReorderGroups = 8;
++    std::vector<NativeVideoGroup> ready;
++    bool droppedGap = false;
+     {
+         std::lock_guard<std::mutex> lock(nativeMutex_);
+-        if (nativeGroups_.size() >= 8 &&
+-            nativeGroups_.find(groupId) == nativeGroups_.end()) {
+-            nativeGroups_.erase(nativeGroups_.begin());
++        if (!nativeSequenceStarted_) {
++            nativeSequenceStarted_ = true;
++            nativeNextGroup_ = groupId;
++        } else if (!nativeAnyQueued_ && sequence_newer16(nativeNextGroup_, groupId) &&
++                   static_cast<uint16_t>(nativeNextGroup_ - groupId) <= 4) {
++            // The first datagram can belong to frame N+1. Before anything has
++            // been emitted, allow a small backwards correction.
++            nativeNextGroup_ = groupId;
++        } else if (groupId != nativeNextGroup_ &&
++                   !sequence_newer16(groupId, nativeNextGroup_)) {
++            return;  // late datagram for a frame already emitted/dropped
+         }
++
+         auto& group = nativeGroups_[groupId];
+         if (group.dataPackets != dataPackets ||
+             group.totalPackets != totalPackets) {
+@@ -946,6 +1082,7 @@ void Engine::handle_native_video_packet(const uint8_t* data, size_t size) {
+             group.id = groupId;
+             group.dataPackets = dataPackets;
+             group.totalPackets = totalPackets;
++            group.firstSeenMs = now;
+             group.chunks.resize(totalPackets);
+             group.received.assign(totalPackets, false);
+         }
+@@ -954,53 +1091,63 @@ void Engine::handle_native_video_packet(const uint8_t* data, size_t size) {
+             group.received[packetIndex] = true;
+             ++group.receivedCount;
+         }
+-        const bool allOriginal = std::all_of(
+-            group.received.begin(), group.received.begin() + dataPackets,
+-            [](bool value) { return value; });
+-        if ((!allOriginal && group.receivedCount < group.dataPackets) ||
+-            nativeKeyHex_.empty()) {
+-            return;
+-        }
+-        complete = std::move(group);
+-        nativeGroups_.erase(groupId);
+-    }
+ 
+-    const bool allOriginal = std::all_of(
+-        complete.received.begin(),
+-        complete.received.begin() + complete.dataPackets,
+-        [](bool value) { return value; });
+-    if (!allOriginal && !recover_native_group(complete)) return;
++        for (int guard = 0; guard < 32; ++guard) {
++            auto expected = nativeGroups_.find(nativeNextGroup_);
++            if (expected != nativeGroups_.end()) {
++                const bool originals = std::all_of(
++                    expected->second.received.begin(),
++                    expected->second.received.begin() +
++                        expected->second.dataPackets,
++                    [](bool value) { return value; });
++                const bool recoverable =
++                    expected->second.receivedCount >=
++                        expected->second.dataPackets;
++                if ((originals || recoverable) && !nativeKeyHex_.empty()) {
++                    ready.push_back(std::move(expected->second));
++                    nativeGroups_.erase(expected);
++                    nativeAnyQueued_ = true;
++                    nativeNextGroup_ = static_cast<uint16_t>(nativeNextGroup_ + 1);
++                    continue;
++                }
++            }
+ 
+-    std::vector<uint8_t> accessUnit;
+-    accessUnit.reserve(static_cast<size_t>(complete.dataPackets) * 1408);
+-    for (uint16_t index = 0; index < complete.dataPackets; ++index) {
+-        const auto& chunk = complete.chunks[index];
+-        if (chunk.size() != 1410) return;
+-        const uint16_t payloadBytes = read_le16(chunk.data());
+-        if (payloadBytes > 1408) return;
+-        std::vector<uint8_t> plaintext;
+-        if (!decrypt_native_chunk(complete.id, index, chunk.data() + 2,
+-                                  1408, plaintext)) return;
+-        if (index == 0 &&
+-            (plaintext.size() < 4 || plaintext[0] != 0 ||
+-             plaintext[1] != 0 || plaintext[2] != 0)) return;
+-        accessUnit.insert(accessUnit.end(), plaintext.begin(),
+-                          plaintext.begin() + payloadBytes);
+-    }
+-    if (accessUnit.empty()) return;
+-    if (!gotAccessUnit_.exchange(true)) {
+-        log("first complete native H264 access unit bytes=" +
+-            std::to_string(accessUnit.size()));
++            uint16_t farthest = 0;
++            uint64_t oldestNewer = now;
++            bool haveNewer = false;
++            for (const auto& [id, pending] : nativeGroups_) {
++                if (!sequence_newer16(id, nativeNextGroup_)) continue;
++                haveNewer = true;
++                farthest = std::max(
++                    farthest, static_cast<uint16_t>(id - nativeNextGroup_));
++                oldestNewer = std::min(oldestNewer, pending.firstSeenMs);
++            }
++            const bool timedOut = expected != nativeGroups_.end()
++                ? now - expected->second.firstSeenMs >= kNativeHoldMs
++                : haveNewer && now - oldestNewer >= kNativeHoldMs;
++            if (timedOut || farthest >= kMaximumReorderGroups) {
++                if (expected != nativeGroups_.end()) nativeGroups_.erase(expected);
++                nativeNextGroup_ = static_cast<uint16_t>(nativeNextGroup_ + 1);
++                nativeAnyQueued_ = true;
++                droppedGap = true;
++                continue;
++            }
++            break;
++        }
+     }
+-    {
++
++    if (droppedGap) {
++        // A unit collected before the gap and one collected after it cannot be
++        // distinguished once moved out of the map. Drop the small ready batch
++        // wholesale so an earlier IDR cannot accidentally unlock later P-frames.
++        ready.clear();
++        nativeWaitingKeyframe_ = true;
++        ++nativeDroppedGroups_;
+         std::lock_guard<std::mutex> lock(videoMutex_);
+-        if (videoQueue_.size() >= 64) videoQueue_.clear();
+-        VideoAccessUnit unit;
+-        unit.data = std::move(accessUnit);
+-        unit.timestamp = complete.id;
+-        videoQueue_.push_back(std::move(unit));
++        videoQueue_.clear();
++        log("native sequence gap: waiting for a clean IDR");
+     }
+-    videoCv_.notify_one();
++    for (auto& group : ready) process_native_video_group(std::move(group));
+ }
+ 
+ bool Engine::setup_peer() {
+@@ -1422,20 +1569,33 @@ void Engine::on_video(uint8_t* data, size_t size, void* user) {
+     if (!self->gotVideoPacket_.exchange(true)) {
+         self->log("first video RTP packet bytes=" + std::to_string(size));
+     }
++    if (self->decoderResyncRequested_.exchange(false)) {
++        self->jitter_.resync();
++    }
+     bool wantKeyframe = false;
+     self->jitter_.receive(
+         data, size, SDL_GetTicks64(),
+-        [self](const uint8_t* accessUnit, size_t bytes, uint32_t timestamp) {
++        [self, &wantKeyframe](const uint8_t* accessUnit, size_t bytes,
++                              uint32_t timestamp) {
+             if (!self->gotAccessUnit_.exchange(true)) {
+                 self->log("first complete H264 access unit bytes=" +
+                           std::to_string(bytes));
+             }
+             {
+                 std::lock_guard<std::mutex> lock(self->videoMutex_);
+-                if (self->videoQueue_.size() >= 64) self->videoQueue_.clear();
++                if (self->videoQueue_.size() >= 16) {
++                    self->videoQueue_.clear();
++                    self->decoderResyncRequested_ = true;
++                    self->decoderFlushOnKeyframe_ = true;
++                    wantKeyframe = true;
++                    return;
++                }
+                 VideoAccessUnit unit;
+                 unit.data.assign(accessUnit, accessUnit + bytes);
+                 unit.timestamp = timestamp;
++                unit.native = false;
++                unit.resetDecoder =
++                    self->decoderFlushOnKeyframe_.exchange(false);
+                 self->videoQueue_.push_back(std::move(unit));
+             }
+             self->videoCv_.notify_one();
+@@ -1504,13 +1664,29 @@ void Engine::decode_loop() {
+             unit = std::move(videoQueue_.front());
+             videoQueue_.pop_front();
+         }
+-        if (!video_.decode(unit.data.data(), unit.data.size())) {
+-            if (video_.take_error()) {
++        if (unit.resetDecoder) video_.flush();
++        const bool decoded = video_.decode(unit.data.data(), unit.data.size());
++        const bool decoderError = video_.take_error();
++        if (decoderError) {
++            {
++                std::lock_guard<std::mutex> lock(videoMutex_);
++                videoQueue_.clear();
++            }
++            if (unit.native) {
++                nativeWaitingKeyframe_ = true;
++                ++nativeDroppedGroups_;
++                log("native decoder corruption: holding last good frame until IDR");
++            } else {
++                decoderResyncRequested_ = true;
++                decoderFlushOnKeyframe_ = true;
+                 std::lock_guard<std::mutex> lock(peerMutex_);
+                 request_keyframe_locked();
+             }
+             continue;
+         }
++        if (!decoded) {
++            continue;
++        }
+         {
+             std::lock_guard<std::mutex> lock(frameMutex_);
+             av_frame_unref(sharedFrame_);
+diff --git a/switch/src/switch/stream/engine.hpp b/switch/src/switch/stream/engine.hpp
+index 63dd2dc..c9eaf6f 100644
+--- a/switch/src/switch/stream/engine.hpp
++++ b/switch/src/switch/stream/engine.hpp
+@@ -46,7 +46,8 @@ public:
+ 
+     static void global_shutdown();
+ 
+-    void start(int appId, const std::string& preferredGateway = {});
++    void start(int appId, int streamWidth = 1280, int streamHeight = 720,
++               const std::string& preferredGateway = {});
+     void stop();
+ 
+     EngineState state() const { return state_.load(); }
+@@ -86,12 +87,15 @@ private:
+     struct VideoAccessUnit {
+         std::vector<uint8_t> data;
+         uint32_t timestamp{0};
++        bool native{false};
++        bool resetDecoder{false};
+     };
+ 
+     struct NativeVideoGroup {
+         uint16_t id{0};
+         uint16_t dataPackets{0};
+         uint16_t totalPackets{0};
++        uint64_t firstSeenMs{0};
+         std::size_t receivedCount{0};
+         std::vector<std::vector<uint8_t>> chunks;
+         std::vector<bool> received;
+@@ -106,6 +110,7 @@ private:
+     void native_video_loop();
+     void native_audio_loop();
+     void handle_native_video_packet(const uint8_t* data, size_t size);
++    void process_native_video_group(NativeVideoGroup group);
+     bool recover_native_group(NativeVideoGroup& group);
+     bool decrypt_native_chunk(uint16_t group, uint16_t index,
+                               const uint8_t* encrypted, size_t size,
+@@ -129,6 +134,8 @@ private:
+     ZERODROID::BoosteroidAPI& api_;
+     SDL_Renderer* renderer_{nullptr};
+     int appId_{0};
++    int streamWidth_{1280};
++    int streamHeight_{720};
+     std::string preferredGateway_;
+     std::string sessionId_;
+     std::string gatewayHost_;
+@@ -176,6 +183,12 @@ private:
+     std::thread nativeVideoThread_;
+     std::thread nativeAudioThread_;
+     std::unordered_map<uint16_t, NativeVideoGroup> nativeGroups_;
++    bool nativeSequenceStarted_{false};
++    bool nativeAnyQueued_{false};
++    uint16_t nativeNextGroup_{0};
++    std::atomic<bool> nativeWaitingKeyframe_{true};
++    std::atomic<uint32_t> nativeDroppedGroups_{0};
++    std::atomic<uint32_t> nativeRecoveredGroups_{0};
+ 
+     VideoJitterBuffer jitter_;
+     VideoDecoder video_;
+@@ -184,6 +197,8 @@ private:
+     std::mutex videoMutex_;
+     std::condition_variable videoCv_;
+     std::deque<VideoAccessUnit> videoQueue_;
++    std::atomic<bool> decoderResyncRequested_{false};
++    std::atomic<bool> decoderFlushOnKeyframe_{false};
+ 
+     std::mutex frameMutex_;
+     AVFrame* sharedFrame_{nullptr};
+diff --git a/switch/src/switch/stream/quick_menu.hpp b/switch/src/switch/stream/quick_menu.hpp
+index 5a78d6d..a6de02c 100644
+--- a/switch/src/switch/stream/quick_menu.hpp
++++ b/switch/src/switch/stream/quick_menu.hpp
+@@ -14,16 +14,16 @@ struct QuickRect {
+     int h;
+ };
+ 
+-// The glyphs live in the very top safe strip so they no longer collide with
+-// the Switch status clock.  Their 72x72 hit areas remain comfortable to tap,
+-// while the rasterized artwork inside them is deliberately much smaller.
+-inline constexpr QuickRect kQuickTextureRect{1160, 8, 672, 812};
++// The compact handle remains in the top safe strip. The expanded panel is
++// taller in v0.8.4 so resolution and picture presets are available without
++// removing the existing manual image controls.
++inline constexpr QuickRect kQuickTextureRect{1160, 8, 672, 928};
+ inline constexpr QuickRect kQuickToggleRect{1760, 8, 72, 72};
+ inline constexpr QuickRect kGuideButtonRect{1840, 8, 72, 72};
+-inline constexpr QuickRect kQuickPanelRect{1160, 104, 508, 716};
++inline constexpr QuickRect kQuickPanelRect{1160, 104, 508, 820};
+ 
+-inline constexpr int kQuickRowCount = 7;
+-inline constexpr int kQuickRowFirstY = 172;
++inline constexpr int kQuickRowCount = 9;
++inline constexpr int kQuickRowFirstY = 148;
+ inline constexpr int kQuickRowHeight = 58;
+ inline constexpr int kQuickRowPitch = 64;
+ 
+@@ -42,22 +42,43 @@ inline constexpr QuickRect quick_plus_rect(int row) {
+     return {1584, r.y, 64, r.h};
+ }
+ 
+-inline constexpr QuickRect kQuickResetRect{1280, 744, 268, 54};
++inline constexpr QuickRect kQuickNoticeRect{1180, 734, 468, 82};
++inline constexpr QuickRect kQuickResetRect{1280, 842, 268, 54};
+ 
+ enum QuickRow {
+     QuickPerformance = 0,
+     QuickController = 1,
+-    QuickBrightness = 2,
+-    QuickContrast = 3,
+-    QuickSaturation = 4,
+-    QuickGamma = 5,
+-    QuickSharpness = 6,
++    QuickResolution = 2,
++    QuickPreset = 3,
++    QuickBrightness = 4,
++    QuickContrast = 5,
++    QuickSaturation = 6,
++    QuickGamma = 7,
++    QuickSharpness = 8,
++};
++
++enum StreamResolutionMode {
++    ResolutionAuto = 0,
++    Resolution720p = 1,
++    Resolution1080p = 2,
++    Resolution1440p = 3,
++};
++
++enum PicturePreset {
++    PresetNatural = 0,
++    PresetSharp = 1,
++    PresetVivid = 2,
++    PresetCinema = 3,
++    PresetSoft = 4,
++    PresetCustom = 5,
+ };
+ 
+ struct QuickMenuState {
+     bool open = false;
+     bool performance = false;
+     bool xboxFaceLayout = false;
++    int resolutionMode = ResolutionAuto;
++    int picturePreset = PresetNatural;
+     int brightness = 0;   // -20..+20
+     int contrast = 100;   // 70..130 percent
+     int saturation = 100; // 0..150 percent
+@@ -65,7 +86,60 @@ struct QuickMenuState {
+     int sharpness = 0;    // 0=Off, 1=Low, 2=Medium, 3=High
+ };
+ 
++inline void apply_picture_preset(QuickMenuState& state, int preset) {
++    state.picturePreset = std::clamp(preset, static_cast<int>(PresetNatural),
++                                     static_cast<int>(PresetCustom));
++    switch (state.picturePreset) {
++        case PresetSharp:
++            state.brightness = 0;
++            state.contrast = 105;
++            state.saturation = 105;
++            state.gamma = 100;
++            state.sharpness = 2;
++            break;
++        case PresetVivid:
++            state.brightness = 0;
++            state.contrast = 110;
++            state.saturation = 120;
++            state.gamma = 100;
++            state.sharpness = 2;
++            break;
++        case PresetCinema:
++            state.brightness = -5;
++            state.contrast = 110;
++            state.saturation = 105;
++            state.gamma = 95;
++            state.sharpness = 1;
++            break;
++        case PresetSoft:
++            state.brightness = 0;
++            state.contrast = 95;
++            state.saturation = 100;
++            state.gamma = 105;
++            state.sharpness = 0;
++            break;
++        case PresetCustom:
++            // Keep the user's current manual values.
++            break;
++        case PresetNatural:
++        default:
++            state.picturePreset = PresetNatural;
++            state.brightness = 0;
++            state.contrast = 100;
++            state.saturation = 100;
++            state.gamma = 100;
++            state.sharpness = 0;
++            break;
++    }
++}
++
+ inline QuickMenuState normalized_quick_menu(QuickMenuState state) {
++    state.resolutionMode = std::clamp(
++        state.resolutionMode, static_cast<int>(ResolutionAuto),
++        static_cast<int>(Resolution1440p));
++    state.picturePreset = std::clamp(
++        state.picturePreset, static_cast<int>(PresetNatural),
++        static_cast<int>(PresetCustom));
+     state.brightness = std::clamp(state.brightness, -20, 20);
+     state.contrast = std::clamp(state.contrast, 70, 130);
+     state.saturation = std::clamp(state.saturation, 0, 150);
+diff --git a/switch/src/switch/stream/video_decoder.cpp b/switch/src/switch/stream/video_decoder.cpp
+index b86e55e..4d8ce0c 100644
+--- a/switch/src/switch/stream/video_decoder.cpp
++++ b/switch/src/switch/stream/video_decoder.cpp
+@@ -35,7 +35,7 @@ bool VideoDecoder::init(SDL_Renderer* renderer) {
+     if (!context_) return false;
+ 
+     context_->flags |= AV_CODEC_FLAG_LOW_DELAY;
+-    context_->flags2 |= AV_CODEC_FLAG2_FAST;
++    context_->err_recognition = AV_EF_CAREFUL | AV_EF_BITSTREAM;
+ 
+ #ifdef __SWITCH__
+     if (av_hwdevice_ctx_create(&hw_device_, AV_HWDEVICE_TYPE_NVTEGRA, nullptr,
+@@ -95,8 +95,14 @@ bool VideoDecoder::decode(const uint8_t* data, size_t size) {
+     bool rendered = false;
+     while (avcodec_receive_frame(context_, frame_) == 0) {
+         if (frame_->decode_error_flags != 0 ||
+-            (frame_->flags & AV_FRAME_FLAG_CORRUPT))
++            (frame_->flags & AV_FRAME_FLAG_CORRUPT)) {
+             error_ = true;
++            // Never replace the held last-good frame with decoder concealment
++            // from a damaged predictive chain. That is the macro-blocked image
++            // seen on hardware after a lost UDP/RTP packet.
++            av_frame_unref(frame_);
++            continue;
++        }
+ #ifdef __SWITCH__
+         // Zero-copy: keep the raw NVTEGRA surface for the deko3d renderer -- no
+         // GPU->CPU transfer, no software colour conversion (both of which
+@@ -117,6 +123,13 @@ bool VideoDecoder::decode(const uint8_t* data, size_t size) {
+     return rendered;
+ }
+ 
++void VideoDecoder::flush() {
++    if (context_) avcodec_flush_buffers(context_);
++    if (frame_) av_frame_unref(frame_);
++    if (held_frame_) av_frame_unref(held_frame_);
++    error_ = false;
++}
++
+ bool VideoDecoder::upload(AVFrame* frame) {
+     const int w = frame->width, h = frame->height;
+     if (w <= 0 || h <= 0) return false;
+diff --git a/switch/src/switch/stream/video_decoder.hpp b/switch/src/switch/stream/video_decoder.hpp
+index f735809..53f65ec 100644
+--- a/switch/src/switch/stream/video_decoder.hpp
++++ b/switch/src/switch/stream/video_decoder.hpp
+@@ -25,6 +25,9 @@ public:
+     // Feed one access unit; returns true if a new frame was rendered into
+     // the texture.
+     bool decode(const uint8_t* data, size_t size);
++    // Discard all predictive references after packet loss. The caller keeps
++    // the last good presented frame and resumes only with a clean IDR.
++    void flush();
+ 
+     // True (and reset) if a decode error/corrupt frame was seen since the last
+     // call -- the caller should ask the server for a fresh keyframe.
+diff --git a/switch/src/switch/stream/video_jitter.cpp b/switch/src/switch/stream/video_jitter.cpp
+index b47b531..8d4fa95 100644
+--- a/switch/src/switch/stream/video_jitter.cpp
++++ b/switch/src/switch/stream/video_jitter.cpp
+@@ -118,6 +118,12 @@ void VideoJitterBuffer::reset() {
+     cycles_ = base_seq_ = received_ = received_prior_ = expected_prior_ = 0;
+ }
+ 
++void VideoJitterBuffer::resync() {
++    frames_.clear();
++    waiting_keyframe_ = true;
++    ++stats_.resyncs;
++}
++
+ bool VideoJitterBuffer::report_stats(uint8_t* fraction_lost,
+                                      uint32_t* cumulative_lost,
+                                      uint32_t* highest_seq_ext) {
+@@ -186,6 +192,43 @@ bool VideoJitterBuffer::try_assemble(Frame& f, std::vector<uint8_t>& au,
+         if (ordered[i]->seq != static_cast<uint16_t>(ordered[i - 1]->seq + 1))
+             return false;  // gap inside the frame -> wait for retransmit
+ 
++    // Sequence continuity alone is not enough for FU-A. Ensure a fragmented
++    // NAL starts and ends exactly once, and reject malformed STAP-A payloads;
++    // otherwise FFmpeg may conceal a truncated slice and poison later frames.
++    bool fragmented = false;
++    for (const Packet* packet : ordered) {
++        const uint8_t* payload = packet->payload.data();
++        const size_t bytes = packet->payload.size();
++        const uint8_t type = nal_type(payload, bytes);
++        if (type == 28) {
++            if (bytes < 2) return false;
++            const bool start = (payload[1] & 0x80U) != 0;
++            const bool end = (payload[1] & 0x40U) != 0;
++            if (start) {
++                if (fragmented) return false;
++                fragmented = true;
++            } else if (!fragmented) {
++                return false;
++            }
++            if (end) fragmented = false;
++        } else {
++            if (fragmented || type == 0 || type > 24) return false;
++            if (type == 24) {
++                size_t at = 1;
++                while (at + 2 <= bytes) {
++                    const size_t nalBytes =
++                        (static_cast<size_t>(payload[at]) << 8) |
++                        payload[at + 1];
++                    at += 2;
++                    if (nalBytes == 0 || at + nalBytes > bytes) return false;
++                    at += nalBytes;
++                }
++                if (at != bytes) return false;
++            }
++        }
++    }
++    if (fragmented) return false;
++
+     au.clear();
+     for (const Packet* pk : ordered) {
+         depacketize(pk->payload.data(), pk->payload.size(), au);
+diff --git a/switch/src/switch/stream/video_jitter.hpp b/switch/src/switch/stream/video_jitter.hpp
+index 4d0ba20..d1d0d35 100644
+--- a/switch/src/switch/stream/video_jitter.hpp
++++ b/switch/src/switch/stream/video_jitter.hpp
+@@ -34,6 +34,9 @@ public:
+     using NackFn = std::function<void(uint16_t pid, uint16_t blp)>;
+ 
+     void reset();
++    // Called on the RTP receive thread after the decoder reports corruption.
++    // Pending frames are discarded and output is gated until a real IDR.
++    void resync();
+ 
+     // Feed one decrypted RTP packet at time now_ms (SDL_GetTicks64).
+     void receive(const uint8_t* rtp, size_t len, uint64_t now_ms,

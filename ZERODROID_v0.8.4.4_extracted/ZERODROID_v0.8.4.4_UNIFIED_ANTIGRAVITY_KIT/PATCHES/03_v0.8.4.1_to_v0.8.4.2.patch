@@ -1,0 +1,1156 @@
+diff -ruN '--exclude=deps/switch' a/.github/workflows/build-v0.8.4.1.yml b/.github/workflows/build-v0.8.4.1.yml
+--- a/.github/workflows/build-v0.8.4.1.yml	2026-08-04 01:16:10.931200869 +0000
++++ b/.github/workflows/build-v0.8.4.1.yml	1970-01-01 00:00:00.000000000 +0000
+@@ -1,45 +0,0 @@
+-name: Build ZERODROID v0.8.4.1
+-
+-on:
+-  workflow_dispatch:
+-  push:
+-    branches:
+-      - build/zerodroid-v0.8.4.1
+-      - main
+-    paths:
+-      - 'switch/**'
+-      - '.github/workflows/build-v0.8.4.1.yml'
+-
+-jobs:
+-  build:
+-    runs-on: ubuntu-latest
+-    container:
+-      image: devkitpro/devkita64:latest
+-    steps:
+-      - name: Checkout source
+-        uses: actions/checkout@v4
+-
+-      - name: Verify bundled streaming dependencies
+-        shell: bash
+-        run: |
+-          test -f switch/deps/switch/lib/libpeer.a
+-          test -f switch/deps/switch/lib/libsrtp2.a
+-          test -f switch/deps/switch/lib/libusrsctp.a
+-
+-      - name: Build clean NRO
+-        shell: bash
+-        run: |
+-          cd switch
+-          make clean || true
+-          make -j"$(nproc)"
+-          test -f ZERODROID_v0.8.4.1.nro
+-          sha256sum ZERODROID_v0.8.4.1.nro > ZERODROID_v0.8.4.1.sha256
+-
+-      - name: Upload v0.8.4.1 artifact
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: ZERODROID-v0.8.4.1
+-          path: |
+-            switch/ZERODROID_v0.8.4.1.nro
+-            switch/ZERODROID_v0.8.4.1.sha256
+-          if-no-files-found: error
+diff -ruN '--exclude=deps/switch' a/.github/workflows/build-v0.8.4.2.yml b/.github/workflows/build-v0.8.4.2.yml
+--- a/.github/workflows/build-v0.8.4.2.yml	1970-01-01 00:00:00.000000000 +0000
++++ b/.github/workflows/build-v0.8.4.2.yml	2026-08-04 01:59:38.359126930 +0000
+@@ -0,0 +1,45 @@
++name: Build ZERODROID v0.8.4.2
++
++on:
++  workflow_dispatch:
++  push:
++    branches:
++      - build/zerodroid-v0.8.4.2
++      - main
++    paths:
++      - 'switch/**'
++      - '.github/workflows/build-v0.8.4.2.yml'
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    container:
++      image: devkitpro/devkita64:latest
++    steps:
++      - name: Checkout source
++        uses: actions/checkout@v4
++
++      - name: Verify bundled streaming dependencies
++        shell: bash
++        run: |
++          test -f switch/deps/switch/lib/libpeer.a
++          test -f switch/deps/switch/lib/libsrtp2.a
++          test -f switch/deps/switch/lib/libusrsctp.a
++
++      - name: Build clean NRO
++        shell: bash
++        run: |
++          cd switch
++          make clean || true
++          make -j"$(nproc)"
++          test -f ZERODROID_v0.8.4.2.nro
++          sha256sum ZERODROID_v0.8.4.2.nro > ZERODROID_v0.8.4.2.sha256
++
++      - name: Upload v0.8.4.2 artifact
++        uses: actions/upload-artifact@v4
++        with:
++          name: ZERODROID-v0.8.4.2
++          path: |
++            switch/ZERODROID_v0.8.4.2.nro
++            switch/ZERODROID_v0.8.4.2.sha256
++          if-no-files-found: error
+diff -ruN '--exclude=deps/switch' a/BUILD_V0.8.4.1.md b/BUILD_V0.8.4.1.md
+--- a/BUILD_V0.8.4.1.md	2026-08-04 01:16:10.911200869 +0000
++++ b/BUILD_V0.8.4.1.md	1970-01-01 00:00:00.000000000 +0000
+@@ -1,36 +0,0 @@
+-# Building ZERODROID v0.8.4.1
+-
+-The source archive includes the prebuilt Switch WebRTC dependency bundle under
+-`switch/deps/switch/` and the generated deko3d shaders under
+-`switch/romfs/shaders/`.
+-
+-## devkitPro / devkita64
+-
+-```bash
+-cd switch
+-make clean
+-make -j4
+-```
+-
+-The expected output is:
+-
+-```text
+-switch/ZERODROID_v0.8.4.1.nro
+-```
+-
+-## GitHub Actions
+-
+-The included `.github/workflows/build-v0.8.4.1.yml` builds the same NRO inside the
+-official `devkitpro/devkita64` container and uploads it as a workflow artifact.
+-It can be started manually with **Actions → Build ZERODROID v0.8.4.1 → Run
+-workflow**.
+-
+-## Runtime notes
+-
+-- Auto resolution requests 1280×720 handheld and 1920×1080 docked.
+-- Explicit 720p and 1080p profiles work in either output mode.
+-- Experimental 1440p requests 2560×1440 from the service and renders it down to
+-  the Switch output framebuffer. Availability and sustained decode performance
+-  depend on the negotiated Boosteroid session.
+-- Resolution changes apply on the next game launch; picture presets apply during
+-  the current stream.
+diff -ruN '--exclude=deps/switch' a/BUILD_V0.8.4.2.md b/BUILD_V0.8.4.2.md
+--- a/BUILD_V0.8.4.2.md	1970-01-01 00:00:00.000000000 +0000
++++ b/BUILD_V0.8.4.2.md	2026-08-04 01:59:38.359126930 +0000
+@@ -0,0 +1,36 @@
++# Building ZERODROID v0.8.4.2
++
++The source archive includes the prebuilt Switch WebRTC dependency bundle under
++`switch/deps/switch/` and the generated deko3d shaders under
++`switch/romfs/shaders/`.
++
++## devkitPro / devkita64
++
++```bash
++cd switch
++make clean
++make -j4
++```
++
++The expected output is:
++
++```text
++switch/ZERODROID_v0.8.4.2.nro
++```
++
++## GitHub Actions
++
++The included `.github/workflows/build-v0.8.4.2.yml` builds the same NRO inside the
++official `devkitpro/devkita64` container and uploads it as a workflow artifact.
++It can be started manually with **Actions → Build ZERODROID v0.8.4.2 → Run
++workflow**.
++
++## Runtime notes
++
++- Auto resolution requests 1280×720 handheld and 1920×1080 docked.
++- Explicit 720p and 1080p profiles work in either output mode.
++- Experimental 1440p requests 2560×1440 from the service and renders it down to
++  the Switch output framebuffer. Availability and sustained decode performance
++  depend on the negotiated Boosteroid session.
++- Resolution changes apply on the next game launch; picture presets apply during
++  the current stream.
+diff -ruN '--exclude=deps/switch' a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md	2026-08-04 01:44:33.483152589 +0000
++++ b/CHANGELOG.md	2026-08-04 01:59:38.359126930 +0000
+@@ -1,5 +1,17 @@
+ # ZERODROID changelog
+ 
++## v0.8.4.2 - Analog input and virtual mouse
++
++- Compares analog input against the last value actually transmitted instead of the previous physical sample, so gradual stick movement accumulates correctly.
++- Applies a radial dead zone and maps the practical Joy-Con outer range to the full Android controller range.
++- Refreshes non-neutral axes every 120 ms and adds throttled full-axis diagnostics to `stream.log`.
++- Adds absolute Boosteroid mouse events for Switch touchscreen movement, left-click press/release and drag.
++- Adds a delayed Minus modifier: hold Minus and use the right stick as a virtual mouse; Minus + R3 sends right click.
++- Preserves a normal Minus/View press by synthesizing a short controller press when Minus is released without using mouse mode.
++- Suppresses the right stick and R3 controller events while the Minus mouse modifier is active, preventing simultaneous camera movement.
++- Adds Precise, Normal and Fast mouse-speed presets to the in-stream two-dot panel.
++- Adds bilingual mouse-control instructions to the main library screen.
++
+ ## v0.8.4.1 - Native video recovery hotfix
+ 
+ - Increased the native UDP reorder window from 140 ms / 8 groups to 350 ms / 24 groups for 1080p sessions.
+diff -ruN '--exclude=deps/switch' a/INPUT_MOUSE_TECHNICAL_NOTES.md b/INPUT_MOUSE_TECHNICAL_NOTES.md
+--- a/INPUT_MOUSE_TECHNICAL_NOTES.md	1970-01-01 00:00:00.000000000 +0000
++++ b/INPUT_MOUSE_TECHNICAL_NOTES.md	2026-08-04 02:00:05.263126167 +0000
+@@ -0,0 +1,64 @@
++# ZERODROID v0.8.4.2 input and mouse notes
++
++## Analog-stick correction
++
++The previous sender compared each physical stick sample with the immediately
++previous physical sample. Small progressive movements could remain below the
++change threshold forever even though the accumulated movement was large. The
++remote game could therefore keep an older partial value and interpret a fully
++held stick as walking.
++
++v0.8.4.2 instead:
++
++- compares each axis with the last value actually transmitted;
++- uses a radial dead zone of 3200;
++- expands a practical outer magnitude of about 30000 to the full 32767 range;
++- sends changes of 700 or more immediately;
++- always sends neutral transitions and outer-range transitions;
++- refreshes held non-neutral axes every 120 ms;
++- emits a rate-limited `gamepad TX` diagnostic every two seconds while a stick
++  is active.
++
++## Mouse protocol
++
++Mouse events use the same Boosteroid event shape used by the browser client:
++
++```json
++{"type":"mouse","action":"move","X":0.5,"Y":0.5,
++ "offsetX":0,"offsetY":0,"isVisible":true}
++```
++
++```json
++{"type":"mouse","action":"button","btn":0,"isPressed":true}
++```
++
++Button `0` is left click and button `2` is right click.
++
++## Touchscreen behavior
++
++- Touch down outside ZERODROID overlays moves the cursor and presses left click.
++- Drag updates the absolute cursor position.
++- Touch release releases left click.
++- The Guide and two-dot controls retain priority.
++- When the quick menu is open, a touch outside closes it without clicking the
++  remote game.
++
++## Minus modifier
++
++- Hold Minus and move the right stick to move the mouse.
++- Hold Minus and press R3 to press/release right click.
++- The right stick and R3 are suppressed from controller packets during mouse
++  mode, preventing camera movement or an accidental stick click.
++- A Minus press that never uses mouse mode is sent as a short View/Back press on
++  release.
++- L + R + Minus remains the stream-exit chord.
++
++## Mouse speed
++
++The two-dot panel stores one of three persistent cursor speeds:
++
++- Precise: 0.38 screen widths per second at full stick
++- Normal: 0.78 screen widths per second
++- Fast: 1.28 screen widths per second
++
++The stick response is nonlinear for fine control near the center.
+diff -ruN '--exclude=deps/switch' a/INPUT_MOUSE_TEST_PLAN.md b/INPUT_MOUSE_TEST_PLAN.md
+--- a/INPUT_MOUSE_TEST_PLAN.md	1970-01-01 00:00:00.000000000 +0000
++++ b/INPUT_MOUSE_TEST_PLAN.md	2026-08-04 02:00:05.263126167 +0000
+@@ -0,0 +1,57 @@
++# ZERODROID v0.8.4.2 input and mouse test plan
++
++## 1. Analog movement regression
++
++1. Launch Final Fantasy VII at 720p or 1080p.
++2. From neutral, push the left stick slowly to its physical edge.
++3. Confirm the character reaches running speed and does not remain walking.
++4. Release slowly and confirm the character returns to neutral.
++5. Repeat in all eight main directions and with a circular movement.
++6. Repeat with a Pro Controller if available.
++
++Expected log while moving:
++
++```text
++gamepad TX LX=... LY=... RX=... RY=...
++```
++
++At a physical edge, the radial magnitude should approach 32767.
++
++## 2. Minus compatibility
++
++1. Tap Minus without touching the right stick.
++2. Confirm the game receives its normal View/Back action once.
++3. Hold Minus for two seconds without moving the stick, then release.
++4. Confirm it still produces one View/Back action.
++5. Confirm L + R + Minus still exits streaming.
++
++## 3. Stick mouse
++
++1. Hold Minus and move the right stick.
++2. Confirm the cursor moves while the game camera does not.
++3. Test Precise, Normal and Fast in the two-dot menu.
++4. Release Minus and confirm the right stick immediately controls the game
++   normally again.
++
++## 4. Right click
++
++1. Hold Minus.
++2. Press and hold R3 over an item that has a context menu.
++3. Confirm right-click press is received.
++4. Release R3 and confirm the button is released.
++5. Confirm the game does not also receive an R3 controller click.
++
++## 5. Touch mouse
++
++1. Tap a launcher or text field on the Switch screen.
++2. Confirm the cursor moves to the touched position and performs left click.
++3. Drag a window, scrollbar or slider and confirm left click stays held until
++   the finger is lifted.
++4. Tap the Guide icon and two-dot icon; confirm neither tap reaches the game.
++5. Open the two-dot menu, then tap outside; confirm the panel closes without an
++   accidental game click.
++
++## 6. Video regression
++
++Run at least 15 minutes at 1080p and confirm the v0.8.4.1 native-video recovery
++remains active and the image does not stay frozen after a sequence gap.
+diff -ruN '--exclude=deps/switch' a/README.md b/README.md
+--- a/README.md	2026-08-04 01:44:33.483152589 +0000
++++ b/README.md	2026-08-04 01:59:38.359126930 +0000
+@@ -3,7 +3,7 @@
+ **Zero Data · Nintendo Switch cloud gaming client**
+ 
+ ZERODROID is an open-source, unofficial Boosteroid client for Nintendo Switch
+-homebrew. Version 0.8.4.1 provides QR login, a controller-first game library,
++homebrew. Version 0.8.4.2 provides QR login, a controller-first game library,
+ native H.264 video, Opus audio and complete controller input.
+ 
+ > [!IMPORTANT]
+@@ -11,7 +11,16 @@
+ > Nintendo. It requires a legitimate Boosteroid account and does not provide,
+ > download or bypass access to games, subscriptions, DRM or Nintendo software.
+ 
+-## New in v0.8.4.1
++## New in v0.8.4.2
++
++- Fixes gradual-stick updates that could leave the remote game at a partial movement value and make a running character fall back to walking.
++- Applies a radial dead zone, expands the useful Joy-Con outer range to full scale and refreshes held axes periodically.
++- Adds a virtual mouse: touch/drag the Switch screen, or hold **Minus** and move the right stick.
++- While holding **Minus**, press **R3** for right click. A plain Minus tap still sends the normal View/Back button.
++- Adds Precise, Normal and Fast mouse speeds to the in-stream two-dot settings panel.
++- Shows the mouse controls on the main library screen and inside the quick settings panel.
++
++## Included from v0.8.4.1
+ 
+ - Fixes the native 1080p freeze reported as `native sequence gap: waiting for a clean IDR`.
+ - Uses a larger reorder window suitable for the heavier 1080p UDP stream.
+@@ -84,7 +93,11 @@
+ - **A in Catalog/Install:** add a title to My Games; press again to play.
+ - **X in any library section:** add or remove the selected game from Favorites.
+ - **R3 in the library:** refresh the Boosteroid library.
+-- **Two dots during streaming:** open the touch settings panel.
++- **Touch/drag during streaming:** move the remote mouse and hold/release left click.
++- **Hold Minus + right stick:** move the remote mouse without touching the screen.
++- **Hold Minus + R3:** press/release the remote right mouse button.
++- **Tap Minus:** send the normal View/Back controller button.
++- **Two dots during streaming:** open the touch settings panel and choose mouse speed.
+ - **Touch Xbox symbol:** send Xbox Guide/Home.
+ - **Press both sticks:** send Xbox Guide/Home without touch.
+ - **L + R + Minus:** stop streaming and return to the library.
+diff -ruN '--exclude=deps/switch' a/RECOVERY_TEST_PLAN.md b/RECOVERY_TEST_PLAN.md
+--- a/RECOVERY_TEST_PLAN.md	2026-08-04 01:44:33.503152589 +0000
++++ b/RECOVERY_TEST_PLAN.md	2026-08-04 02:00:45.615125023 +0000
+@@ -1,4 +1,4 @@
+-# ZERODROID v0.8.4.1 recovery test plan
++# ZERODROID v0.8.4.2 recovery regression test plan
+ 
+ The hotfix was prepared from the v0.8.4 source and the two uploaded session logs.
+ Both logs reached native 1920×1080 correctly and then entered the same sequence-gap state while controller messages continued.
+@@ -14,7 +14,7 @@
+ Expected output:
+ 
+ ```text
+-switch/ZERODROID_v0.8.4.1.nro
++switch/ZERODROID_v0.8.4.2.nro
+ ```
+ 
+ ## First validation
+diff -ruN '--exclude=deps/switch' a/switch/Makefile b/switch/Makefile
+--- a/switch/Makefile	2026-08-04 01:16:10.911200869 +0000
++++ b/switch/Makefile	2026-08-04 01:59:38.359126930 +0000
+@@ -11,10 +11,10 @@
+ 
+ APP_TITLE   := ZERODROID
+ APP_AUTHOR  := Zero Data
+-APP_VERSION := 0.8.4.1
++APP_VERSION := 0.8.4.2
+ APP_ICON    := icon.jpg
+ 
+-TARGET   := ZERODROID_v0.8.4.1
++TARGET   := ZERODROID_v0.8.4.2
+ BUILD    := build-switch
+ SOURCES  := src/core src/switch
+ INCLUDES := src vendor deps/shim/include
+diff -ruN '--exclude=deps/switch' a/switch/src/switch/main.cpp b/switch/src/switch/main.cpp
+--- a/switch/src/switch/main.cpp	2026-08-04 01:16:10.919200869 +0000
++++ b/switch/src/switch/main.cpp	2026-08-04 01:58:08.287129484 +0000
+@@ -7,6 +7,7 @@
+ #include <algorithm>
+ #include <cctype>
+ #include <chrono>
++#include <cmath>
+ #include <future>
+ #include <fstream>
+ #include <iostream>
+@@ -114,6 +115,7 @@
+     std::string preferredLocationLabel{"Automatico"};
+     bool xboxFaceLayout{false};
+     int language{0};  // 0 = Espanol, 1 = English
++    int mouseSpeed{gnx::stream::MouseNormal};
+     int resolutionMode{gnx::stream::ResolutionAuto};
+     int picturePreset{gnx::stream::PresetNatural};
+     int brightness{0};
+@@ -153,6 +155,9 @@
+             "preferredLocationLabel", std::string("Automatico"));
+         settings.xboxFaceLayout = value.value("xboxFaceLayout", false);
+         settings.language = std::clamp(value.value("language", 0), 0, 1);
++        settings.mouseSpeed = std::clamp(
++            value.value("mouseSpeed", gnx::stream::MouseNormal),
++            gnx::stream::MousePrecise, gnx::stream::MouseFast);
+         settings.resolutionMode = std::clamp(
+             value.value("resolutionMode", gnx::stream::ResolutionAuto),
+             gnx::stream::ResolutionAuto, gnx::stream::Resolution1440p);
+@@ -179,12 +184,13 @@
+     std::ofstream file("sdmc:/switch/ZERODROID/settings.json");
+     if (!file.is_open()) return false;
+     file << nlohmann::json({
+-        {"version", 5},
++        {"version", 6},
+         {"allowDistantRegions", settings.allowDistantRegions},
+         {"preferredLocationId", settings.preferredLocationId},
+         {"preferredLocationLabel", settings.preferredLocationLabel},
+         {"xboxFaceLayout", settings.xboxFaceLayout},
+         {"language", settings.language},
++        {"mouseSpeed", settings.mouseSpeed},
+         {"resolutionMode", settings.resolutionMode},
+         {"picturePreset", settings.picturePreset},
+         {"brightness", settings.brightness},
+@@ -379,7 +385,7 @@
+         persistentChanged = true;
+         changed = true;
+     } else {
+-        for (int row = gnx::stream::QuickResolution;
++        for (int row = gnx::stream::QuickMouseSpeed;
+              row <= gnx::stream::QuickSharpness; ++row) {
+             int direction = 0;
+             if (point_in_rect(x, y, gnx::stream::quick_minus_rect(row))) {
+@@ -387,7 +393,8 @@
+             } else if (point_in_rect(
+                            x, y, gnx::stream::quick_plus_rect(row))) {
+                 direction = 1;
+-            } else if ((row == gnx::stream::QuickResolution ||
++            } else if ((row == gnx::stream::QuickMouseSpeed ||
++                        row == gnx::stream::QuickResolution ||
+                         row == gnx::stream::QuickPreset) &&
+                        point_in_rect(x, y,
+                                      gnx::stream::quick_row_rect(row))) {
+@@ -395,7 +402,9 @@
+             }
+             if (direction == 0) continue;
+ 
+-            if (row == gnx::stream::QuickResolution) {
++            if (row == gnx::stream::QuickMouseSpeed) {
++                state.mouseSpeed = (state.mouseSpeed + direction + 3) % 3;
++            } else if (row == gnx::stream::QuickResolution) {
+                 state.resolutionMode =
+                     (state.resolutionMode + direction + 4) % 4;
+             } else if (row == gnx::stream::QuickPreset) {
+@@ -522,6 +531,7 @@
+     };
+     gnx::stream::QuickMenuState quickMenuState;
+     quickMenuState.xboxFaceLayout = serverSettings.xboxFaceLayout;
++    quickMenuState.mouseSpeed = serverSettings.mouseSpeed;
+     quickMenuState.resolutionMode = serverSettings.resolutionMode;
+     quickMenuState.picturePreset = serverSettings.picturePreset;
+     quickMenuState.brightness = serverSettings.brightness;
+@@ -533,6 +543,7 @@
+ 
+     const auto persistQuickMenu = [&]() {
+         serverSettings.xboxFaceLayout = quickMenuState.xboxFaceLayout;
++        serverSettings.mouseSpeed = quickMenuState.mouseSpeed;
+         serverSettings.resolutionMode = quickMenuState.resolutionMode;
+         serverSettings.picturePreset = quickMenuState.picturePreset;
+         serverSettings.brightness = quickMenuState.brightness;
+@@ -598,11 +609,21 @@
+     bool launchPanel = false;
+     bool dekoStreaming = false;
+     bool touchWasDown = false;
++    bool touchCapturedByOverlay = false;
++    bool touchMouseActive = false;
+     int touchDownX = 0;
+     int touchDownY = 0;
+     int touchLastX = 0;
+     int touchLastY = 0;
+     uint64_t guideTouchUntil = 0;
++    bool minusTapPending = false;
++    bool minusMouseUsed = false;
++    bool minusSyntheticDown = false;
++    bool mouseRightDown = false;
++    uint64_t minusSyntheticReleaseAt = 0;
++    uint64_t mouseMoveTick = SDL_GetTicks64();
++    float virtualMouseX = 0.5f;
++    float virtualMouseY = 0.5f;
+     std::string launchingTitle;
+     int launchingGameId = 0;
+ 
+@@ -801,10 +822,28 @@
+     // 4. Main SDL2 Graphical Render Loop
+     while (appletMainLoop()) {
+         padUpdate(&pad);
+-        u64 kDown = padGetButtonsDown(&pad);
++        const u64 kDown = padGetButtonsDown(&pad);
++        const u64 kUp = padGetButtonsUp(&pad);
+         const u64 kHeld = padGetButtons(&pad);
+ 
+         if (dekoStreaming) {
++            const uint64_t nowTicks = SDL_GetTicks64();
++            const u64 exitMask =
++                HidNpadButton_L | HidNpadButton_R | HidNpadButton_Minus;
++            const bool leaveStream = (kHeld & exitMask) == exitMask;
++
++            // A plain Minus press remains the normal View/Back button. It is
++            // delayed until release so holding Minus can safely become the
++            // virtual-mouse modifier without also reaching the game.
++            if (minusSyntheticDown && nowTicks >= minusSyntheticReleaseAt) {
++                stream->send_controller_button(6, false);
++                minusSyntheticDown = false;
++            }
++            if (kDown & HidNpadButton_Minus) {
++                minusTapPending = true;
++                minusMouseUsed = false;
++            }
++
+             HidTouchScreenState touchState{};
+             const bool touching =
+                 hidGetTouchScreenStates(&touchState, 1) > 0 &&
+@@ -815,59 +854,172 @@
+                 if (!touchWasDown) {
+                     touchDownX = x;
+                     touchDownY = y;
++                    touchCapturedByOverlay = quickMenuState.open ||
++                        point_in_rect(x, y, gnx::stream::kQuickToggleRect) ||
++                        point_in_rect(x, y, gnx::stream::kGuideButtonRect);
++                    touchMouseActive = !touchCapturedByOverlay;
++                    if (touchMouseActive) {
++                        virtualMouseX = std::clamp(
++                            static_cast<float>(x) / gnx::gfx::kWidth,
++                            0.0f, 1.0f);
++                        virtualMouseY = std::clamp(
++                            static_cast<float>(y) / gnx::gfx::kHeight,
++                            0.0f, 1.0f);
++                        stream->send_mouse_position(
++                            virtualMouseX, virtualMouseY, true);
++                        stream->send_mouse_button(0, true);
++                    }
++                } else if (touchMouseActive &&
++                           (x != touchLastX || y != touchLastY)) {
++                    virtualMouseX = std::clamp(
++                        static_cast<float>(x) / gnx::gfx::kWidth,
++                        0.0f, 1.0f);
++                    virtualMouseY = std::clamp(
++                        static_cast<float>(y) / gnx::gfx::kHeight,
++                        0.0f, 1.0f);
++                    stream->send_mouse_position(
++                        virtualMouseX, virtualMouseY, true);
+                 }
+                 touchWasDown = true;
+                 touchLastX = x;
+                 touchLastY = y;
+             } else if (touchWasDown) {
+                 touchWasDown = false;
+-                const int dx = std::abs(touchLastX - touchDownX);
+-                const int dy = std::abs(touchLastY - touchDownY);
+-                if (dx < 100 && dy < 100) {
+-                    const bool wasOpen = quickMenuState.open;
+-                    bool layoutChanged = false;
+-                    bool persistentChanged = false;
+-                    const bool quickTouch = handle_stream_settings_touch(
+-                        quickMenuState, touchLastX, touchLastY, layoutChanged,
+-                        persistentChanged);
+-                    if (quickTouch || wasOpen != quickMenuState.open) {
+-                        stream->set_quick_menu_state(quickMenuState);
+-                    }
+-                    if (layoutChanged) {
+-                        serverSettings.xboxFaceLayout =
+-                            quickMenuState.xboxFaceLayout;
+-                        stream->set_xbox_face_layout(
+-                            serverSettings.xboxFaceLayout);
+-                    }
+-                    if (persistentChanged) {
+-                        persistQuickMenu();
+-                    }
+-                    if (!quickTouch && point_in_rect(
+-                            touchLastX, touchLastY,
+-                            gnx::stream::kGuideButtonRect)) {
+-                        guideTouchUntil = SDL_GetTicks64() + 160;
++                if (touchMouseActive) {
++                    virtualMouseX = std::clamp(
++                        static_cast<float>(touchLastX) / gnx::gfx::kWidth,
++                        0.0f, 1.0f);
++                    virtualMouseY = std::clamp(
++                        static_cast<float>(touchLastY) / gnx::gfx::kHeight,
++                        0.0f, 1.0f);
++                    stream->send_mouse_position(
++                        virtualMouseX, virtualMouseY, true);
++                    stream->send_mouse_button(0, false);
++                } else if (touchCapturedByOverlay) {
++                    const int dx = std::abs(touchLastX - touchDownX);
++                    const int dy = std::abs(touchLastY - touchDownY);
++                    if (dx < 100 && dy < 100) {
++                        const bool wasOpen = quickMenuState.open;
++                        bool layoutChanged = false;
++                        bool persistentChanged = false;
++                        const bool quickTouch = handle_stream_settings_touch(
++                            quickMenuState, touchLastX, touchLastY,
++                            layoutChanged, persistentChanged);
++                        if (quickTouch || wasOpen != quickMenuState.open) {
++                            stream->set_quick_menu_state(quickMenuState);
++                        }
++                        if (layoutChanged) {
++                            serverSettings.xboxFaceLayout =
++                                quickMenuState.xboxFaceLayout;
++                            stream->set_xbox_face_layout(
++                                serverSettings.xboxFaceLayout);
++                        }
++                        if (persistentChanged) persistQuickMenu();
++                        if (!quickTouch && point_in_rect(
++                                touchLastX, touchLastY,
++                                gnx::stream::kGuideButtonRect)) {
++                            guideTouchUntil = nowTicks + 160;
++                        }
+                     }
+                 }
++                touchCapturedByOverlay = false;
++                touchMouseActive = false;
+             }
+ 
+-            const bool guidePressed = SDL_GetTicks64() < guideTouchUntil;
++            const bool guidePressed = nowTicks < guideTouchUntil;
+             stream->set_guide_button_pressed(guidePressed);
+-            const u64 exitMask =
+-                HidNpadButton_L | HidNpadButton_R | HidNpadButton_Minus;
+-            const bool leaveStream = (kHeld & exitMask) == exitMask;
+-            stream->send_gamepad(
+-                padGetStickPos(&pad, 0), padGetStickPos(&pad, 1), kHeld);
++
++            HidAnalogStickState leftStick = padGetStickPos(&pad, 0);
++            HidAnalogStickState rightStick = padGetStickPos(&pad, 1);
++            HidAnalogStickState gameRightStick = rightStick;
++            u64 gameButtons = kHeld & ~HidNpadButton_Minus;
++            const bool minusHeld = (kHeld & HidNpadButton_Minus) != 0;
++
++            const float mouseDt = std::clamp(
++                static_cast<float>(nowTicks - mouseMoveTick) / 1000.0f,
++                0.0f, 0.05f);
++            mouseMoveTick = nowTicks;
++
++            if (minusHeld) {
++                // Minus owns the right stick and R3 while held. Zeroing both in
++                // the gamepad packet prevents simultaneous camera movement or
++                // a controller-stick click at the remote machine.
++                gameRightStick = {};
++                gameButtons &= ~HidNpadButton_StickR;
++
++                const bool wantsRightClick =
++                    (kHeld & HidNpadButton_StickR) != 0;
++                if (wantsRightClick != mouseRightDown) {
++                    stream->send_mouse_button(2, wantsRightClick);
++                    mouseRightDown = wantsRightClick;
++                    minusMouseUsed = true;
++                    minusTapPending = false;
++                }
++
++                constexpr float kMouseDeadzone = 4500.0f;
++                const float rx = static_cast<float>(rightStick.x);
++                const float ry = static_cast<float>(rightStick.y);
++                const float magnitude = std::sqrt(rx * rx + ry * ry);
++                if (magnitude > kMouseDeadzone) {
++                    const float response = std::pow(std::clamp(
++                        (magnitude - kMouseDeadzone) /
++                            (32767.0f - kMouseDeadzone),
++                        0.0f, 1.0f), 1.55f);
++                    static constexpr float speeds[3] = {0.38f, 0.78f, 1.28f};
++                    const int speedIndex = std::clamp(
++                        quickMenuState.mouseSpeed,
++                        static_cast<int>(gnx::stream::MousePrecise),
++                        static_cast<int>(gnx::stream::MouseFast));
++                    const float distance = speeds[speedIndex] * response * mouseDt;
++                    virtualMouseX = std::clamp(
++                        virtualMouseX + (rx / magnitude) * distance,
++                        0.0f, 1.0f);
++                    virtualMouseY = std::clamp(
++                        virtualMouseY - (ry / magnitude) * distance,
++                        0.0f, 1.0f);
++                    stream->send_mouse_position(
++                        virtualMouseX, virtualMouseY, true);
++                    minusMouseUsed = true;
++                    minusTapPending = false;
++                }
++            } else {
++                if (mouseRightDown) {
++                    stream->send_mouse_button(2, false);
++                    mouseRightDown = false;
++                }
++                if ((kUp & HidNpadButton_Minus) && minusTapPending &&
++                    !minusMouseUsed && !leaveStream) {
++                    stream->send_controller_button(6, true);
++                    minusSyntheticDown = true;
++                    minusSyntheticReleaseAt = nowTicks + 45;
++                }
++                if (kUp & HidNpadButton_Minus) {
++                    minusTapPending = false;
++                    minusMouseUsed = false;
++                }
++            }
++
++            stream->send_gamepad(leftStick, gameRightStick, gameButtons);
+             stream->pump_video();
+ 
+             const auto streamState = stream->state();
+             if (leaveStream || streamState == gnx::stream::EngineState::Failed ||
+                 streamState == gnx::stream::EngineState::Stopped) {
++                if (touchMouseActive) stream->send_mouse_button(0, false);
++                if (mouseRightDown) stream->send_mouse_button(2, false);
++                if (minusSyntheticDown) stream->send_controller_button(6, false);
+                 const std::string streamError = stream->error();
+                 stream->end_deko_output();
+                 stream->stop();
+                 dekoStreaming = false;
+                 touchWasDown = false;
++                touchCapturedByOverlay = false;
++                touchMouseActive = false;
+                 guideTouchUntil = 0;
++                minusTapPending = false;
++                minusMouseUsed = false;
++                minusSyntheticDown = false;
++                mouseRightDown = false;
+                 quickMenuState.open = false;
+                 if (!gfx.resume()) break;
+                 stream = std::make_unique<gnx::stream::Engine>(api, gfx.renderer());
+@@ -964,6 +1116,16 @@
+             } else {
+                 launchPanel = false;
+                 dekoStreaming = true;
++                touchWasDown = false;
++                touchCapturedByOverlay = false;
++                touchMouseActive = false;
++                minusTapPending = false;
++                minusMouseUsed = false;
++                minusSyntheticDown = false;
++                mouseRightDown = false;
++                mouseMoveTick = SDL_GetTicks64();
++                virtualMouseX = 0.5f;
++                virtualMouseY = 0.5f;
+                 continue;
+             }
+         }
+@@ -1658,8 +1820,14 @@
+ 
+                 gfx.text(ui("ZL/ZR: seccion   L/R: pagina   A: jugar/agregar   X: favorito   R3: recargar",
+                             "ZL/ZR: section   L/R: page   A: play/add   X: favorite   R3: refresh"),
+-                         180, 225, gnx::gfx::FontSize::Small,
++                         180, 218, gnx::gfx::FontSize::Small,
+                          gnx::gfx::kTextDim);
++                gfx.text(fit_text(gfx,
++                            ui("MOUSE: toca/arrastra la pantalla o manten (-) + stick derecho; (-)+R3: clic derecho",
++                               "MOUSE: touch/drag the screen or hold (-) + right stick; (-)+R3: right click"),
++                            1560, gnx::gfx::FontSize::Small),
++                         180, 246, gnx::gfx::FontSize::Small,
++                         gnx::gfx::kFocus);
+ 
+                 if (visibleGames.empty()) {
+                     SDL_Rect emptyRect = {300, 350, 1320, 350};
+@@ -1861,8 +2029,8 @@
+                            : (launchPanel
+                                 ? ui("(B) Cancelar inicio   (+) Salir",
+                                      "(B) Cancel launch   (+) Exit")
+-                                : ui("(Y) Buscar   (X) Favorito   (-) Settings   (+) Salir",
+-                                     "(Y) Search   (X) Favorite   (-) Settings   (+) Exit")))
++                                : ui("(Y) Buscar   (X) Favorito   (-) Settings   Mouse: tactil o (-)+stick der.   (+) Salir",
++                                     "(Y) Search   (X) Favorite   (-) Settings   Mouse: touch or (-)+R stick   (+) Exit")))
+                      : ui("(Y) Renovar QR   (+) Salir al menu principal",
+                           "(Y) Refresh QR   (+) Exit to HOME menu"),
+                  40, gnx::gfx::kHeight - 50, gnx::gfx::FontSize::Body,
+diff -ruN '--exclude=deps/switch' a/switch/src/switch/stream/dk_video_renderer.cpp b/switch/src/switch/stream/dk_video_renderer.cpp
+--- a/switch/src/switch/stream/dk_video_renderer.cpp	2026-08-04 01:16:10.919200869 +0000
++++ b/switch/src/switch/stream/dk_video_renderer.cpp	2026-08-04 01:56:50.963131677 +0000
+@@ -150,6 +150,7 @@
+         next.open != quick_state_.open ||
+         next.performance != quick_state_.performance ||
+         next.xboxFaceLayout != quick_state_.xboxFaceLayout ||
++        next.mouseSpeed != quick_state_.mouseSpeed ||
+         next.resolutionMode != quick_state_.resolutionMode ||
+         next.picturePreset != quick_state_.picturePreset || picture_changed;
+     quick_state_ = next;
+@@ -852,8 +853,11 @@
+         blit_quick_text("ZERODROID SETTINGS", menu.x + 20, menu.y + 16);
+ 
+         const char* labels[kQuickRowCount] = {
+-            "Performance", "Button layout", "Resolution", "Picture preset",
+-            "Brightness", "Contrast", "Saturation", "Gamma", "Sharpness"};
++            "Performance", "Button layout", "Mouse speed", "Resolution",
++            "Picture preset", "Brightness", "Contrast", "Saturation",
++            "Gamma", "Sharpness"};
++        const char* mouse_labels[3] = {
++            "PRECISE", "NORMAL", "FAST"};
+         const char* resolution_labels[4] = {
+             "AUTO", "720P", "1080P", "1440P"};
+         const char* preset_labels[6] = {
+@@ -888,7 +892,8 @@
+                 continue;
+             }
+ 
+-            if (row == QuickResolution || row == QuickPreset) {
++            if (row == QuickMouseSpeed || row == QuickResolution ||
++                row == QuickPreset) {
+                 QuickRect minus = local(quick_minus_rect(row));
+                 QuickRect plus = local(quick_plus_rect(row));
+                 fill(minus.x, minus.y + 4, minus.w, minus.h - 8,
+@@ -899,9 +904,11 @@
+                 frame(plus.x, plus.y + 4, plus.w, plus.h - 8, 2, edge);
+                 blit_quick_text("-", minus.x + 25, minus.y + 10);
+                 blit_quick_text("+", plus.x + 22, plus.y + 10);
+-                const char* value = row == QuickResolution
+-                    ? resolution_labels[quick_state_.resolutionMode]
+-                    : preset_labels[quick_state_.picturePreset];
++                const char* value = row == QuickMouseSpeed
++                    ? mouse_labels[quick_state_.mouseSpeed]
++                    : (row == QuickResolution
++                        ? resolution_labels[quick_state_.resolutionMode]
++                        : preset_labels[quick_state_.picturePreset]);
+                 blit_quick_text(value, rr.x + 300, rr.y + 12);
+                 continue;
+             }
+@@ -945,6 +952,12 @@
+         fill(reset.x, reset.y, reset.w, reset.h, surface);
+         frame(reset.x, reset.y, reset.w, reset.h, 2, accent);
+         blit_quick_text("RESET IMAGE", reset.x + 55, reset.y + 10);
++
++        QuickRect mouse_help = local(kQuickMouseHelpRect);
++        fill(mouse_help.x, mouse_help.y, mouse_help.w, mouse_help.h,
++             rgba(24, 21, 34, 235));
++        blit_quick_text("MOUSE: TOUCH OR HOLD MINUS + R STICK",
++                        mouse_help.x + 10, mouse_help.y + 8);
+     }
+ 
+     if (quick_cpu_)
+diff -ruN '--exclude=deps/switch' a/switch/src/switch/stream/engine.cpp b/switch/src/switch/stream/engine.cpp
+--- a/switch/src/switch/stream/engine.cpp	2026-08-04 01:19:22.007195450 +0000
++++ b/switch/src/switch/stream/engine.cpp	2026-08-04 01:58:28.351128915 +0000
+@@ -23,6 +23,7 @@
+ #include <sys/socket.h>
+ #include <sys/time.h>
+ #include <unistd.h>
++#include <utility>
+ 
+ extern "C" void gnx_peer_log_set(void (*cb)(const char* line));
+ 
+@@ -203,14 +204,37 @@
+     return candidates;
+ }
+ 
+-int axis_changed(int before, int after) {
+-    return std::abs(before - after) > 1100;
++constexpr float kStickDeadzone = 3200.0f;
++constexpr float kStickOuterRange = 30000.0f;
++constexpr int kAxisChangeThreshold = 700;
++constexpr uint64_t kAxisRefreshMs = 120;
++
++std::pair<int, int> controller_stick(HidAnalogStickState stick) {
++    // Apply a radial dead zone, preserve the original direction and expand the
++    // useful outer range. Joy-Con sticks often stop short of 32767; mapping
++    // ~30000 to full scale prevents games from interpreting a fully-held stick
++    // as walking.
++    const float x = static_cast<float>(stick.x);
++    const float y = static_cast<float>(-stick.y);
++    const float magnitude = std::sqrt(x * x + y * y);
++    if (magnitude <= kStickDeadzone) return {0, 0};
++
++    const float normalized = std::clamp(
++        (magnitude - kStickDeadzone) /
++            (kStickOuterRange - kStickDeadzone),
++        0.0f, 1.0f);
++    const float scale = normalized * 32767.0f / magnitude;
++    return {
++        std::clamp(static_cast<int>(std::lround(x * scale)), -32767, 32767),
++        std::clamp(static_cast<int>(std::lround(y * scale)), -32767, 32767),
++    };
+ }
+ 
+-int controller_axis(int value) {
+-    // Android TV scales MotionEvent axes to this symmetric range. libnx can
+-    // produce -32768, which is outside that range by one.
+-    return std::clamp(value, -32767, 32767);
++bool axis_should_send(int before, int after, uint64_t lastSent, uint64_t now) {
++    if (std::abs(before - after) >= kAxisChangeThreshold) return true;
++    if ((after == 0) != (before == 0)) return true;
++    if (std::abs(after) >= 32000 && before != after) return true;
++    return after != 0 && now - lastSent >= kAxisRefreshMs;
+ }
+ 
+ uint16_t read_le16(const uint8_t* value) {
+@@ -404,6 +428,15 @@
+     padInitialized_ = false;
+     inputLogged_ = false;
+     previousGuide_ = false;
++    previousLeft_ = {};
++    previousRight_ = {};
++    previousButtons_ = 0;
++    const int initialAxes[6] = {0, 0, -32767, 0, 0, -32767};
++    for (int axis = 0; axis < 6; ++axis) {
++        lastSentAxes_[axis] = initialAxes[axis];
++        lastAxisSentTicks_[axis] = 0;
++    }
++    lastInputDiagnosticTicks_ = 0;
+     remoteCandidates_.clear();
+     {
+         std::lock_guard<std::mutex> lock(nativeMutex_);
+@@ -1445,6 +1478,15 @@
+                 std::lock_guard<std::mutex> lock(inputMutex_);
+                 padInitialized_ = false;
+                 inputLogged_ = false;
++                previousLeft_ = {};
++                previousRight_ = {};
++                previousButtons_ = 0;
++                const int initialAxes[6] = {0, 0, -32767, 0, 0, -32767};
++                for (int axis = 0; axis < 6; ++axis) {
++                    lastSentAxes_[axis] = initialAxes[axis];
++                    lastAxisSentTicks_[axis] = 0;
++                }
++                lastInputDiagnosticTicks_ = 0;
+             }
+             log("controller registered name=" +
+                 message.value("name", std::string("?")) +
+@@ -1490,7 +1532,8 @@
+     const bool sent = control_.send_text(controlPayload.dump());
+     if (sent && !inputLogged_) {
+         inputLogged_ = true;
+-        log("first controller input sent action=" +
++        log("first input sent type=" +
++            payload.value("type", std::string("?")) + " action=" +
+             payload.value("action", std::string("?")) +
+             " native=" + (native ? std::string("yes") : std::string("no")));
+     }
+@@ -1509,6 +1552,32 @@
+     }
+ }
+ 
++void Engine::send_controller_button(int button, bool pressed) {
++    const int id = controllerId_.load();
++    if (id <= 0 || !control_.connected()) return;
++    std::lock_guard<std::mutex> lock(inputMutex_);
++    send_input_json({{"type", "controller"}, {"action", "button"},
++                     {"id", id}, {"button", button},
++                     {"value", pressed ? 1 : 0}});
++}
++
++void Engine::send_mouse_position(float x, float y, bool visible) {
++    if (!control_.connected()) return;
++    std::lock_guard<std::mutex> lock(inputMutex_);
++    send_input_json({{"type", "mouse"}, {"action", "move"},
++                     {"X", std::clamp(x, 0.0f, 1.0f)},
++                     {"Y", std::clamp(y, 0.0f, 1.0f)},
++                     {"offsetX", 0}, {"offsetY", 0},
++                     {"isVisible", visible}});
++}
++
++void Engine::send_mouse_button(int button, bool pressed) {
++    if (!control_.connected()) return;
++    std::lock_guard<std::mutex> lock(inputMutex_);
++    send_input_json({{"type", "mouse"}, {"action", "button"},
++                     {"btn", button}, {"isPressed", pressed}});
++}
++
+ void Engine::send_gamepad(HidAnalogStickState left,
+                           HidAnalogStickState right, u64 buttons) {
+     const int id = controllerId_.load();
+@@ -1563,26 +1632,40 @@
+                          {"value", guide ? 1 : 0}});
+     }
+ 
+-    auto sendAxis = [&](int index, int before, int after) {
+-        if (!padInitialized_ || axis_changed(before, after)) {
++    const uint64_t now = SDL_GetTicks64();
++    auto sendAxis = [&](int index, int after) {
++        const int before = lastSentAxes_[index];
++        if (!padInitialized_ || axis_should_send(
++                before, after, lastAxisSentTicks_[index], now)) {
+             send_input_json({{"type", "controller"}, {"action", "axes"},
+                              {"id", id}, {"axes", index}, {"value", after}});
++            lastSentAxes_[index] = after;
++            lastAxisSentTicks_[index] = now;
+         }
+     };
+-    const int leftX = controller_axis(left.x);
+-    const int leftY = controller_axis(-left.y);
+-    const int rightX = controller_axis(right.x);
+-    const int rightY = controller_axis(-right.y);
+-    sendAxis(0, controller_axis(previousLeft_.x), leftX);
+-    sendAxis(1, controller_axis(-previousLeft_.y), leftY);
+-    sendAxis(3, controller_axis(previousRight_.x), rightX);
+-    sendAxis(4, controller_axis(-previousRight_.y), rightY);
+-    const int oldZl = (previousButtons_ & HidNpadButton_ZL) ? 32767 : -32767;
++
++    const auto leftAxes = controller_stick(left);
++    const auto rightAxes = controller_stick(right);
++    sendAxis(0, leftAxes.first);
++    sendAxis(1, leftAxes.second);
++    sendAxis(3, rightAxes.first);
++    sendAxis(4, rightAxes.second);
+     const int newZl = (effectiveButtons & HidNpadButton_ZL) ? 32767 : -32767;
+-    const int oldZr = (previousButtons_ & HidNpadButton_ZR) ? 32767 : -32767;
+     const int newZr = (effectiveButtons & HidNpadButton_ZR) ? 32767 : -32767;
+-    sendAxis(2, oldZl, newZl);
+-    sendAxis(5, oldZr, newZr);
++    sendAxis(2, newZl);
++    sendAxis(5, newZr);
++
++    // Throttled diagnostic makes it possible to confirm that a physically
++    // full stick reaches full-scale at the gateway without flooding logs.
++    if (now - lastInputDiagnosticTicks_ >= 2000 &&
++        (leftAxes.first != 0 || leftAxes.second != 0 ||
++         rightAxes.first != 0 || rightAxes.second != 0)) {
++        log("gamepad TX LX=" + std::to_string(leftAxes.first) +
++            " LY=" + std::to_string(leftAxes.second) +
++            " RX=" + std::to_string(rightAxes.first) +
++            " RY=" + std::to_string(rightAxes.second));
++        lastInputDiagnosticTicks_ = now;
++    }
+ 
+     int hat = 0;
+     const bool up = effectiveButtons & HidNpadButton_Up;
+diff -ruN '--exclude=deps/switch' a/switch/src/switch/stream/engine.hpp b/switch/src/switch/stream/engine.hpp
+--- a/switch/src/switch/stream/engine.hpp	2026-08-04 01:18:46.663196452 +0000
++++ b/switch/src/switch/stream/engine.hpp	2026-08-04 01:53:17.463137731 +0000
+@@ -58,6 +58,11 @@
+     // libnx state -> Boosteroid's Android TV controller protocol.
+     void send_gamepad(HidAnalogStickState left, HidAnalogStickState right,
+                       u64 buttons);
++    // Direct input helpers used by the delayed Minus modifier and the virtual
++    // mouse. Mouse coordinates are normalized to the streamed picture (0..1).
++    void send_controller_button(int button, bool pressed);
++    void send_mouse_position(float x, float y, bool visible = true);
++    void send_mouse_button(int button, bool pressed);
+     void set_xbox_face_layout(bool enabled) { xboxFaceLayout_ = enabled; }
+     void set_guide_button_pressed(bool pressed) {
+         guidePressed_ = pressed;
+@@ -227,6 +232,9 @@
+     HidAnalogStickState previousLeft_{};
+     HidAnalogStickState previousRight_{};
+     u64 previousButtons_{0};
++    int lastSentAxes_[6]{0, 0, -32767, 0, 0, -32767};
++    uint64_t lastAxisSentTicks_[6]{};
++    uint64_t lastInputDiagnosticTicks_{0};
+ 
+     std::mutex rumbleMutex_;
+     RumbleCommand rumble_;
+diff -ruN '--exclude=deps/switch' a/switch/src/switch/stream/quick_menu.hpp b/switch/src/switch/stream/quick_menu.hpp
+--- a/switch/src/switch/stream/quick_menu.hpp	2026-08-04 01:16:10.919200869 +0000
++++ b/switch/src/switch/stream/quick_menu.hpp	2026-08-04 01:53:01.079138196 +0000
+@@ -14,18 +14,18 @@
+     int h;
+ };
+ 
+-// The compact handle remains in the top safe strip. The expanded panel is
+-// taller in v0.8.4 so resolution and picture presets are available without
+-// removing the existing manual image controls.
++// v0.8.4.2 keeps the panel inside the same safe area while fitting a dedicated
++// mouse-speed row. Rows are slightly more compact, but preserve large touch
++// targets on the Switch display.
+ inline constexpr QuickRect kQuickTextureRect{1160, 8, 672, 928};
+ inline constexpr QuickRect kQuickToggleRect{1760, 8, 72, 72};
+ inline constexpr QuickRect kGuideButtonRect{1840, 8, 72, 72};
+ inline constexpr QuickRect kQuickPanelRect{1160, 104, 508, 820};
+ 
+-inline constexpr int kQuickRowCount = 9;
+-inline constexpr int kQuickRowFirstY = 148;
+-inline constexpr int kQuickRowHeight = 58;
+-inline constexpr int kQuickRowPitch = 64;
++inline constexpr int kQuickRowCount = 10;
++inline constexpr int kQuickRowFirstY = 146;
++inline constexpr int kQuickRowHeight = 50;
++inline constexpr int kQuickRowPitch = 54;
+ 
+ inline constexpr QuickRect quick_row_rect(int row) {
+     return {1180, kQuickRowFirstY + row * kQuickRowPitch, 468,
+@@ -42,19 +42,21 @@
+     return {1584, r.y, 64, r.h};
+ }
+ 
+-inline constexpr QuickRect kQuickNoticeRect{1180, 734, 468, 82};
+-inline constexpr QuickRect kQuickResetRect{1280, 842, 268, 54};
++inline constexpr QuickRect kQuickNoticeRect{1180, 700, 468, 76};
++inline constexpr QuickRect kQuickResetRect{1280, 798, 268, 54};
++inline constexpr QuickRect kQuickMouseHelpRect{1180, 862, 468, 46};
+ 
+ enum QuickRow {
+     QuickPerformance = 0,
+     QuickController = 1,
+-    QuickResolution = 2,
+-    QuickPreset = 3,
+-    QuickBrightness = 4,
+-    QuickContrast = 5,
+-    QuickSaturation = 6,
+-    QuickGamma = 7,
+-    QuickSharpness = 8,
++    QuickMouseSpeed = 2,
++    QuickResolution = 3,
++    QuickPreset = 4,
++    QuickBrightness = 5,
++    QuickContrast = 6,
++    QuickSaturation = 7,
++    QuickGamma = 8,
++    QuickSharpness = 9,
+ };
+ 
+ enum StreamResolutionMode {
+@@ -73,10 +75,17 @@
+     PresetCustom = 5,
+ };
+ 
++enum MouseSpeed {
++    MousePrecise = 0,
++    MouseNormal = 1,
++    MouseFast = 2,
++};
++
+ struct QuickMenuState {
+     bool open = false;
+     bool performance = false;
+     bool xboxFaceLayout = false;
++    int mouseSpeed = MouseNormal;
+     int resolutionMode = ResolutionAuto;
+     int picturePreset = PresetNatural;
+     int brightness = 0;   // -20..+20
+@@ -134,6 +143,9 @@
+ }
+ 
+ inline QuickMenuState normalized_quick_menu(QuickMenuState state) {
++    state.mouseSpeed = std::clamp(
++        state.mouseSpeed, static_cast<int>(MousePrecise),
++        static_cast<int>(MouseFast));
+     state.resolutionMode = std::clamp(
+         state.resolutionMode, static_cast<int>(ResolutionAuto),
+         static_cast<int>(Resolution1440p));

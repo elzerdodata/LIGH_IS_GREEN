@@ -1,0 +1,14 @@
+* text=auto
+
+*.c text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.glsl text eol=lf
+*.md text eol=lf
+*.patch text eol=lf
+*.pem text eol=lf
+*.sh text eol=lf
+
+*.jpg binary
+*.png binary

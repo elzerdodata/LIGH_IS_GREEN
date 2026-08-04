@@ -1,0 +1,20 @@
+ZERODROID v0.8.4.4 STATIC VALIDATION
+
+PASS - quick_menu.hpp host C++17 syntax test with g++.
+PASS - lexical brace/parenthesis/bracket balance for modified C++ files.
+PASS - git diff --check found no whitespace errors in the v0.8.4.3 -> v0.8.4.4 changes.
+PASS - VERIFY_KIT.sh structural checks.
+PASS - required precompiled Switch libraries present.
+PASS - required deko3d shader binaries present.
+
+Balance details:
+main.cpp PASS {'{': 364, '}': 364, '(': 1176, ')': 1176, '[': 45, ']': 45}
+engine.cpp PASS {'{': 462, '}': 462, '(': 1342, ')': 1342, '[': 140, ']': 140}
+engine.hpp PASS {'{': 95, '}': 95, '(': 73, ')': 73, '[': 2, ']': 2}
+dk_video_renderer.cpp PASS {'{': 208, '}': 208, '(': 805, ')': 805, '[': 126, ']': 126}
+quick_menu.hpp PASS {'{': 38, '}': 38, '(': 25, ')': 25, '[': 0, ']': 0}
+
+NOT PERFORMED:
+- devkitA64 compilation (toolchain unavailable in this environment).
+- Nintendo Switch hardware validation.
+- Boosteroid service validation for mouse, ALT+TAB and reconnect.

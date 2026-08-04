@@ -1,0 +1,768 @@
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/.github/workflows/build-v0.8.4.3.yml b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/.github/workflows/build-v0.8.4.4.yml
+similarity index 67%
+rename from /mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/.github/workflows/build-v0.8.4.3.yml
+rename to /mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/.github/workflows/build-v0.8.4.4.yml
+index 68aec9a..9c20691 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/.github/workflows/build-v0.8.4.3.yml
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/.github/workflows/build-v0.8.4.4.yml
+@@ -1,14 +1,14 @@
+-name: Build ZERODROID v0.8.4.3
++name: Build ZERODROID v0.8.4.4
+ 
+ on:
+   workflow_dispatch:
+   push:
+     branches:
+-      - build/zerodroid-v0.8.4.3
++      - build/zerodroid-v0.8.4.4
+       - main
+     paths:
+       - 'switch/**'
+-      - '.github/workflows/build-v0.8.4.3.yml'
++      - '.github/workflows/build-v0.8.4.4.yml'
+ 
+ jobs:
+   build:
+@@ -32,14 +32,14 @@ jobs:
+           cd switch
+           make clean || true
+           make -j"$(nproc)"
+-          test -f ZERODROID_v0.8.4.3.nro
+-          sha256sum ZERODROID_v0.8.4.3.nro > ZERODROID_v0.8.4.3.sha256
++          test -f ZERODROID_v0.8.4.4.nro
++          sha256sum ZERODROID_v0.8.4.4.nro > ZERODROID_v0.8.4.4.sha256
+ 
+-      - name: Upload v0.8.4.3 artifact
++      - name: Upload v0.8.4.4 artifact
+         uses: actions/upload-artifact@v4
+         with:
+-          name: ZERODROID-v0.8.4.3
++          name: ZERODROID-v0.8.4.4
+           path: |
+-            switch/ZERODROID_v0.8.4.3.nro
+-            switch/ZERODROID_v0.8.4.3.sha256
++            switch/ZERODROID_v0.8.4.4.nro
++            switch/ZERODROID_v0.8.4.4.sha256
+           if-no-files-found: error
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/BUILD_V0.8.4.3.md b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/BUILD_V0.8.4.4.md
+similarity index 86%
+rename from /mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/BUILD_V0.8.4.3.md
+rename to /mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/BUILD_V0.8.4.4.md
+index b474b05..7441ad1 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/BUILD_V0.8.4.3.md
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/BUILD_V0.8.4.4.md
+@@ -1,4 +1,4 @@
+-# Building ZERODROID v0.8.4.3
++# Building ZERODROID v0.8.4.4
+ 
+ The source archive includes the prebuilt Switch WebRTC dependency bundle under
+ `switch/deps/switch/` and the generated deko3d shaders under
+@@ -15,14 +15,14 @@ make -j4
+ The expected output is:
+ 
+ ```text
+-switch/ZERODROID_v0.8.4.3.nro
++switch/ZERODROID_v0.8.4.4.nro
+ ```
+ 
+ ## GitHub Actions
+ 
+-The included `.github/workflows/build-v0.8.4.3.yml` builds the same NRO inside the
++The included `.github/workflows/build-v0.8.4.4.yml` builds the same NRO inside the
+ official `devkitpro/devkita64` container and uploads it as a workflow artifact.
+-It can be started manually with **Actions → Build ZERODROID v0.8.4.3 → Run
++It can be started manually with **Actions → Build ZERODROID v0.8.4.4 → Run
+ workflow**.
+ 
+ ## Runtime notes
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/CHANGELOG.md b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/CHANGELOG.md
+index 9072953..ec52f9c 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/CHANGELOG.md
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/CHANGELOG.md
+@@ -1,5 +1,16 @@
+ # ZERODROID changelog
+ 
++## v0.8.4.4 - Unified control center
++
++- Consolidates every feature introduced in v0.8.3, v0.8.4, v0.8.4.1, v0.8.4.2 and v0.8.4.3 into one clean source tree and one reproducible build target.
++- Replaces the compact session popup with a large lilac/graphite session control center opened from the top-right lilac Xbox/X touch icon.
++- Adds live session diagnostics: game, negotiated stream resolution, Switch output resolution, ping, UDP drop/recovery counters, recovery requests, gateway, session time and desktop-input transmission counters.
++- Adds large touch actions for Xbox Guide, ALT+TAB, mouse enable/disable, graphics settings, reconnect and return to game.
++- Adds a mandatory confirmation step before reconnecting so an accidental touch cannot tear down the local transport.
++- Captures controller input while either in-stream overlay is visible, preventing the game from moving or accepting buttons behind the menu.
++- Adds B to close the overlay and keeps Plus+Minus as an optional controller shortcut; the preferred action remains touching the lilac X.
++- Keeps the keyboard action informational until a safe deko3d suspend/resume and remote text-injection path is proven.
++
+ ## v0.8.4.3 - Desktop input and session recovery
+ 
+ - Sends mouse and keyboard events with Boosteroid's browser-style `id_cmd` / `from_udp` control envelope even while the media path is native UDP.
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/INPUT_SESSION_TECHNICAL_NOTES.md b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/INPUT_SESSION_TECHNICAL_NOTES.md
+index ea86643..3fd00fb 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/INPUT_SESSION_TECHNICAL_NOTES.md
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/INPUT_SESSION_TECHNICAL_NOTES.md
+@@ -1,11 +1,11 @@
+-# ZERODROID v0.8.4.3 desktop input and session notes
++# ZERODROID v0.8.4.4 desktop input and session notes
+ 
+ ## Mouse failure found in v0.8.4.2
+ 
+ The virtual mouse generated the expected `mouse/move` and `mouse/button` JSON,
+ but the native `/native` media path sent it as plain Android-TV control JSON.
+ Boosteroid's browser desktop-input path uses an `id_cmd` sequence and
+-`from_udp` marker. v0.8.4.3 keeps controller traffic unchanged and applies that
++`from_udp` marker. v0.8.4.4 keeps controller traffic unchanged and applies that
+ browser envelope to mouse and keyboard packets over the control WebSocket.
+ 
+ Expected first-use log entries:
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/INPUT_SESSION_TEST_PLAN.md b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/INPUT_SESSION_TEST_PLAN.md
+index bc1d39b..e0ff56c 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/INPUT_SESSION_TEST_PLAN.md
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/INPUT_SESSION_TEST_PLAN.md
+@@ -1,4 +1,4 @@
+-# ZERODROID v0.8.4.3 input/session test plan
++# ZERODROID v0.8.4.4 input/session test plan
+ 
+ Test with title takeover, not Album/applet mode. Keep `stream.log` after each
+ failed test.
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/README.md b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/README.md
+index b5349dc..e0ad9b7 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/README.md
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/README.md
+@@ -3,7 +3,7 @@
+ **Zero Data · Nintendo Switch cloud gaming client**
+ 
+ ZERODROID is an open-source, unofficial Boosteroid client for Nintendo Switch
+-homebrew. Version 0.8.4.3 provides QR login, a controller-first game library,
++homebrew. Version 0.8.4.4 provides QR login, a controller-first game library,
+ native H.264 video, Opus audio and complete controller input.
+ 
+ > [!IMPORTANT]
+@@ -11,14 +11,23 @@ native H.264 video, Opus audio and complete controller input.
+ > Nintendo. It requires a legitimate Boosteroid account and does not provide,
+ > download or bypass access to games, subscriptions, DRM or Nintendo software.
+ 
+-## New in v0.8.4.3
++## New in v0.8.4.4
++
++- One unified source tree containing the complete v0.8.3 catalog work, the v0.8.4 display/library redesign and every later recovery/input hotfix.
++- Touching the lilac Xbox/X icon in the top-right corner opens a large session control center instead of immediately sending Guide/Home.
++- The control center displays the current game, gateway, stream/output resolutions, ping, session time, UDP recovery counters and mouse/keyboard transmission counters.
++- Large touch actions provide Xbox Guide/Home, ALT+TAB, mouse enable/disable, graphics settings, reconnect and return to game.
++- Reconnect requires confirmation and attempts to preserve the remote Boosteroid machine while rebuilding only ZERODROID's local transport. This remains experimental and must be verified on real hardware.
++- B closes the control center. Plus+Minus is an optional secondary shortcut; touching the lilac X is the primary control.
++- While an overlay is open, ZERODROID sends neutral controller input so the game cannot move or react behind the menu.
++- The keyboard tile is intentionally informational in this build. Antigravity must not fake remote text injection or block the deko3d streaming window with an untested software-keyboard implementation.
++
++## Included from v0.8.4.3
+ 
+ - Fixes desktop mouse/keyboard packets on native `/native` streams by using the browser-style `id_cmd` and `from_udp` envelope expected by Boosteroid.
+ - Adds **Minus + X** for ALT+TAB, matching the browser client's keyboard event sequence.
+ - Adds left click/drag with **Minus + ZR** or **Minus + ZL**, while **Minus + R3** remains right click.
+-- Touching the always-visible Xbox/X icon opens a session-actions panel with Guide/Home, ALT+TAB, Reconnect Same Session and Close.
+-- Reconnect Same Session closes only the local Switch transport, preserves the remote Boosteroid VM, and starts a fresh attachment to the active session.
+-- Expands the bilingual on-screen control reminder for mouse, click, ALT+TAB and session actions.
++- Reconnect Same Session closes only the local Switch transport before attempting a new attachment to the active app.
+ 
+ ## Included from v0.8.4.2
+ 
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/RECOVERY_TEST_PLAN.md b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/RECOVERY_TEST_PLAN.md
+index bb91b1e..b39878f 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/RECOVERY_TEST_PLAN.md
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/RECOVERY_TEST_PLAN.md
+@@ -1,4 +1,4 @@
+-# ZERODROID v0.8.4.3 recovery regression test plan
++# ZERODROID v0.8.4.4 recovery regression test plan
+ 
+ The hotfix was prepared from the v0.8.4 source and the two uploaded session logs.
+ Both logs reached native 1920×1080 correctly and then entered the same sequence-gap state while controller messages continued.
+@@ -14,7 +14,7 @@ make -j"$(nproc)"
+ Expected output:
+ 
+ ```text
+-switch/ZERODROID_v0.8.4.3.nro
++switch/ZERODROID_v0.8.4.4.nro
+ ```
+ 
+ ## First validation
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/Makefile b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/Makefile
+index 66ba63f..0ee9484 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/Makefile
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/Makefile
+@@ -11,10 +11,10 @@ include $(DEVKITPRO)/libnx/switch_rules
+ 
+ APP_TITLE   := ZERODROID
+ APP_AUTHOR  := Zero Data
+-APP_VERSION := 0.8.4.3
++APP_VERSION := 0.8.4.4
+ APP_ICON    := icon.jpg
+ 
+-TARGET   := ZERODROID_v0.8.4.3
++TARGET   := ZERODROID_v0.8.4.4
+ BUILD    := build-switch
+ SOURCES  := src/core src/switch
+ INCLUDES := src vendor deps/shim/include
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/src/switch/main.cpp b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/src/switch/main.cpp
+index 0161d13..a3ee011 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/src/switch/main.cpp
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/src/switch/main.cpp
+@@ -624,6 +624,7 @@ int main(int argc, char* argv[]) {
+     bool reconnectRequested = false;
+     uint64_t minusSyntheticReleaseAt = 0;
+     uint64_t mouseMoveTick = SDL_GetTicks64();
++    uint64_t overlayMetricsTick = 0;
+     float virtualMouseX = 0.5f;
+     float virtualMouseY = 0.5f;
+     std::string launchingTitle;
+@@ -834,6 +835,8 @@ int main(int argc, char* argv[]) {
+ 
+         if (dekoStreaming) {
+             const uint64_t nowTicks = SDL_GetTicks64();
++            const bool overlayWasOpenAtFrameStart = quickMenuState.open ||
++                quickMenuState.sessionActionsOpen;
+             const u64 exitMask =
+                 HidNpadButton_L | HidNpadButton_R | HidNpadButton_Minus;
+             const bool leaveStream = (kHeld & exitMask) == exitMask;
+@@ -864,7 +867,8 @@ int main(int argc, char* argv[]) {
+                         quickMenuState.sessionActionsOpen ||
+                         point_in_rect(x, y, gnx::stream::kQuickToggleRect) ||
+                         point_in_rect(x, y, gnx::stream::kGuideButtonRect);
+-                    touchMouseActive = !touchCapturedByOverlay;
++                    touchMouseActive = !touchCapturedByOverlay &&
++                        quickMenuState.mouseModeEnabled;
+                     if (touchMouseActive) {
+                         virtualMouseX = std::clamp(
+                             static_cast<float>(x) / gnx::gfx::kWidth,
+@@ -918,27 +922,74 @@ int main(int argc, char* argv[]) {
+                             // first action inside the panel.
+                             quickMenuState.sessionActionsOpen =
+                                 !quickMenuState.sessionActionsOpen;
++                            quickMenuState.reconnectConfirmOpen = false;
+                             quickMenuState.open = false;
+                             menuStateChanged = true;
+                         } else if (quickMenuState.sessionActionsOpen) {
+-                            if (point_in_rect(
+-                                    tapX, tapY,
+-                                    gnx::stream::kSessionGuideRect)) {
++                            if (quickMenuState.reconnectConfirmOpen) {
++                                if (point_in_rect(
++                                        tapX, tapY,
++                                        gnx::stream::kReconnectConfirmRect)) {
++                                    reconnectRequested = true;
++                                    quickMenuState.reconnectConfirmOpen = false;
++                                    quickMenuState.sessionActionsOpen = false;
++                                } else if (point_in_rect(
++                                               tapX, tapY,
++                                               gnx::stream::kReconnectCancelRect) ||
++                                           !point_in_rect(
++                                               tapX, tapY,
++                                               gnx::stream::kReconnectConfirmPanelRect)) {
++                                    quickMenuState.reconnectConfirmOpen = false;
++                                }
++                            } else if (point_in_rect(
++                                           tapX, tapY,
++                                           gnx::stream::kSessionGuideRect)) {
+                                 guideTouchUntil = nowTicks + 160;
+                                 quickMenuState.sessionActionsOpen = false;
++                                quickMenuState.reconnectConfirmOpen = false;
+                             } else if (point_in_rect(
+                                            tapX, tapY,
+                                            gnx::stream::kSessionAltTabRect)) {
+                                 stream->send_alt_tab();
+-                                quickMenuState.sessionActionsOpen = false;
++                            } else if (point_in_rect(
++                                           tapX, tapY,
++                                           gnx::stream::kSessionKeyboardRect)) {
++                                // The native Switch keyboard cannot safely own
++                                // the display while deko3d owns the streaming
++                                // swapchain. Keep this informational until a
++                                // suspend/resume text injection path is proven.
++                                stream->log("session overlay keyboard info tapped");
++                            } else if (point_in_rect(
++                                           tapX, tapY,
++                                           gnx::stream::kSessionMouseRect)) {
++                                quickMenuState.mouseModeEnabled =
++                                    !quickMenuState.mouseModeEnabled;
++                                if (!quickMenuState.mouseModeEnabled) {
++                                    if (mouseLeftDown)
++                                        stream->send_mouse_button(0, false);
++                                    if (mouseRightDown)
++                                        stream->send_mouse_button(2, false);
++                                    mouseLeftDown = false;
++                                    mouseRightDown = false;
++                                }
+                             } else if (point_in_rect(
+                                            tapX, tapY,
+                                            gnx::stream::kSessionReconnectRect)) {
+-                                reconnectRequested = true;
++                                quickMenuState.reconnectConfirmOpen = true;
++                            } else if (point_in_rect(
++                                           tapX, tapY,
++                                           gnx::stream::kSessionSettingsRect)) {
+                                 quickMenuState.sessionActionsOpen = false;
+-                            } else {
+-                                // CLOSE or a tap outside the panel.
++                                quickMenuState.reconnectConfirmOpen = false;
++                                quickMenuState.open = true;
++                            } else if (point_in_rect(
++                                           tapX, tapY,
++                                           gnx::stream::kSessionCloseRect) ||
++                                       !point_in_rect(
++                                           tapX, tapY,
++                                           gnx::stream::kSessionPanelRect)) {
+                                 quickMenuState.sessionActionsOpen = false;
++                                quickMenuState.reconnectConfirmOpen = false;
+                             }
+                             menuStateChanged = true;
+                         } else {
+@@ -953,6 +1004,7 @@ int main(int argc, char* argv[]) {
+                                     tapX, tapY,
+                                     gnx::stream::kQuickToggleRect)) {
+                                 quickMenuState.sessionActionsOpen = false;
++                                quickMenuState.reconnectConfirmOpen = false;
+                             }
+                             if (quickTouch || wasOpen != quickMenuState.open) {
+                                 menuStateChanged = true;
+@@ -975,6 +1027,54 @@ int main(int argc, char* argv[]) {
+                 touchMouseActive = false;
+             }
+ 
++            const u64 overlayShortcut =
++                HidNpadButton_Plus | HidNpadButton_Minus;
++            if ((kHeld & overlayShortcut) == overlayShortcut &&
++                (kDown & overlayShortcut) != 0) {
++                quickMenuState.sessionActionsOpen =
++                    !quickMenuState.sessionActionsOpen;
++                quickMenuState.reconnectConfirmOpen = false;
++                quickMenuState.open = false;
++                minusTapPending = false;
++                minusMouseUsed = true;
++                stream->set_quick_menu_state(quickMenuState);
++            }
++            if ((kDown & HidNpadButton_B) &&
++                (quickMenuState.sessionActionsOpen || quickMenuState.open)) {
++                quickMenuState.sessionActionsOpen = false;
++                quickMenuState.reconnectConfirmOpen = false;
++                quickMenuState.open = false;
++                stream->set_quick_menu_state(quickMenuState);
++            }
++
++            if (quickMenuState.sessionActionsOpen &&
++                (overlayMetricsTick == 0 || nowTicks - overlayMetricsTick >= 500)) {
++                overlayMetricsTick = nowTicks;
++                const auto liveState = stream->state();
++                quickMenuState.sessionStatus =
++                    liveState == gnx::stream::EngineState::Streaming
++                        ? "CONNECTED"
++                        : (liveState == gnx::stream::EngineState::Failed
++                               ? "FAILED"
++                               : "CONNECTING");
++                quickMenuState.currentGame = activeStreamTitle;
++                quickMenuState.gatewayLabel = stream->gateway();
++                quickMenuState.streamWidth = activeStreamWidth;
++                quickMenuState.streamHeight = activeStreamHeight;
++                const bool docked =
++                    appletGetOperationMode() == AppletOperationMode_Console;
++                quickMenuState.outputWidth = docked ? 1920 : 1280;
++                quickMenuState.outputHeight = docked ? 1080 : 720;
++                quickMenuState.sessionSeconds = stream->session_seconds();
++                quickMenuState.droppedGroups = stream->dropped_groups();
++                quickMenuState.recoveredGroups = stream->recovered_groups();
++                quickMenuState.recoveryRequests = stream->recovery_requests();
++                quickMenuState.mouseMoves = stream->mouse_moves();
++                quickMenuState.mouseClicks = stream->mouse_clicks();
++                quickMenuState.keyboardEvents = stream->keyboard_events();
++                stream->set_quick_menu_state(quickMenuState);
++            }
++
+             const bool guidePressed = nowTicks < guideTouchUntil;
+             stream->set_guide_button_pressed(guidePressed);
+ 
+@@ -983,13 +1083,24 @@ int main(int argc, char* argv[]) {
+             HidAnalogStickState gameRightStick = rightStick;
+             u64 gameButtons = kHeld & ~HidNpadButton_Minus;
+             const bool minusHeld = (kHeld & HidNpadButton_Minus) != 0;
++            const bool streamOverlayOpen = overlayWasOpenAtFrameStart ||
++                quickMenuState.open || quickMenuState.sessionActionsOpen;
++            if (streamOverlayOpen) {
++                // The control centre owns input while visible. Send neutral
++                // controller state so opening the overlay cannot also move the
++                // game, rotate the camera or activate a menu behind it.
++                leftStick = {};
++                gameRightStick = {};
++                gameButtons = 0;
++            }
+ 
+             const float mouseDt = std::clamp(
+                 static_cast<float>(nowTicks - mouseMoveTick) / 1000.0f,
+                 0.0f, 0.05f);
+             mouseMoveTick = nowTicks;
+ 
+-            if (minusHeld) {
++            if (minusHeld && quickMenuState.mouseModeEnabled &&
++                !streamOverlayOpen) {
+                 // Minus owns desktop-input controls while held. Suppress their
+                 // normal gamepad meaning so the remote game never receives a
+                 // camera movement, trigger, X button or stick click at the same
+@@ -1098,6 +1209,7 @@ int main(int argc, char* argv[]) {
+                 reconnectRequested = false;
+                 quickMenuState.open = false;
+                 quickMenuState.sessionActionsOpen = false;
++                quickMenuState.reconnectConfirmOpen = false;
+                 if (!gfx.resume()) break;
+ 
+                 stream = std::make_unique<gnx::stream::Engine>(
+@@ -1143,6 +1255,7 @@ int main(int argc, char* argv[]) {
+                 reconnectRequested = false;
+                 quickMenuState.open = false;
+                 quickMenuState.sessionActionsOpen = false;
++                quickMenuState.reconnectConfirmOpen = false;
+                 if (!gfx.resume()) break;
+                 stream = std::make_unique<gnx::stream::Engine>(api, gfx.renderer());
+                 stream->set_xbox_face_layout(serverSettings.xboxFaceLayout);
+@@ -1248,6 +1361,7 @@ int main(int argc, char* argv[]) {
+                 mouseRightDown = false;
+                 reconnectRequested = false;
+                 quickMenuState.sessionActionsOpen = false;
++                quickMenuState.reconnectConfirmOpen = false;
+                 mouseMoveTick = SDL_GetTicks64();
+                 virtualMouseX = 0.5f;
+                 virtualMouseY = 0.5f;
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/src/switch/stream/dk_video_renderer.cpp b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/src/switch/stream/dk_video_renderer.cpp
+index a525409..e0581e2 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/src/switch/stream/dk_video_renderer.cpp
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/src/switch/stream/dk_video_renderer.cpp
+@@ -149,11 +149,27 @@ void DkVideoRenderer::set_quick_menu_state(const QuickMenuState& state) {
+     bool menu_changed =
+         next.open != quick_state_.open ||
+         next.sessionActionsOpen != quick_state_.sessionActionsOpen ||
++        next.reconnectConfirmOpen != quick_state_.reconnectConfirmOpen ||
++        next.mouseModeEnabled != quick_state_.mouseModeEnabled ||
+         next.performance != quick_state_.performance ||
+         next.xboxFaceLayout != quick_state_.xboxFaceLayout ||
+         next.mouseSpeed != quick_state_.mouseSpeed ||
+         next.resolutionMode != quick_state_.resolutionMode ||
+-        next.picturePreset != quick_state_.picturePreset || picture_changed;
++        next.picturePreset != quick_state_.picturePreset ||
++        next.sessionStatus != quick_state_.sessionStatus ||
++        next.currentGame != quick_state_.currentGame ||
++        next.gatewayLabel != quick_state_.gatewayLabel ||
++        next.streamWidth != quick_state_.streamWidth ||
++        next.streamHeight != quick_state_.streamHeight ||
++        next.outputWidth != quick_state_.outputWidth ||
++        next.outputHeight != quick_state_.outputHeight ||
++        next.sessionSeconds != quick_state_.sessionSeconds ||
++        next.droppedGroups != quick_state_.droppedGroups ||
++        next.recoveredGroups != quick_state_.recoveredGroups ||
++        next.recoveryRequests != quick_state_.recoveryRequests ||
++        next.mouseMoves != quick_state_.mouseMoves ||
++        next.mouseClicks != quick_state_.mouseClicks ||
++        next.keyboardEvents != quick_state_.keyboardEvents || picture_changed;
+     quick_state_ = next;
+     hud_enabled_ = next.performance;
+     if (picture_changed) transform_dirty_ = true;
+@@ -965,20 +981,124 @@ void DkVideoRenderer::rasterize_quick_menu() {
+         QuickRect menu = local(kSessionPanelRect);
+         fill(menu.x, menu.y, menu.w, menu.h, panel);
+         frame(menu.x, menu.y, menu.w, menu.h, 3, accent);
+-        blit_quick_text("SESSION ACTIONS", menu.x + 24, menu.y + 18);
++        blit_quick_text("ZERODROID CONTROL CENTER", menu.x + 20,
++                        menu.y + 14);
++
++        const uint32_t connected = rgba(92, 214, 133, 255);
++        const uint32_t warning = rgba(251, 191, 36, 255);
++        const bool healthy = quick_state_.sessionStatus == "CONNECTED" ||
++                             quick_state_.sessionStatus == "STREAMING";
++        fill(menu.x + menu.w - 172, menu.y + 12, 150, 38,
++             rgba(28, 54, 40, 238));
++        frame(menu.x + menu.w - 172, menu.y + 12, 150, 38, 2,
++              healthy ? connected : warning);
++        blit_quick_text(healthy ? "CONNECTED" : "CHECKING",
++                        menu.x + menu.w - 158, menu.y + 17);
++
++        QuickRect status = local(kSessionStatusRect);
++        QuickRect actions = local(kSessionActionsRect);
++        fill(status.x, status.y, status.w, status.h, rgba(24, 21, 34, 238));
++        fill(actions.x, actions.y, actions.w, actions.h,
++             rgba(24, 21, 34, 238));
++        frame(status.x, status.y, status.w, status.h, 2, edge);
++        frame(actions.x, actions.y, actions.w, actions.h, 2, edge);
++        blit_quick_text("LIVE SESSION", status.x + 14, status.y + 12);
++        blit_quick_text("CONTROLS", actions.x + 14, actions.y + 12);
++
++        const auto compact = [](const std::string& value, std::size_t limit) {
++            if (value.size() <= limit) return value;
++            if (limit <= 3) return value.substr(0, limit);
++            return value.substr(0, limit - 3) + "...";
++        };
++        char value[96];
++        int sy = status.y + 58;
++        const auto stat_line = [&](const char* label, const std::string& textValue) {
++            blit_quick_text(label, status.x + 14, sy);
++            blit_quick_text(textValue.c_str(), status.x + 14, sy + 28);
++            sy += 66;
++        };
++        stat_line("GAME", compact(quick_state_.currentGame.empty()
++                                      ? std::string("Boosteroid session")
++                                      : quick_state_.currentGame, 20));
++        std::snprintf(value, sizeof(value), "%dx%d -> %dx%d",
++                      quick_state_.streamWidth, quick_state_.streamHeight,
++                      quick_state_.outputWidth, quick_state_.outputHeight);
++        stat_line("VIDEO", value);
++        std::snprintf(value, sizeof(value), "%d ms", ping_ms_);
++        stat_line("PING", ping_ms_ < 0 ? std::string("-- ms")
++                                        : std::string(value));
++        std::snprintf(value, sizeof(value), "%u / %u",
++                      quick_state_.droppedGroups,
++                      quick_state_.recoveredGroups);
++        stat_line("UDP DROP / RECOVER", value);
++        std::snprintf(value, sizeof(value), "%u", quick_state_.recoveryRequests);
++        stat_line("RECOVERY EVENTS", value);
++        std::snprintf(value, sizeof(value), "%llu:%02llu",
++                      static_cast<unsigned long long>(quick_state_.sessionSeconds / 60),
++                      static_cast<unsigned long long>(quick_state_.sessionSeconds % 60));
++        stat_line("SESSION TIME", value);
++        stat_line("GATEWAY", compact(quick_state_.gatewayLabel.empty()
++                                         ? std::string("automatic")
++                                         : quick_state_.gatewayLabel, 20));
+ 
+         const auto action_button = [&](const QuickRect& absolute,
+                                        const char* label,
+-                                       uint32_t border) {
++                                       uint32_t border,
++                                       bool activeState = false) {
+             QuickRect r = local(absolute);
+-            fill(r.x, r.y, r.w, r.h, surface);
++            fill(r.x, r.y, r.w, r.h,
++                 activeState ? active : surface);
+             frame(r.x, r.y, r.w, r.h, 2, border);
+-            blit_quick_text(label, r.x + 26, r.y + 14);
++            blit_quick_text(label, r.x + 18, r.y + 14);
+         };
+-        action_button(kSessionGuideRect, "XBOX GUIDE / HOME", edge);
++        action_button(kSessionGuideRect, "XBOX GUIDE", edge);
+         action_button(kSessionAltTabRect, "ALT + TAB", accent);
+-        action_button(kSessionReconnectRect, "RECONNECT SAME SESSION", accent);
+-        action_button(kSessionCloseRect, "CLOSE", edge);
++        action_button(kSessionKeyboardRect, "KEYBOARD INFO", edge);
++        action_button(kSessionMouseRect,
++                      quick_state_.mouseModeEnabled ? "MOUSE: ON" : "MOUSE: OFF",
++                      quick_state_.mouseModeEnabled ? connected : edge,
++                      quick_state_.mouseModeEnabled);
++        action_button(kSessionReconnectRect, "RECONNECT", warning);
++        action_button(kSessionSettingsRect, "GRAPHICS", accent);
++        action_button(kSessionCloseRect, "RETURN TO GAME", edge);
++
++        QuickRect help = local(kSessionHelpRect);
++        fill(help.x, help.y, help.w, help.h, rgba(45, 39, 61, 245));
++        frame(help.x, help.y, help.w, help.h, 2, accent);
++        blit_quick_text("MOUSE: touch/drag or hold (-) + right stick",
++                        help.x + 12, help.y + 10);
++        blit_quick_text("(-)+ZR left click   (-)+R3 right click",
++                        help.x + 12, help.y + 44);
++        blit_quick_text("(-)+X ALT+TAB   B closes this overlay",
++                        help.x + 12, help.y + 78);
++        std::snprintf(value, sizeof(value), "TX mouse %llu/%llu  keyboard %llu",
++                      static_cast<unsigned long long>(quick_state_.mouseMoves),
++                      static_cast<unsigned long long>(quick_state_.mouseClicks),
++                      static_cast<unsigned long long>(quick_state_.keyboardEvents));
++        blit_quick_text(value, help.x + 12, help.y + 108);
++
++        if (quick_state_.reconnectConfirmOpen) {
++            QuickRect confirm = local(kReconnectConfirmPanelRect);
++            fill(confirm.x, confirm.y, confirm.w, confirm.h,
++                 rgba(13, 11, 22, 252));
++            frame(confirm.x, confirm.y, confirm.w, confirm.h, 3, warning);
++            blit_quick_text("RECONNECT SAME SESSION?", confirm.x + 34,
++                            confirm.y + 24);
++            blit_quick_text("Only local audio/video/control will close.",
++                            confirm.x + 24, confirm.y + 82);
++            blit_quick_text("The Boosteroid machine must stay running.",
++                            confirm.x + 24, confirm.y + 118);
++            blit_quick_text("Experimental: verify after reconnecting.",
++                            confirm.x + 24, confirm.y + 154);
++            QuickRect cancel = local(kReconnectCancelRect);
++            QuickRect accept = local(kReconnectConfirmRect);
++            fill(cancel.x, cancel.y, cancel.w, cancel.h, surface);
++            fill(accept.x, accept.y, accept.w, accept.h, active);
++            frame(cancel.x, cancel.y, cancel.w, cancel.h, 2, edge);
++            frame(accept.x, accept.y, accept.w, accept.h, 2, warning);
++            blit_quick_text("CANCEL", cancel.x + 46, cancel.y + 12);
++            blit_quick_text("RECONNECT", accept.x + 28, accept.y + 12);
++        }
+     }
+ 
+     if (quick_cpu_)
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/src/switch/stream/engine.cpp b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/src/switch/stream/engine.cpp
+index 742cdac..6ac3b2d 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/src/switch/stream/engine.cpp
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/src/switch/stream/engine.cpp
+@@ -422,6 +422,10 @@ void Engine::start(int appId, int streamWidth, int streamHeight,
+     guidePressed_ = false;
+     pingMs_ = -1;
+     lastMediaTicks_ = 0;
++    sessionStartedTicks_ = SDL_GetTicks64();
++    mouseMoveCount_ = 0;
++    mouseClickCount_ = 0;
++    keyboardEventCount_ = 0;
+     nativeMediaStarted_ = false;
+     nativeStartedTicks_ = 0;
+     dataChannelOpened_ = false;
+@@ -1594,6 +1598,7 @@ void Engine::send_controller_button(int button, bool pressed) {
+ 
+ void Engine::send_mouse_position(float x, float y, bool visible) {
+     if (!control_.connected()) return;
++    ++mouseMoveCount_;
+     std::lock_guard<std::mutex> lock(inputMutex_);
+     send_input_json({{"type", "mouse"}, {"action", "move"},
+                      {"X", std::clamp(x, 0.0f, 1.0f)},
+@@ -1604,6 +1609,7 @@ void Engine::send_mouse_position(float x, float y, bool visible) {
+ 
+ void Engine::send_mouse_button(int button, bool pressed) {
+     if (!control_.connected()) return;
++    if (pressed) ++mouseClickCount_;
+     std::lock_guard<std::mutex> lock(inputMutex_);
+     send_input_json({{"type", "mouse"}, {"action", "button"},
+                      {"btn", button}, {"isPressed", pressed}});
+@@ -1611,6 +1617,7 @@ void Engine::send_mouse_button(int button, bool pressed) {
+ 
+ void Engine::send_keyboard_button(int keyCode, bool pressed) {
+     if (!control_.connected()) return;
++    ++keyboardEventCount_;
+     std::lock_guard<std::mutex> lock(inputMutex_);
+     send_input_json({{"type", "keyboard"}, {"action", "button"},
+                      {"isPressed", pressed}, {"code", keyCode}});
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/src/switch/stream/engine.hpp b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/src/switch/stream/engine.hpp
+index 20bfe1b..30bde9d 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/src/switch/stream/engine.hpp
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/src/switch/stream/engine.hpp
+@@ -77,6 +77,17 @@ public:
+         dkVideo_.set_quick_menu_state(state);
+     }
+     int ping_ms() const { return pingMs_.load(); }
++    uint32_t dropped_groups() const { return nativeDroppedGroups_.load(); }
++    uint32_t recovered_groups() const { return nativeRecoveredGroups_.load(); }
++    uint32_t recovery_requests() const { return nativeRecoveryCount_.load(); }
++    uint64_t mouse_moves() const { return mouseMoveCount_.load(); }
++    uint64_t mouse_clicks() const { return mouseClickCount_.load(); }
++    uint64_t keyboard_events() const { return keyboardEventCount_.load(); }
++    uint64_t session_seconds() const {
++        const uint64_t started = sessionStartedTicks_.load();
++        const uint64_t now = SDL_GetTicks64();
++        return started == 0 || now < started ? 0 : (now - started) / 1000;
++    }
+ 
+     struct RumbleCommand {
+         uint16_t low{0};
+@@ -171,6 +182,7 @@ private:
+     std::atomic<bool> guidePressed_{false};
+     std::atomic<int> pingMs_{-1};
+     std::atomic<uint64_t> lastMediaTicks_{0};
++    std::atomic<uint64_t> sessionStartedTicks_{0};
+     std::atomic<bool> nativeMediaStarted_{false};
+     std::atomic<uint64_t> nativeStartedTicks_{0};
+ 
+@@ -236,6 +248,9 @@ private:
+     bool inputLogged_{false};
+     bool mouseInputLogged_{false};
+     bool keyboardInputLogged_{false};
++    std::atomic<uint64_t> mouseMoveCount_{0};
++    std::atomic<uint64_t> mouseClickCount_{0};
++    std::atomic<uint64_t> keyboardEventCount_{0};
+     bool previousGuide_{false};
+     HidAnalogStickState previousLeft_{};
+     HidAnalogStickState previousRight_{};
+diff --git a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/src/switch/stream/quick_menu.hpp b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/src/switch/stream/quick_menu.hpp
+index 2bd2919..11b0c54 100644
+--- a/mnt/data/zd_unified_work/ZERODROID_v0.8.4.3_ANTIGRAVITY_SESSION_MOUSE_KIT/ZERODROID_v0.8.4.3/switch/src/switch/stream/quick_menu.hpp
++++ b/mnt/data/ZERODROID_v0.8.4.4_UNIFIED_ANTIGRAVITY_KIT/ZERODROID_v0.8.4.4/switch/src/switch/stream/quick_menu.hpp
+@@ -1,6 +1,8 @@
+ #pragma once
+ 
+ #include <algorithm>
++#include <cstdint>
++#include <string>
+ 
+ namespace gnx::stream {
+ 
+@@ -14,8 +16,9 @@ struct QuickRect {
+     int h;
+ };
+ 
+-// v0.8.4.3 keeps the settings panel and adds a compact session-actions panel
+-// opened from the always-visible Xbox/X touch icon.
++// v0.8.4.4 keeps the picture settings panel and replaces the compact
++// session-actions popup with a full session-control overlay opened from the
++// always-visible lilac Xbox/X touch icon.
+ inline constexpr QuickRect kQuickTextureRect{1160, 8, 672, 928};
+ inline constexpr QuickRect kQuickToggleRect{1760, 8, 72, 72};
+ inline constexpr QuickRect kGuideButtonRect{1840, 8, 72, 72};
+@@ -45,14 +48,28 @@ inline constexpr QuickRect kQuickNoticeRect{1180, 700, 468, 76};
+ inline constexpr QuickRect kQuickResetRect{1280, 798, 268, 54};
+ inline constexpr QuickRect kQuickMouseHelpRect{1180, 862, 468, 46};
+ 
+-// Touching the top-right Xbox/X icon opens this panel instead of immediately
+-// sending Guide. This preserves Guide while exposing recovery and desktop
+-// actions required by Boosteroid launchers.
+-inline constexpr QuickRect kSessionPanelRect{1260, 104, 500, 390};
+-inline constexpr QuickRect kSessionGuideRect{1290, 166, 440, 58};
+-inline constexpr QuickRect kSessionAltTabRect{1290, 238, 440, 58};
+-inline constexpr QuickRect kSessionReconnectRect{1290, 310, 440, 58};
+-inline constexpr QuickRect kSessionCloseRect{1290, 406, 440, 54};
++// Touching the top-right lilac Xbox/X icon opens a control-centre inspired by
++// the handheld streaming overlay supplied as a visual reference. The geometry
++// remains inside the existing 672x928 quick texture, avoiding an additional GPU
++// texture and keeping the change safe for handheld memory limits.
++inline constexpr QuickRect kSessionPanelRect{1172, 92, 648, 838};
++inline constexpr QuickRect kSessionStatusRect{1192, 154, 296, 590};
++inline constexpr QuickRect kSessionActionsRect{1502, 154, 298, 590};
++inline constexpr QuickRect kSessionGuideRect{1520, 204, 262, 58};
++inline constexpr QuickRect kSessionAltTabRect{1520, 276, 262, 58};
++inline constexpr QuickRect kSessionKeyboardRect{1520, 348, 262, 58};
++inline constexpr QuickRect kSessionMouseRect{1520, 420, 262, 58};
++inline constexpr QuickRect kSessionReconnectRect{1520, 492, 262, 58};
++inline constexpr QuickRect kSessionSettingsRect{1520, 564, 262, 58};
++inline constexpr QuickRect kSessionCloseRect{1520, 636, 262, 58};
++inline constexpr QuickRect kSessionHelpRect{1192, 762, 590, 138};
++
++// Reconnect is destructive to the local transport and therefore requires an
++// explicit second tap. The remote Boosteroid machine is intentionally not
++// terminated by this path.
++inline constexpr QuickRect kReconnectConfirmPanelRect{1260, 280, 500, 300};
++inline constexpr QuickRect kReconnectCancelRect{1290, 500, 190, 54};
++inline constexpr QuickRect kReconnectConfirmRect{1540, 500, 190, 54};
+ 
+ enum QuickRow {
+     QuickPerformance = 0,
+@@ -92,6 +109,8 @@ enum MouseSpeed {
+ struct QuickMenuState {
+     bool open = false;
+     bool sessionActionsOpen = false;
++    bool reconnectConfirmOpen = false;
++    bool mouseModeEnabled = true;
+     bool performance = false;
+     bool xboxFaceLayout = false;
+     int mouseSpeed = MouseNormal;
+@@ -102,6 +121,23 @@ struct QuickMenuState {
+     int saturation = 100; // 0..150 percent
+     int gamma = 100;      // 50..200 percent; 100 = neutral (1.00)
+     int sharpness = 0;    // 0=Off, 1=Low, 2=Medium, 3=High
++
++    // Live session diagnostics copied from Engine by the UI loop. These fields
++    // are display-only and never participate in stream negotiation.
++    std::string sessionStatus{"CONNECTING"};
++    std::string currentGame;
++    std::string gatewayLabel;
++    int streamWidth = 1280;
++    int streamHeight = 720;
++    int outputWidth = 1280;
++    int outputHeight = 720;
++    uint64_t sessionSeconds = 0;
++    uint32_t droppedGroups = 0;
++    uint32_t recoveredGroups = 0;
++    uint32_t recoveryRequests = 0;
++    uint64_t mouseMoves = 0;
++    uint64_t mouseClicks = 0;
++    uint64_t keyboardEvents = 0;
+ };
+ 
+ inline void apply_picture_preset(QuickMenuState& state, int preset) {

@@ -1,0 +1,12 @@
+switch/build-switch/
+switch/deps/switch/
+switch/romfs/shaders/*.dksh
+switch/deps/src/
+*.elf
+*.map
+*.nacp
+*.nro
+*.log
+session.json
+settings.json
+.DS_Store

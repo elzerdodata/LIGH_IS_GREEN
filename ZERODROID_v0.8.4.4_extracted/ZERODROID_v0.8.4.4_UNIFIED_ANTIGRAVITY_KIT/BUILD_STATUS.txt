@@ -1,0 +1,29 @@
+ZERODROID v0.8.4.4 UNIFIED BUILD STATUS
+
+Source base:
+- User-provided ZERODROID v0.8.3 source.
+- Consolidated v0.8.4 display/library update.
+- Consolidated v0.8.4.1 native-video recovery hotfix.
+- Consolidated v0.8.4.2 analog-input and virtual-mouse changes.
+- Consolidated v0.8.4.3 desktop input, ALT+TAB and local reconnect changes.
+- Added v0.8.4.4 session control center and diagnostics.
+
+Completed in this preparation environment:
+- Full source tree assembled.
+- Version/target/workflow updated to 0.8.4.4.
+- Large session control center added to the existing deko3d overlay texture.
+- Live diagnostics wired from Engine counters into QuickMenuState.
+- Reconnect confirmation geometry and touch flow added.
+- Overlay input capture added so controller input does not reach the game.
+- Mouse ON/OFF action added.
+- B close and Plus+Minus optional overlay shortcut added.
+- Existing v0.8.3/v0.8.4/hotfix functionality retained.
+- Precompiled Switch libraries and generated shaders confirmed present.
+- Documentation, reproducible scripts, audit patches and test plans prepared.
+
+Not completed in this environment:
+- Final devkitA64 compilation.
+- Nintendo Switch hardware test.
+- Boosteroid service-side validation of mouse, ALT+TAB and reconnect.
+
+Antigravity must compile first and report hardware validation separately.

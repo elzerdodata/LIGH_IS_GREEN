@@ -1,0 +1,571 @@
+diff --git a/.github/workflows/build-v0.8.4.yml b/.github/workflows/build-v0.8.4.1.yml
+similarity index 66%
+rename from .github/workflows/build-v0.8.4.yml
+rename to .github/workflows/build-v0.8.4.1.yml
+index 9834885..7091600 100644
+--- a/.github/workflows/build-v0.8.4.yml
++++ b/.github/workflows/build-v0.8.4.1.yml
+@@ -1,14 +1,14 @@
+-name: Build ZERODROID v0.8.4
++name: Build ZERODROID v0.8.4.1
+ 
+ on:
+   workflow_dispatch:
+   push:
+     branches:
+-      - build/zerodroid-v0.8.4
++      - build/zerodroid-v0.8.4.1
+       - main
+     paths:
+       - 'switch/**'
+-      - '.github/workflows/build-v0.8.4.yml'
++      - '.github/workflows/build-v0.8.4.1.yml'
+ 
+ jobs:
+   build:
+@@ -32,14 +32,14 @@ jobs:
+           cd switch
+           make clean || true
+           make -j"$(nproc)"
+-          test -f ZERODROID_v0.8.4.nro
+-          sha256sum ZERODROID_v0.8.4.nro > ZERODROID_v0.8.4.sha256
++          test -f ZERODROID_v0.8.4.1.nro
++          sha256sum ZERODROID_v0.8.4.1.nro > ZERODROID_v0.8.4.1.sha256
+ 
+-      - name: Upload v0.8.4 artifact
++      - name: Upload v0.8.4.1 artifact
+         uses: actions/upload-artifact@v4
+         with:
+-          name: ZERODROID-v0.8.4
++          name: ZERODROID-v0.8.4.1
+           path: |
+-            switch/ZERODROID_v0.8.4.nro
+-            switch/ZERODROID_v0.8.4.sha256
++            switch/ZERODROID_v0.8.4.1.nro
++            switch/ZERODROID_v0.8.4.1.sha256
+           if-no-files-found: error
+diff --git a/BUILD_V0.8.4.md b/BUILD_V0.8.4.1.md
+similarity index 85%
+rename from BUILD_V0.8.4.md
+rename to BUILD_V0.8.4.1.md
+index b7b29c3..dac17bf 100644
+--- a/BUILD_V0.8.4.md
++++ b/BUILD_V0.8.4.1.md
+@@ -1,4 +1,4 @@
+-# Building ZERODROID v0.8.4
++# Building ZERODROID v0.8.4.1
+ 
+ The source archive includes the prebuilt Switch WebRTC dependency bundle under
+ `switch/deps/switch/` and the generated deko3d shaders under
+@@ -15,14 +15,14 @@ make -j4
+ The expected output is:
+ 
+ ```text
+-switch/ZERODROID_v0.8.4.nro
++switch/ZERODROID_v0.8.4.1.nro
+ ```
+ 
+ ## GitHub Actions
+ 
+-The included `.github/workflows/build-v0.8.4.yml` builds the same NRO inside the
++The included `.github/workflows/build-v0.8.4.1.yml` builds the same NRO inside the
+ official `devkitpro/devkita64` container and uploads it as a workflow artifact.
+-It can be started manually with **Actions → Build ZERODROID v0.8.4 → Run
++It can be started manually with **Actions → Build ZERODROID v0.8.4.1 → Run
+ workflow**.
+ 
+ ## Runtime notes
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index d06f5f4..a1067fc 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,15 @@
+ # ZERODROID changelog
+ 
++## v0.8.4.1 - Native video recovery hotfix
++
++- Increased the native UDP reorder window from 140 ms / 8 groups to 350 ms / 24 groups for 1080p sessions.
++- Replaced the permanent IDR gate after an isolated sequence gap with two-stage recovery: soft FFmpeg concealment first, hard IDR recovery only after a real decoder error.
++- Added rate-limited native visibility refresh requests while recovery is active.
++- Added a 2.5-second controlled decoder probe so an ignored keyframe request cannot leave the last frame frozen forever.
++- Jumps directly to the nearest observed native group when several group IDs are absent, preventing the repeated `native sequence gap` log storm.
++- Added recovery lifecycle logging: start, clean IDR, decoder probe and successful recovery duration.
++- Increased the native decode queue safety limit from 16 to 24 complete access units.
++
+ ## v0.8.4 - Display quality and library redesign
+ 
+ - Added Auto, 720p, 1080p and experimental 1440p streaming profiles.
+diff --git a/HOTFIX_TECHNICAL_NOTES.md b/HOTFIX_TECHNICAL_NOTES.md
+new file mode 100644
+index 0000000..f0cf7bf
+--- /dev/null
++++ b/HOTFIX_TECHNICAL_NOTES.md
+@@ -0,0 +1,18 @@
++# Native recovery hotfix technical notes
++
++## Failure in v0.8.4
++
++`handle_native_video_packet()` used a 140 ms / 8-group reorder window. When a group was declared missing, it immediately set `nativeWaitingKeyframe_ = true`, cleared the decode queue and discarded all subsequent non-IDR access units. The native route had no guaranteed request/response path for an immediate IDR, so one loss event could hold the last good frame forever.
++
++The loop also advanced one absent group ID at a time. During a larger discontinuity this generated the same log message repeatedly and could keep discarding newly completed groups while trying to catch up.
++
++## v0.8.4.1 behavior
++
++- 350 ms hold window and 24-group reorder threshold.
++- Direct jump to the nearest observed newer group when the expected group does not exist.
++- Soft recovery on sequence loss: complete access units continue to FFmpeg without flushing its reference surfaces.
++- Hard IDR gating only after malformed data, Reed-Solomon failure, queue overflow or a decoder-reported error.
++- Rate-limited visibility reassertion as a best-effort native encoder refresh.
++- 2.5-second probe fallback to avoid a permanent wait when the gateway does not provide an IDR.
++
++The native keyframe control action is not documented by Boosteroid in this source tree. It is intentionally best-effort; the soft recovery and probe fallback are the mechanisms that prevent the client from depending solely on that message.
+diff --git a/README.md b/README.md
+index c2569b1..ebb6221 100644
+--- a/README.md
++++ b/README.md
+@@ -3,7 +3,7 @@
+ **Zero Data · Nintendo Switch cloud gaming client**
+ 
+ ZERODROID is an open-source, unofficial Boosteroid client for Nintendo Switch
+-homebrew. Version 0.8.4 provides QR login, a controller-first game library,
++homebrew. Version 0.8.4.1 provides QR login, a controller-first game library,
+ native H.264 video, Opus audio and complete controller input.
+ 
+ > [!IMPORTANT]
+@@ -11,14 +11,21 @@ native H.264 video, Opus audio and complete controller input.
+ > Nintendo. It requires a legitimate Boosteroid account and does not provide,
+ > download or bypass access to games, subscriptions, DRM or Nintendo software.
+ 
+-## New in v0.8.4
++## New in v0.8.4.1
+ 
+-- Added selectable Auto, 720p, 1080p and experimental 1440p stream profiles.
+-- Auto now requests 720p in handheld mode and 1080p while docked.
+-- Added Natural, Sharp, Vivid, Cinema, Soft and Custom picture presets to the in-stream two-dot menu.
+-- Added persistent brightness, contrast, saturation, gamma and sharpness controls.
+-- Reworked the library to four columns, real compact font sizes and two-line game titles.
+-- Horizontal high-resolution artwork is preferred and rendered with contain scaling, so covers are no longer cropped.
++- Fixes the native 1080p freeze reported as `native sequence gap: waiting for a clean IDR`.
++- Uses a larger reorder window suitable for the heavier 1080p UDP stream.
++- Tries soft decoder concealment before discarding the H.264 reference chain.
++- Reasserts stream visibility during recovery and retries without allowing a permanent frozen frame.
++- Collapses repeated missing group IDs into one recovery event and logs the recovery duration.
++
++## Included from v0.8.4
++
++- Selectable Auto, 720p, 1080p and experimental 1440p stream profiles.
++- Auto requests 720p in handheld mode and 1080p while docked.
++- Natural, Sharp, Vivid, Cinema, Soft and Custom picture presets in the in-stream two-dot menu.
++- Persistent brightness, contrast, saturation, gamma and sharpness controls.
++- Four-column library, compact fonts, two-line titles and uncropped horizontal artwork.
+ 
+ ## Included from v0.8.3
+ 
+diff --git a/RECOVERY_TEST_PLAN.md b/RECOVERY_TEST_PLAN.md
+new file mode 100644
+index 0000000..9ff7cc5
+--- /dev/null
++++ b/RECOVERY_TEST_PLAN.md
+@@ -0,0 +1,60 @@
++# ZERODROID v0.8.4.1 recovery test plan
++
++The hotfix was prepared from the v0.8.4 source and the two uploaded session logs.
++Both logs reached native 1920×1080 correctly and then entered the same sequence-gap state while controller messages continued.
++
++## Build
++
++```bash
++cd switch
++make clean
++make -j"$(nproc)"
++```
++
++Expected output:
++
++```text
++switch/ZERODROID_v0.8.4.1.nro
++```
++
++## First validation
++
++1. Start with **720p + Natural** and play for at least 15 minutes.
++2. Repeat with **1080p + Natural** for at least 20 minutes.
++3. Repeat the Final Fantasy VII section that froze on v0.8.4.
++4. Do not use 1440p until 1080p is stable.
++
++## Expected recovery log
++
++A real packet-loss event should now look like this:
++
++```text
++native video recovery started: native sequence gap (soft concealment)
++native recovery refresh requested: native sequence gap
++native video recovered after N ms
++```
++
++If FFmpeg detects actual corruption, the log may instead show:
++
++```text
++native video recovery started: native decoder corruption (hard IDR wait)
++native clean IDR received; decoder recovery can resume
++native video recovered after N ms
++```
++
++If the gateway ignores the keyframe request, the client should eventually log:
++
++```text
++native IDR timeout: probing decoder with a complete access unit
++```
++
++The image must not remain frozen indefinitely. Audio and controls should continue throughout recovery.
++
++## Files to return after testing
++
++```text
++sdmc:/switch/ZERODROID/stream.log
++sdmc:/switch/ZERODROID/stream-prev.log
++```
++
++Also record the selected resolution, handheld/docked state, game and approximate time until any recovery event.
+diff --git a/switch/Makefile b/switch/Makefile
+index 4682d27..3169269 100644
+--- a/switch/Makefile
++++ b/switch/Makefile
+@@ -11,10 +11,10 @@ include $(DEVKITPRO)/libnx/switch_rules
+ 
+ APP_TITLE   := ZERODROID
+ APP_AUTHOR  := Zero Data
+-APP_VERSION := 0.8.4
++APP_VERSION := 0.8.4.1
+ APP_ICON    := icon.jpg
+ 
+-TARGET   := ZERODROID_v0.8.4
++TARGET   := ZERODROID_v0.8.4.1
+ BUILD    := build-switch
+ SOURCES  := src/core src/switch
+ INCLUDES := src vendor deps/shim/include
+diff --git a/switch/src/switch/stream/engine.cpp b/switch/src/switch/stream/engine.cpp
+index 297d91d..331adc9 100644
+--- a/switch/src/switch/stream/engine.cpp
++++ b/switch/src/switch/stream/engine.cpp
+@@ -419,6 +419,10 @@ void Engine::start(int appId, int streamWidth, int streamHeight,
+     nativeWaitingKeyframe_ = true;
+     nativeDroppedGroups_ = 0;
+     nativeRecoveredGroups_ = 0;
++    nativeRecovering_ = false;
++    nativeRecoveryStartedTicks_ = 0;
++    nativeLastKeyframeRequestTicks_ = 0;
++    nativeRecoveryCount_ = 0;
+     decoderResyncRequested_ = false;
+     decoderFlushOnKeyframe_ = false;
+     jitter_.reset();
+@@ -576,6 +580,9 @@ void Engine::worker() {
+ 
+         if (nativeMediaStarted_) {
+             const uint64_t now = SDL_GetTicks64();
++            if (nativeRecovering_.load()) {
++                request_native_keyframe("recovery watchdog");
++            }
+             if (state_ == EngineState::WaitingForVideo && !gotFrame_ &&
+                 nativeStartedTicks_ > 0 && now - nativeStartedTicks_ > 30000) {
+                 fail(gotVideoPacket_
+@@ -960,12 +967,8 @@ bool Engine::recover_native_group(NativeVideoGroup& group) {
+ 
+ void Engine::process_native_video_group(NativeVideoGroup complete) {
+     const auto failGroup = [&](const std::string& reason) {
+-        nativeWaitingKeyframe_ = true;
++        begin_native_recovery(reason.c_str(), true);
+         ++nativeDroppedGroups_;
+-        {
+-            std::lock_guard<std::mutex> lock(videoMutex_);
+-            videoQueue_.clear();
+-        }
+         log("native frame dropped: " + reason + " group=" +
+             std::to_string(complete.id));
+     };
+@@ -1014,27 +1017,59 @@ void Engine::process_native_video_group(NativeVideoGroup complete) {
+         return;
+     }
+ 
+-    const bool resetDecoder = nativeWaitingKeyframe_.load();
+-    if (resetDecoder && !hasIdr) return;
+-    if (hasIdr) nativeWaitingKeyframe_ = false;
++    bool resetDecoder = nativeWaitingKeyframe_.load();
++    if (resetDecoder && !hasIdr) {
++        // Ask the native gateway for a fresh intra frame, but never remain in
++        // a permanent frozen state if it ignores the request. After a short
++        // guard period, probe the decoder with a complete access unit while
++        // retaining its old reference surfaces. If that probe is invalid the
++        // decoder error path re-enters hard recovery and tries again.
++        request_native_keyframe("waiting for IDR");
++        const uint64_t now = SDL_GetTicks64();
++        uint64_t started = nativeRecoveryStartedTicks_.load();
++        if (started == 0) {
++            nativeRecoveryStartedTicks_ = now;
++            started = now;
++        }
++        constexpr uint64_t kIdrFallbackMs = 2500;
++        if (now - started < kIdrFallbackMs) return;
++        nativeWaitingKeyframe_ = false;
++        resetDecoder = false;
++        nativeRecoveryStartedTicks_ = now;
++        log("native IDR timeout: probing decoder with a complete access unit");
++    }
++    if (hasIdr) {
++        const bool wasWaiting = nativeWaitingKeyframe_.exchange(false);
++        const bool wasRecovering = nativeRecovering_.load();
++        resetDecoder = resetDecoder || wasWaiting || wasRecovering;
++        if (wasRecovering) {
++            log("native clean IDR received; decoder recovery can resume");
++        }
++    }
+     if (!gotAccessUnit_.exchange(true)) {
+         log("first complete native H264 access unit bytes=" +
+             std::to_string(accessUnit.size()));
+     }
++    bool queueOverflow = false;
+     {
+         std::lock_guard<std::mutex> lock(videoMutex_);
+-        if (videoQueue_.size() >= 16) {
++        if (videoQueue_.size() >= 24) {
+             videoQueue_.clear();
+-            nativeWaitingKeyframe_ = true;
+             ++nativeDroppedGroups_;
+-            return;
++            queueOverflow = true;
++        } else {
++            VideoAccessUnit unit;
++            unit.data = std::move(accessUnit);
++            unit.timestamp = complete.id;
++            unit.native = true;
++            unit.resetDecoder = resetDecoder;
++            unit.recoveryProbe = nativeRecovering_.load();
++            videoQueue_.push_back(std::move(unit));
+         }
+-        VideoAccessUnit unit;
+-        unit.data = std::move(accessUnit);
+-        unit.timestamp = complete.id;
+-        unit.native = true;
+-        unit.resetDecoder = resetDecoder;
+-        videoQueue_.push_back(std::move(unit));
++    }
++    if (queueOverflow) {
++        begin_native_recovery("video queue overflow", true);
++        return;
+     }
+     videoCv_.notify_one();
+ }
+@@ -1056,10 +1091,14 @@ void Engine::handle_native_video_packet(const uint8_t* data, size_t size) {
+         dataPackets > 1024 || totalPackets > 1024 ||
+         packetIndex >= totalPackets) return;
+ 
+-    constexpr uint64_t kNativeHoldMs = 140;
+-    constexpr uint16_t kMaximumReorderGroups = 8;
++    // 1080p produces substantially more UDP shards than the old 720p-only
++    // path. Eight frames / 140 ms was too aggressive and generated false loss
++    // during normal Wi-Fi reordering. Keep a wider but still bounded window.
++    constexpr uint64_t kNativeHoldMs = 350;
++    constexpr uint16_t kMaximumReorderGroups = 24;
++    constexpr size_t kMaximumPendingGroups = 48;
+     std::vector<NativeVideoGroup> ready;
+-    bool droppedGap = false;
++    uint32_t droppedGaps = 0;
+     {
+         std::lock_guard<std::mutex> lock(nativeMutex_);
+         if (!nativeSequenceStarted_) {
+@@ -1092,7 +1131,7 @@ void Engine::handle_native_video_packet(const uint8_t* data, size_t size) {
+             ++group.receivedCount;
+         }
+ 
+-        for (int guard = 0; guard < 32; ++guard) {
++        for (int guard = 0; guard < 96; ++guard) {
+             auto expected = nativeGroups_.find(nativeNextGroup_);
+             if (expected != nativeGroups_.end()) {
+                 const bool originals = std::all_of(
+@@ -1113,39 +1152,60 @@ void Engine::handle_native_video_packet(const uint8_t* data, size_t size) {
+             }
+ 
+             uint16_t farthest = 0;
++            uint16_t nearestDelta = 0xffff;
++            uint16_t nearestNewer = nativeNextGroup_;
+             uint64_t oldestNewer = now;
+             bool haveNewer = false;
+             for (const auto& [id, pending] : nativeGroups_) {
+                 if (!sequence_newer16(id, nativeNextGroup_)) continue;
+                 haveNewer = true;
+-                farthest = std::max(
+-                    farthest, static_cast<uint16_t>(id - nativeNextGroup_));
++                const uint16_t delta =
++                    static_cast<uint16_t>(id - nativeNextGroup_);
++                farthest = std::max(farthest, delta);
++                if (delta < nearestDelta) {
++                    nearestDelta = delta;
++                    nearestNewer = id;
++                }
+                 oldestNewer = std::min(oldestNewer, pending.firstSeenMs);
+             }
+             const bool timedOut = expected != nativeGroups_.end()
+                 ? now - expected->second.firstSeenMs >= kNativeHoldMs
+                 : haveNewer && now - oldestNewer >= kNativeHoldMs;
+-            if (timedOut || farthest >= kMaximumReorderGroups) {
+-                if (expected != nativeGroups_.end()) nativeGroups_.erase(expected);
+-                nativeNextGroup_ = static_cast<uint16_t>(nativeNextGroup_ + 1);
++            const bool windowExceeded =
++                farthest >= kMaximumReorderGroups ||
++                nativeGroups_.size() >= kMaximumPendingGroups;
++            if (timedOut || windowExceeded) {
++                if (expected != nativeGroups_.end()) {
++                    nativeGroups_.erase(expected);
++                    nativeNextGroup_ =
++                        static_cast<uint16_t>(nativeNextGroup_ + 1);
++                } else if (haveNewer) {
++                    // Jump directly to the nearest observed group instead of
++                    // walking through every absent id and logging one gap for
++                    // every packet. This is what caused the log storm in 0.8.4.
++                    nativeNextGroup_ = nearestNewer;
++                } else {
++                    break;
++                }
+                 nativeAnyQueued_ = true;
+-                droppedGap = true;
++                ++droppedGaps;
+                 continue;
+             }
+             break;
+         }
+     }
+ 
+-    if (droppedGap) {
+-        // A unit collected before the gap and one collected after it cannot be
+-        // distinguished once moved out of the map. Drop the small ready batch
+-        // wholesale so an earlier IDR cannot accidentally unlock later P-frames.
++    if (droppedGaps > 0) {
++        nativeDroppedGroups_.fetch_add(droppedGaps);
++        // Do not enqueue a mixed batch spanning the discontinuity. Existing
++        // decoder-queue units remain valid; newly completed groups will be
++        // marked as recovery probes on the next packet.
+         ready.clear();
+-        nativeWaitingKeyframe_ = true;
+-        ++nativeDroppedGroups_;
+-        std::lock_guard<std::mutex> lock(videoMutex_);
+-        videoQueue_.clear();
+-        log("native sequence gap: waiting for a clean IDR");
++        // Soft recovery: do not flush or gate on IDR merely because one native
++        // group was late. Feed the next complete units to FFmpeg and let its
++        // error concealment preserve the reference chain. An actual decode
++        // error escalates to hard IDR recovery in decode_loop().
++        begin_native_recovery("native sequence gap", false);
+     }
+     for (auto& group : ready) process_native_video_group(std::move(group));
+ }
+@@ -1673,9 +1733,8 @@ void Engine::decode_loop() {
+                 videoQueue_.clear();
+             }
+             if (unit.native) {
+-                nativeWaitingKeyframe_ = true;
+                 ++nativeDroppedGroups_;
+-                log("native decoder corruption: holding last good frame until IDR");
++                begin_native_recovery("native decoder corruption", true);
+             } else {
+                 decoderResyncRequested_ = true;
+                 decoderFlushOnKeyframe_ = true;
+@@ -1687,6 +1746,14 @@ void Engine::decode_loop() {
+         if (!decoded) {
+             continue;
+         }
++        if (unit.native && unit.recoveryProbe &&
++            nativeRecovering_.exchange(false)) {
++            const uint64_t started = nativeRecoveryStartedTicks_.exchange(0);
++            const uint64_t now = SDL_GetTicks64();
++            log("native video recovered after " +
++                std::to_string(started > 0 && now >= started ? now - started : 0) +
++                " ms");
++        }
+         {
+             std::lock_guard<std::mutex> lock(frameMutex_);
+             av_frame_unref(sharedFrame_);
+@@ -1746,6 +1813,47 @@ void Engine::pump_video() {
+     nextPresentCounter_ = now + interval;
+ }
+ 
++void Engine::request_native_keyframe(const char* reason) {
++    const uint64_t now = SDL_GetTicks64();
++    uint64_t previous = nativeLastKeyframeRequestTicks_.load();
++    constexpr uint64_t kMinimumRequestIntervalMs = 1000;
++    if (previous != 0 && now - previous < kMinimumRequestIntervalMs) return;
++    if (!nativeLastKeyframeRequestTicks_.compare_exchange_strong(previous, now)) {
++        return;
++    }
++
++    // The WebRTC PLI is unavailable on /native and this project has no
++    // documented native PLI action. Reassert the already-observed page-visible
++    // control message as a best-effort encoder refresh. Soft concealment and
++    // the timed decoder probe remain the real protection against a permanent
++    // freeze, so recovery does not depend on an undocumented command.
++    send_control_json(nlohmann::json({
++        {"type", "stream"}, {"action", "page"},
++        {"is_visible", true}}).dump());
++    log(std::string("native recovery refresh requested: ") +
++        (reason ? reason : "recovery"));
++}
++
++void Engine::begin_native_recovery(const char* reason, bool hardWait) {
++    const uint64_t now = SDL_GetTicks64();
++    const bool first = !nativeRecovering_.exchange(true);
++    const bool escalating = hardWait && !nativeWaitingKeyframe_.exchange(true);
++    if (first || escalating || nativeRecoveryStartedTicks_.load() == 0) {
++        nativeRecoveryStartedTicks_ = now;
++        ++nativeRecoveryCount_;
++    }
++    if (hardWait) {
++        std::lock_guard<std::mutex> lock(videoMutex_);
++        videoQueue_.clear();
++    }
++    if (first || escalating) {
++        log(std::string("native video recovery started: ") +
++            (reason ? reason : "unknown") +
++            (hardWait ? " (hard IDR wait)" : " (soft concealment)"));
++    }
++    request_native_keyframe(reason);
++}
++
+ void Engine::request_keyframe_locked() {
+     if (peer_) peer_connection_request_keyframe(peer_);
+ }
+diff --git a/switch/src/switch/stream/engine.hpp b/switch/src/switch/stream/engine.hpp
+index c9eaf6f..920dc1c 100644
+--- a/switch/src/switch/stream/engine.hpp
++++ b/switch/src/switch/stream/engine.hpp
+@@ -89,6 +89,7 @@ private:
+         uint32_t timestamp{0};
+         bool native{false};
+         bool resetDecoder{false};
++        bool recoveryProbe{false};
+     };
+ 
+     struct NativeVideoGroup {
+@@ -123,6 +124,8 @@ private:
+     void set_status(const std::string& value);
+     void fail(const std::string& value);
+     void request_keyframe_locked();
++    void request_native_keyframe(const char* reason);
++    void begin_native_recovery(const char* reason, bool hardWait);
+ 
+     static void on_video(uint8_t* data, size_t size, void* user);
+     static void on_audio(uint8_t* data, size_t size, void* user);
+@@ -189,6 +192,15 @@ private:
+     std::atomic<bool> nativeWaitingKeyframe_{true};
+     std::atomic<uint32_t> nativeDroppedGroups_{0};
+     std::atomic<uint32_t> nativeRecoveredGroups_{0};
++    // Native UDP recovery is deliberately two-stage. A missing frame first
++    // enters soft recovery so FFmpeg can conceal the loss and continue using
++    // its existing reference surfaces. Only an actual decoder error enters
++    // hard IDR gating. This avoids the permanent freeze seen in v0.8.4 after
++    // one harmless sequence gap.
++    std::atomic<bool> nativeRecovering_{false};
++    std::atomic<uint64_t> nativeRecoveryStartedTicks_{0};
++    std::atomic<uint64_t> nativeLastKeyframeRequestTicks_{0};
++    std::atomic<uint32_t> nativeRecoveryCount_{0};
+ 
+     VideoJitterBuffer jitter_;
+     VideoDecoder video_;
