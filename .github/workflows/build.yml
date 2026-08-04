@@ -4,8 +4,9 @@
 name: build
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, build/light-is-green-v0.8.1]
   pull_request:
 
 jobs:
