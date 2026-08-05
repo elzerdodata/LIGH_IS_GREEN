@@ -9,14 +9,6 @@
 
 namespace gnx {
 
-namespace {
-// A decoded cover is commonly several hundred KiB. Keeping every page ever
-// visited alive can consume tens or hundreds of MiB before a stream starts.
-constexpr size_t kMaxTextureCache = 36;  // two complete 3x6 library pages
-constexpr size_t kMaxQueuedJobs = 36;
-constexpr size_t kMaxCompletedJobs = 36;
-}
-
 Covers::Covers(gfx::Gfx& gfx, std::string cache_dir)
     : gfx_(gfx), cache_dir_(std::move(cache_dir)) {
     mkdir(cache_dir_.c_str(), 0755);
@@ -27,29 +19,26 @@ Covers::~Covers() {
     quit_ = true;
     wake_.notify_all();
     if (thread_.joinable()) thread_.join();
-    for (auto& [key, entry] : textures_)
-        if (entry.texture) SDL_DestroyTexture(entry.texture);
+    for (auto& [key, texture] : textures_)
+        if (texture) SDL_DestroyTexture(texture);
 }
 
 SDL_Texture* Covers::get(const std::string& title_id, const std::string& url) {
     auto found = textures_.find(title_id);
-    if (found != textures_.end()) {
-        found->second.last_used = ++use_serial_;
-        return found->second.texture;
-    }
+    if (found != textures_.end()) return found->second;
     if (url.empty()) return nullptr;
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (!pending_.count(title_id)) {
-        while (jobs_.size() >= kMaxQueuedJobs) {
-            pending_.erase(jobs_.front().title_id);
-            jobs_.pop_front();
-        }
         pending_.insert(title_id);
-        jobs_.push_back({title_id, url, generation_});
+        jobs_.push_back({title_id, url});
         wake_.notify_one();
     }
     return nullptr;
+}
+
+bool Covers::has_result(const std::string& title_id) const {
+    return textures_.find(title_id) != textures_.end();
 }
 
 void Covers::pump() {
@@ -67,31 +56,15 @@ void Covers::pump() {
                 : gfx_.texture_from_memory(done.bytes.data(),
                                            done.bytes.size());
         // Negative results are cached as nullptr so we don't retry every frame.
-        textures_[done.title_id] = {texture, ++use_serial_};
-
-        while (textures_.size() > kMaxTextureCache) {
-            auto oldest = textures_.begin();
-            for (auto it = textures_.begin(); it != textures_.end(); ++it)
-                if (it->second.last_used < oldest->second.last_used)
-                    oldest = it;
-            if (oldest->second.texture)
-                SDL_DestroyTexture(oldest->second.texture);
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                pending_.erase(oldest->first);
-            }
-            textures_.erase(oldest);
-        }
+        textures_[done.title_id] = texture;
     }
 }
 
 void Covers::drop_textures() {
-    for (auto& [key, entry] : textures_)
-        if (entry.texture) SDL_DestroyTexture(entry.texture);
+    for (auto& [key, texture] : textures_)
+        if (texture) SDL_DestroyTexture(texture);
     textures_.clear();
     std::lock_guard<std::mutex> lock(mutex_);
-    ++generation_;     // invalidates a download already in progress
-    jobs_.clear();     // never retain old library pages during a stream
     pending_.clear();  // allow re-queue after the renderer is rebuilt
     done_.clear();     // bytes decoded for the old renderer are useless
 }
@@ -130,12 +103,7 @@ void Covers::worker() {
         }
 
         std::lock_guard<std::mutex> lock(mutex_);
-        if (job.generation != generation_) continue;
-        while (done_.size() >= kMaxCompletedJobs) {
-            pending_.erase(done_.front().title_id);
-            done_.pop_front();
-        }
-        done_.push_back({job.title_id, std::move(bytes), job.generation});
+        done_.push_back({job.title_id, std::move(bytes)});
     }
 }
 

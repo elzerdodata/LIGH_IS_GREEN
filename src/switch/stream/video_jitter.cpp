@@ -118,6 +118,12 @@ void VideoJitterBuffer::reset() {
     cycles_ = base_seq_ = received_ = received_prior_ = expected_prior_ = 0;
 }
 
+void VideoJitterBuffer::resync() {
+    frames_.clear();
+    waiting_keyframe_ = true;
+    ++stats_.resyncs;
+}
+
 bool VideoJitterBuffer::report_stats(uint8_t* fraction_lost,
                                      uint32_t* cumulative_lost,
                                      uint32_t* highest_seq_ext) {
@@ -185,6 +191,43 @@ bool VideoJitterBuffer::try_assemble(Frame& f, std::vector<uint8_t>& au,
     for (size_t i = 1; i < ordered.size(); ++i)
         if (ordered[i]->seq != static_cast<uint16_t>(ordered[i - 1]->seq + 1))
             return false;  // gap inside the frame -> wait for retransmit
+
+    // Sequence continuity alone is not enough for FU-A. Ensure a fragmented
+    // NAL starts and ends exactly once, and reject malformed STAP-A payloads;
+    // otherwise FFmpeg may conceal a truncated slice and poison later frames.
+    bool fragmented = false;
+    for (const Packet* packet : ordered) {
+        const uint8_t* payload = packet->payload.data();
+        const size_t bytes = packet->payload.size();
+        const uint8_t type = nal_type(payload, bytes);
+        if (type == 28) {
+            if (bytes < 2) return false;
+            const bool start = (payload[1] & 0x80U) != 0;
+            const bool end = (payload[1] & 0x40U) != 0;
+            if (start) {
+                if (fragmented) return false;
+                fragmented = true;
+            } else if (!fragmented) {
+                return false;
+            }
+            if (end) fragmented = false;
+        } else {
+            if (fragmented || type == 0 || type > 24) return false;
+            if (type == 24) {
+                size_t at = 1;
+                while (at + 2 <= bytes) {
+                    const size_t nalBytes =
+                        (static_cast<size_t>(payload[at]) << 8) |
+                        payload[at + 1];
+                    at += 2;
+                    if (nalBytes == 0 || at + nalBytes > bytes) return false;
+                    at += nalBytes;
+                }
+                if (at != bytes) return false;
+            }
+        }
+    }
+    if (fragmented) return false;
 
     au.clear();
     for (const Packet* pk : ordered) {

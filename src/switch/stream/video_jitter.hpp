@@ -34,6 +34,9 @@ public:
     using NackFn = std::function<void(uint16_t pid, uint16_t blp)>;
 
     void reset();
+    // Called on the RTP receive thread after the decoder reports corruption.
+    // Pending frames are discarded and output is gated until a real IDR.
+    void resync();
 
     // Feed one decrypted RTP packet at time now_ms (SDL_GetTicks64).
     void receive(const uint8_t* rtp, size_t len, uint64_t now_ms,

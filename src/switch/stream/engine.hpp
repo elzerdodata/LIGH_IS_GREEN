@@ -1,27 +1,26 @@
 #pragma once
 
 #include <SDL2/SDL.h>
+#include <switch.h>
 
 #include <atomic>
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
-#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
-#include "../../core/auth.hpp"
-#include "../../core/session.hpp"
-#include "../../core/xcloud_protocol.hpp"
+#include "../../core/boosteroid_api.hpp"
+#include "json.hpp"
 #include "audio_player.hpp"
-#include "quick_menu.hpp"
+#include "dk_video_renderer.hpp"
 #include "video_decoder.hpp"
 #include "video_jitter.hpp"
-#ifdef __SWITCH__
-#include "dk_video_renderer.hpp"
-#endif
+#include "websocket.hpp"
 
 extern "C" {
 #include <peer_connection.h>
@@ -31,257 +30,245 @@ namespace gnx::stream {
 
 enum class EngineState {
     Idle,
-    StartingSession,   // REST: create session, wait for provisioning
-    Negotiating,       // SDP/ICE exchange + DTLS
-    WaitingForVideo,   // connected, waiting for the first frame
+    StartingSession,
+    ConnectingGateway,
+    Negotiating,
+    WaitingForVideo,
     Streaming,
     Failed,
     Stopped,
 };
 
-// How decoded frames reach the display (Switch deko3d path).
-//   Steady: present the NEWEST decoded frame on the ~60 Hz software clock --
-//           lowest latency, but uneven arrival timing shows as motion hitches.
-//   Smooth: keep one decoded frame in reserve and present in source order on
-//           a detected 30/60 Hz cadence -- steadier motion at the cost of
-//           about one source frame (~33 ms at 30 fps) of extra latency.
-//   Motion: Smooth plus a generated midpoint between adjacent 30 fps source
-//           frames. This is image interpolation, not game-engine motion data.
-enum class VideoPacing { Steady = 0, Smooth = 1, Motion = 2 };
-
-// Native xCloud streaming session: GSSV signaling + libpeer WebRTC +
-// NVDEC/SDL video + Opus audio + gamepad input channel.
 class Engine {
 public:
-    Engine(XboxAuth& auth, SDL_Renderer* renderer);
+    Engine(ZERODROID::BoosteroidAPI& api, SDL_Renderer* renderer);
     ~Engine();
 
-    // Releases the process-wide WebRTC state (libsrtp, usrsctp and its two
-    // service threads) that the first Engine brings up. Call once at app
-    // exit, after every Engine is gone; no Engine may be created afterwards.
     static void global_shutdown();
 
-    void start(const std::string& title_id, QualityTier tier,
-               const std::string& locale = "en-US",
-               bool uses_f2p_offering = false);
-    // Remote play from your own console (xhome offering): the target is the
-    // console's serverId; the game is whatever the console runs.
-    void start_home(const std::string& server_id, QualityTier tier,
-                    const std::string& locale = "en-US");
+    void start(int appId, int streamWidth = 1280, int streamHeight = 720,
+               const std::string& preferredGateway = {});
     void stop();
+    // Close only the local transport and preserve the remote Boosteroid VM so
+    // the same app can be attached again immediately.
+    void disconnect_for_reconnect();
 
-    // Output gain applied to decoded audio (forwarded to the AudioPlayer). Set
-    // from the "volume" setting before each stream start; 1.0 = unchanged.
-    void set_audio_gain(float gain) { audio_gain_ = gain; }
-
-    // Video pacing mode (see VideoPacing). Safe before startup and while a
-    // stream is running; a live change releases queued/interpolation surfaces
-    // before the next present so old-mode frames can never leak across modes.
-    void set_pacing(VideoPacing pacing);
-
-    // In-stream performance/picture quick menu. The state is retained before
-    // startup and can also be changed live while deko3d owns the display.
-    void set_quick_menu_state(const QuickMenuState& state);
-
-    // Compatibility helpers for the existing Settings screen.
-    void set_sharpness(int level);
-    void set_debug_hud(bool enabled);
-
-    EngineState state() const { return state_; }
+    EngineState state() const { return state_.load(); }
     std::string status() const;
     std::string error() const;
-    // Actual region selected by Xbox after streaming login. Empty while login
-    // is still pending and for the xHome Remote Play path.
-    std::string selected_region() const;
+    std::string gateway() const;
 
-    // Render-thread pump: decodes queued video. On Switch it presents each
-    // frame through the deko3d renderer (returns nullptr); on PC it returns the
-    // SDL texture (nullptr until the first frame).
-    SDL_Texture* pump_video();
-    int video_width() const { return video_.width(); }
-    int video_height() const { return video_.height(); }
+    // libnx state -> Boosteroid's Android TV controller protocol.
+    void send_gamepad(HidAnalogStickState left, HidAnalogStickState right,
+                      u64 buttons);
+    // Direct input helpers used by the delayed Minus modifier and the virtual
+    // mouse. Mouse coordinates are normalized to the streamed picture (0..1).
+    void send_controller_button(int button, bool pressed);
+    void send_mouse_position(float x, float y, bool visible = true);
+    void send_mouse_button(int button, bool pressed);
+    void send_keyboard_button(int keyCode, bool pressed);
+    void send_alt_tab();
+    // Toggle the Steam overlay with Shift+Tab. This is the safest way to reach
+    // Steam's in-session menu and close a stuck game without terminating the
+    // Boosteroid VM itself.
+    void send_steam_overlay();
+    void set_xbox_face_layout(bool enabled) { xboxFaceLayout_ = enabled; }
+    void set_guide_button_pressed(bool pressed) {
+        guidePressed_ = pressed;
+        dkVideo_.set_guide_pressed(pressed);
+    }
+    void set_quick_menu_state(const QuickMenuState& state) {
+        dkVideo_.set_quick_menu_state(state);
+    }
+    int ping_ms() const { return pingMs_.load(); }
+    uint32_t dropped_groups() const { return nativeDroppedGroups_.load(); }
+    uint32_t recovered_groups() const { return nativeRecoveredGroups_.load(); }
+    uint32_t recovery_requests() const { return nativeRecoveryCount_.load(); }
+    uint64_t mouse_moves() const { return mouseMoveCount_.load(); }
+    uint64_t mouse_clicks() const { return mouseClickCount_.load(); }
+    uint64_t keyboard_events() const { return keyboardEventCount_.load(); }
+    uint64_t session_seconds() const {
+        const uint64_t started = sessionStartedTicks_.load();
+        const uint64_t now = SDL_GetTicks64();
+        return started == 0 || now < started ? 0 : (now - started) / 1000;
+    }
 
-    // Switch: take over the display with deko3d for zero-copy video (call after
-    // Gfx::suspend). end_deko_output releases it before Gfx::resume. On PC
-    // begin returns false and end is a no-op.
+    struct RumbleCommand {
+        uint16_t low{0};
+        uint16_t high{0};
+        uint32_t durationMs{400};
+    };
+    bool take_rumble(RumbleCommand& out);
+
     bool begin_deko_output();
     void end_deko_output();
+    void pump_video();
 
-    // Visual feedback for the touch-only Xbox Guide/Home overlay. The actual
-    // Nexus packet is still sent through send_gamepad().
-    void set_guide_button_pressed(bool pressed);
-
-    void send_gamepad(const xcloud::GamepadFrame& frame);
-    void request_keyframe();
-
-    // Controller rumble decoded from the server's "input" channel. The main
-    // thread (which owns the SDL joystick) drains the latest command once per
-    // frame and actuates it via SDL_JoystickRumble -- keeping every SDL joystick
-    // call on one thread avoids racing SDL's own joystick bookkeeping.
-    struct RumbleCommand {
-        uint16_t low = 0;          // large (low-frequency) motor, 0..0xFFFF
-        uint16_t high = 0;         // small (high-frequency) motor, 0..0xFFFF
-        uint32_t duration_ms = 0;  // self-terminating, per the server report
-    };
-    bool take_rumble(RumbleCommand& out);  // true if a fresh command was pending
+    // Public so the process-wide libpeer/FFmpeg log redirects can write to the
+    // active session log without reaching through private state.
+    void log(const std::string& line);
 
 private:
-    void start_common(const std::string& title_id, QualityTier tier,
-                      const std::string& locale);
+    struct VideoAccessUnit {
+        std::vector<uint8_t> data;
+        uint32_t timestamp{0};
+        bool native{false};
+        bool resetDecoder{false};
+        bool recoveryProbe{false};
+    };
+
+    struct NativeVideoGroup {
+        uint16_t id{0};
+        uint16_t dataPackets{0};
+        uint16_t totalPackets{0};
+        uint64_t firstSeenMs{0};
+        std::size_t receivedCount{0};
+        std::vector<std::vector<uint8_t>> chunks;
+        std::vector<bool> received;
+    };
+
     void worker();
-    void decode_loop();  // Switch: dedicated H.264 decode thread (see engine.cpp)
-    // Runs the WebRTC session to completion. Returns false only when ICE
-    // connected but DTLS/SCTP never came up (dead media path) -- worker()
-    // then retries once with a fresh session. Every other outcome, including
-    // ordinary failures, returns true.
-    bool run_peer(GssvSession& session);
-    void set_status(const std::string& status);
-    void end_session();  // server closed the session: stop, not fail
-    void fail(const std::string& error);
-    void handle_channel_message(uint16_t sid, const char* data, size_t size);
-    void handle_input_report(const uint8_t* data, size_t size);  // rumble, etc.
-    void open_data_channels();
-    void request_keyframe_locked();  // caller holds peer_mutex_
-    void send_on_channel(const char* label, const std::string& payload);
-    void send_binary_on_channel(const char* label,
-                                const std::vector<uint8_t>& payload);
-    // *_locked: caller already holds peer_mutex_ (callbacks run under it).
-    void send_on_channel_locked(const char* label, const std::string& payload);
-    void send_binary_on_channel_locked(const char* label,
-                                       const std::vector<uint8_t>& payload);
+    void decode_loop();
+    bool connect_gateway(const ZERODROID::StreamSessionConfig& config);
+    bool setup_peer();
+    bool start_native_udp(const std::string& host, int videoPort, int audioPort);
+    void stop_native_udp();
+    void native_video_loop();
+    void native_audio_loop();
+    void handle_native_video_packet(const uint8_t* data, size_t size);
+    void process_native_video_group(NativeVideoGroup group);
+    bool recover_native_group(NativeVideoGroup& group);
+    bool decrypt_native_chunk(uint16_t group, uint16_t index,
+                              const uint8_t* encrypted, size_t size,
+                              std::vector<uint8_t>& plaintext);
+    void destroy_peer();
+    void poll_remote_candidates();
+    void handle_control_message(const std::string& raw);
+    void send_control_json(const std::string& payload);
+    void send_input_json(nlohmann::json payload);
+    void set_status(const std::string& value);
+    void fail(const std::string& value);
+    void request_keyframe_locked();
+    void request_native_keyframe(const char* reason);
+    void begin_native_recovery(const char* reason, bool hardWait);
+    void shutdown(bool preserveRemoteSession);
 
     static void on_video(uint8_t* data, size_t size, void* user);
     static void on_audio(uint8_t* data, size_t size, void* user);
+    static void on_peer_state(PeerConnectionState state, void* user);
+    static void on_channel_open(void* user);
     static void on_channel_message(char* data, size_t size, void* user,
                                    uint16_t sid);
-    static void on_channel_open(void* user);
-    static void on_state_change(PeerConnectionState state, void* user);
 
-    XboxAuth& auth_;
-    SDL_Renderer* renderer_;
-    Http http_;  // worker-thread HTTP client
+    ZERODROID::BoosteroidAPI& api_;
+    SDL_Renderer* renderer_{nullptr};
+    int appId_{0};
+    int streamWidth_{1280};
+    int streamHeight_{720};
+    std::string preferredGateway_;
+    std::string sessionId_;
+    std::string gatewayHost_;
+    std::string gatewayApiBase_;
+    std::string peerId_;
 
     std::atomic<EngineState> state_{EngineState::Idle};
-    mutable std::mutex status_mutex_;
+    std::atomic<bool> quit_{false};
+    std::atomic<bool> gotFrame_{false};
+    std::atomic<bool> gotVideoPacket_{false};
+    std::atomic<bool> gotAudioPacket_{false};
+    std::atomic<bool> gotAccessUnit_{false};
+    std::atomic<bool> presentedFirstFrame_{false};
+    std::atomic<bool> channelAssociationReady_{false};
+    std::atomic<PeerConnectionState> peerState_{PEER_CONNECTION_NEW};
+    std::atomic<int> controllerId_{-1};
+    std::atomic<uint32_t> inputCommand_{0};
+    std::atomic<bool> xboxFaceLayout_{false};
+    std::atomic<bool> guidePressed_{false};
+    std::atomic<int> pingMs_{-1};
+    std::atomic<uint64_t> lastMediaTicks_{0};
+    std::atomic<uint64_t> sessionStartedTicks_{0};
+    std::atomic<bool> nativeMediaStarted_{false};
+    std::atomic<uint64_t> nativeStartedTicks_{0};
+
+    mutable std::mutex statusMutex_;
     std::string status_;
     std::string error_;
-    std::string selected_region_;
 
-    EndpointCredentials cloud_;
-    std::string title_id_;
-    std::string home_server_id_;  // non-empty selects the home (xhome) path
-    bool uses_f2p_offering_ = false;  // launch through xgpuwebf2p
-    QualityTier tier_ = QualityTier::P1080HQ;
-    // The media request may fall back independently of the user's saved tier.
-    // Remote Play always starts with an Android session fingerprint, while
-    // media_tier_ controls the capabilities announced after connection.
-    QualityTier media_tier_ = QualityTier::P1080HQ;
-    bool home_720_fallback_pending_ = false;  // worker thread only
-    std::string locale_ = "en-US";  // streamed console's system language
-    float audio_gain_ = 1.0f;       // forwarded to AudioPlayer::set_gain
-    VideoPacing pacing_ = VideoPacing::Steady;  // set before start()
-    bool force_region_ = true;
-    int max_bitrate_kbps_ = 0;
-    QuickMenuState quick_menu_state_;
+    std::thread workerThread_;
+    std::thread decodeThread_;
+    WssClient control_;
+    PeerConnection* peer_{nullptr};
+    std::mutex peerMutex_;
+    bool dataChannelOpened_{false};
+    std::unordered_set<std::string> remoteCandidates_;
+    uint64_t nextCandidatePoll_{0};
 
-public:
-    void set_force_region(bool force) { force_region_ = force; }
-    void set_max_bitrate_kbps(int kbps) { max_bitrate_kbps_ = kbps; }
-    void log(const std::string& line);  // also used by the libpeer log sink
+    std::mutex nativeMutex_;
+    std::string nativeUdpHost_;
+    std::string nativeKeyHex_;
+    int nativeVideoPort_{0};
+    int nativeAudioPort_{0};
+    int nativeVideoSocket_{-1};
+    int nativeAudioSocket_{-1};
+    std::thread nativeVideoThread_;
+    std::thread nativeAudioThread_;
+    std::unordered_map<uint16_t, NativeVideoGroup> nativeGroups_;
+    bool nativeSequenceStarted_{false};
+    bool nativeAnyQueued_{false};
+    uint16_t nativeNextGroup_{0};
+    std::atomic<bool> nativeWaitingKeyframe_{true};
+    std::atomic<uint32_t> nativeDroppedGroups_{0};
+    std::atomic<uint32_t> nativeRecoveredGroups_{0};
+    // Native UDP recovery is deliberately two-stage. A missing frame first
+    // enters soft recovery so FFmpeg can conceal the loss and continue using
+    // its existing reference surfaces. Only an actual decoder error enters
+    // hard IDR gating. This avoids the permanent freeze seen in v0.8.4 after
+    // one harmless sequence gap.
+    std::atomic<bool> nativeRecovering_{false};
+    std::atomic<uint64_t> nativeRecoveryStartedTicks_{0};
+    std::atomic<uint64_t> nativeLastKeyframeRequestTicks_{0};
+    std::atomic<uint32_t> nativeRecoveryCount_{0};
 
-private:
-    FILE* log_file_ = nullptr;
-    std::mutex log_mutex_;
-
-    PeerConnection* peer_ = nullptr;
-    std::mutex peer_mutex_;
-    std::atomic<PeerConnectionState> peer_state_{PEER_CONNECTION_NEW};
-    std::atomic<bool> channels_open_{false};
-    std::atomic<bool> handshake_done_{false};
-    std::atomic<bool> quit_{false};
-    // Set when the server sends serverInitiatedDisconnect (stream stopped on
-    // the console, console powering off, another client took over).
-    std::atomic<bool> server_ended_{false};
-    // Last RTP arrival, video or audio (peer thread). run_peer's stall
-    // watchdog uses it to end a stream whose media path died silently.
-    std::atomic<Uint64> last_media_ticks_{0};
-
-    VideoDecoder video_;  // width()/height() are render-thread reads only
-#ifdef __SWITCH__
-    DkVideoRenderer dk_video_;  // render-thread: zero-copy NVTEGRA -> display
-#endif
-    VideoJitterBuffer jitter_;  // worker-thread only (RTP -> access units)
+    VideoJitterBuffer jitter_;
+    VideoDecoder video_;
     AudioPlayer audio_;
-    std::mutex video_mutex_;
-    std::condition_variable video_cv_;  // wakes decode_loop when an AU arrives
-    struct VideoAccessUnit {
-        std::vector<uint8_t> data;
-        uint32_t rtp_timestamp = 0;  // H.264 90 kHz clock, decode-order frame ts
-    };
-    std::deque<VideoAccessUnit> video_queue_;
-    std::atomic<bool> got_frame_{false};
-    std::atomic<uint64_t> video_bytes_{0};  // RTP video bytes rx (HUD bitrate)
+    DkVideoRenderer dkVideo_;
+    std::mutex videoMutex_;
+    std::condition_variable videoCv_;
+    std::deque<VideoAccessUnit> videoQueue_;
+    std::atomic<bool> decoderResyncRequested_{false};
+    std::atomic<bool> decoderFlushOnKeyframe_{false};
 
-    // Decoded-frame handoff (Switch): decode_thread_ decodes into shared_frame_;
-    // the render thread (pump_video) takes its own ref into present_frame_ so it
-    // can present zero-copy while the decode thread keeps producing. Two refs of
-    // the same NVTEGRA surface keep it alive across the hand-off.
-    std::thread decode_thread_;
-    std::mutex frame_mutex_;
-    AVFrame* shared_frame_ = nullptr;   // latest decoded (decode thread writes)
-    AVFrame* present_frame_ = nullptr;  // render thread's stable ref
-    AVFrame* prev_frame_ = nullptr;     // previous presented frame for safe motion blending
-    AVFrame* motion_frame_ = nullptr;   // next/current source frame for midpoint pass
-    bool shared_frame_valid_ = false;
-    uint64_t shared_frame_seq_ = 0;     // protected by frame_mutex_
+    std::mutex frameMutex_;
+    AVFrame* sharedFrame_{nullptr};
+    AVFrame* presentFrame_{nullptr};
+    bool sharedFrameValid_{false};
+    uint64_t sharedFrameSequence_{0};
+    uint64_t presentedSequence_{0};
+    double nextPresentCounter_{0.0};
 
-    // Smooth pacing (VideoPacing::Smooth): decoded frames queue in source
-    // order instead of newest-wins; pump_video presents them on a detected
-    // 30/60 Hz cadence with one frame held in reserve to absorb arrival
-    // jitter. The queue is capped hard: each entry pins an NVTEGRA surface
-    // from the decoder's small pool, so letting it grow would starve NVDEC.
-    struct SmoothFrame {
-        AVFrame* frame = nullptr;
-        uint64_t seq = 0;
-    };
-    std::deque<SmoothFrame> smooth_frames_;  // protected by frame_mutex_
-    bool smooth_have_present_ = false;       // render thread only
-    uint32_t smooth_refresh_phase_ = 0;      // render thread only
-    std::atomic<uint32_t> source_refresh_period_{1};  // 1=60fps, 2=30fps
-    uint32_t source_fast_streak_ = 0;  // decode thread only
-    uint32_t source_slow_streak_ = 0;  // decode thread only
-    uint32_t last_rtp_timestamp_ = 0;  // decode thread only
-    bool have_rtp_timestamp_ = false;  // decode thread only
+    std::mutex inputMutex_;
+    bool padInitialized_{false};
+    bool inputLogged_{false};
+    bool mouseInputLogged_{false};
+    bool keyboardInputLogged_{false};
+    std::atomic<uint64_t> mouseMoveCount_{0};
+    std::atomic<uint64_t> mouseClickCount_{0};
+    std::atomic<uint64_t> keyboardEventCount_{0};
+    bool previousGuide_{false};
+    HidAnalogStickState previousLeft_{};
+    HidAnalogStickState previousRight_{};
+    u64 previousButtons_{0};
+    int lastSentAxes_[6]{0, 0, -32767, 0, 0, -32767};
+    uint64_t lastAxisSentTicks_[6]{};
+    uint64_t lastInputDiagnosticTicks_{0};
 
-    // Pacing telemetry, logged once per second from run_peer (pace| line):
-    // new/repeated presents, how many refreshes each frame stayed up, and
-    // frames skipped (newest-wins jumps or smooth-queue overflow drops).
-    uint64_t last_present_seq_ = 0;        // render thread only
-    uint32_t present_hold_refreshes_ = 0;  // render thread only
-    std::atomic<uint32_t> pace_new_{0}, pace_repeat_{0};
-    std::atomic<uint32_t> pace_hold1_{0}, pace_hold2_{0};
-    std::atomic<uint32_t> pace_hold3_{0}, pace_hold4p_{0};
-    std::atomic<uint32_t> pace_skip_{0};
-    std::atomic<uint32_t> pace_generated_{0};
+    std::mutex rumbleMutex_;
+    RumbleCommand rumble_;
+    bool rumblePending_{false};
 
-    xcloud::InputSerializer input_;
-    std::mutex input_mutex_;
-
-    // Server->client rumble. Written by the peer thread (handle_input_report),
-    // drained by the main thread (take_rumble). Latest command wins.
-    std::mutex rumble_mutex_;
-    RumbleCommand rumble_cmd_;
-    bool rumble_pending_ = false;
-    bool rumble_logged_ = false;  // peer thread only: log the first report once
-    Uint64 stream_epoch_ = 0;
-    // Render-thread software vsync pacer for the deko3d present (see
-    // pump_video), in SDL performance-counter ticks: millisecond deadlines
-    // quantized to an uneven 16/17 ms grid; the counter keeps the fraction.
-    double next_present_counter_ = 0;
-    std::atomic<Uint64> last_keyframe_req_{0};
-    std::atomic<uint32_t> pli_sent_{0};  // RTCP PLI keyframe requests
-
-    std::thread thread_;
+    std::mutex logMutex_;
+    FILE* logFile_{nullptr};
 };
 
 }  // namespace gnx::stream

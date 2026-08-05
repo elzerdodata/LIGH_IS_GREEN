@@ -20,14 +20,6 @@ std::string g_ca_bundle;
 std::mutex g_forwarded_mutex;
 std::string g_forwarded_for;  // guarded by g_forwarded_mutex
 
-bool is_gssv_url(const std::string& url) {
-    // Covers offering login hosts and the regional core endpoints Xbox returns
-    // (including possible prod suffix variants) without leaking the spoofed IP
-    // to unrelated Microsoft or image/catalog services.
-    return url.find(".gssv-play-prod") != std::string::npos &&
-           url.find(".xboxlive.com") != std::string::npos;
-}
-
 int abort_cb(void* userdata, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
     auto* flag = static_cast<std::atomic<bool>*>(userdata);
     return (flag && flag->load()) ? 1 : 0;  // non-zero aborts the transfer
@@ -70,6 +62,11 @@ HttpResponse Http::post(const std::string& url, const std::string& body,
     return request("POST", url, &body, headers);
 }
 
+HttpResponse Http::patch(const std::string& url, const std::string& body,
+                         const std::vector<std::string>& headers) {
+    return request("PATCH", url, &body, headers);
+}
+
 HttpResponse Http::del(const std::string& url,
                        const std::vector<std::string>& headers) {
     return request("DELETE", url, nullptr, headers);
@@ -91,10 +88,6 @@ HttpResponse Http::request(const char* method, const std::string& url,
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
     if (!g_ca_bundle.empty())
         curl_easy_setopt(curl, CURLOPT_CAINFO, g_ca_bundle.c_str());
-#ifdef __SWITCH__
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-#endif
     if (abort_flag_) {
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, abort_cb);
@@ -110,7 +103,7 @@ HttpResponse Http::request(const char* method, const std::string& url,
     curl_slist* list = nullptr;
     {
         std::lock_guard<std::mutex> lock(g_forwarded_mutex);
-        if (!g_forwarded_for.empty() && is_gssv_url(url))
+        if (!g_forwarded_for.empty())
             list = curl_slist_append(
                 list, ("X-Forwarded-For: " + g_forwarded_for).c_str());
     }

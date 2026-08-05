@@ -1,0 +1,24 @@
+name: build-v0.8.5
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [build/zerodroid-v0.8.5]
+  pull_request:
+
+jobs:
+  switch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ZERODROID_v0.8.5.nro
+        run: docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make -j"$(nproc)"
+
+      - name: Verify artifact
+        run: ls -l ZERODROID_v0.8.5.nro
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZERODROID_v0.8.5-nro
+          path: ZERODROID_v0.8.5.nro

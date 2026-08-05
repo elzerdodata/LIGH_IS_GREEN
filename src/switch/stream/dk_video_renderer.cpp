@@ -38,11 +38,12 @@ constexpr uint32_t kUniformSlotOff = 0x100;
 constexpr uint32_t kUniformSlotStride = 0x100;
 constexpr uint32_t kSamplerOff = 0x400;       // sampler descriptor set
 constexpr uint32_t kImageSlotOff = 0x500;     // per-slot image descriptor set
-constexpr uint32_t kImageSlotStride = 0x100;  // 256 bytes stride per slot (7 * 32 = 224 bytes)
+constexpr uint32_t kImageSlotStride = 0x100;  // 256 bytes stride per slot (8 * 32 = 256 bytes)
 constexpr uint32_t kVtxOff = 0x800;           // quad vertex buffer
 constexpr uint32_t kHudVtxOff = 0x880;        // HUD overlay corner quad
 constexpr uint32_t kGuideVtxOff = 0x900;      // top-right Guide/Home touch button
 constexpr uint32_t kQuickVtxOff = 0x980;      // two-dot handle + quick panel
+constexpr uint32_t kCursorVtxOff = 0xA00;     // dynamic virtual mouse pointer
 
 struct Vertex {
     float position[3];
@@ -75,12 +76,12 @@ constexpr Vertex kGuideQuad[] = {
     {{+0.9917f, +0.9852f, 0.0f}, {1.0f, 0.0f}},
 };
 
-// Transparent 672x812 quick-menu texture in shared 1920x1080 design space.
+// Transparent 672x928 quick-menu texture in shared 1920x1080 design space.
 // It spans from the panel to the relocated two-dot handle.
 constexpr Vertex kQuickQuad[] = {
     {{+0.2083f, +0.9852f, 0.0f}, {0.0f, 0.0f}},
-    {{+0.2083f, -0.5185f, 0.0f}, {0.0f, 1.0f}},
-    {{+0.9083f, -0.5185f, 0.0f}, {1.0f, 1.0f}},
+    {{+0.2083f, -0.7333f, 0.0f}, {0.0f, 1.0f}},
+    {{+0.9083f, -0.7333f, 0.0f}, {1.0f, 1.0f}},
     {{+0.9083f, +0.9852f, 0.0f}, {1.0f, 0.0f}},
 };
 
@@ -98,12 +99,11 @@ struct Transformation {
     alignas(16) float sharp_data[4];  // x=strength, y=overshoot allowance
     alignas(16) float picture_data[4];  // brightness, contrast, saturation, gamma
     alignas(16) float motion_data[4];  // x=blend factor, y=enabled
-    alignas(16) float color_tune_data[4];  // x=temperature (-1.0 to 1.0)
 };
 
-static_assert(7 * sizeof(DkImageDescriptor) <= kImageSlotStride,
+static_assert(8 * sizeof(DkImageDescriptor) <= kImageSlotStride,
               "image descriptors overlap image slot stride");
-static_assert(sizeof(Transformation) == 160, "std140 Transformation");
+static_assert(sizeof(Transformation) == 144, "std140 Transformation");
 static_assert(kFrameSlots == 3, "renderer slot count must match kFbNum");
 
 // Column-major YUV->RGB matrices (matching Moonlight-Switch / BT.xxx).
@@ -147,14 +147,51 @@ void DkVideoRenderer::set_quick_menu_state(const QuickMenuState& state) {
         next.saturation != quick_state_.saturation ||
         next.gamma != quick_state_.gamma ||
         next.sharpness != quick_state_.sharpness;
+    const bool cursor_changed =
+        next.mouseCursorVisible != quick_state_.mouseCursorVisible ||
+        next.mouseCursorX != quick_state_.mouseCursorX ||
+        next.mouseCursorY != quick_state_.mouseCursorY;
     bool menu_changed =
         next.open != quick_state_.open ||
+        next.sessionActionsOpen != quick_state_.sessionActionsOpen ||
+        next.reconnectConfirmOpen != quick_state_.reconnectConfirmOpen ||
+        next.mouseModeEnabled != quick_state_.mouseModeEnabled ||
         next.performance != quick_state_.performance ||
-        next.pacing != quick_state_.pacing || picture_changed;
+        next.xboxFaceLayout != quick_state_.xboxFaceLayout ||
+        next.mouseSpeed != quick_state_.mouseSpeed ||
+        next.resolutionMode != quick_state_.resolutionMode ||
+        next.picturePreset != quick_state_.picturePreset ||
+        next.sessionStatus != quick_state_.sessionStatus ||
+        next.currentGame != quick_state_.currentGame ||
+        next.gatewayLabel != quick_state_.gatewayLabel ||
+        next.streamWidth != quick_state_.streamWidth ||
+        next.streamHeight != quick_state_.streamHeight ||
+        next.outputWidth != quick_state_.outputWidth ||
+        next.outputHeight != quick_state_.outputHeight ||
+        next.sessionSeconds != quick_state_.sessionSeconds ||
+        next.droppedGroups != quick_state_.droppedGroups ||
+        next.recoveredGroups != quick_state_.recoveredGroups ||
+        next.recoveryRequests != quick_state_.recoveryRequests ||
+        next.mouseMoves != quick_state_.mouseMoves ||
+        next.mouseClicks != quick_state_.mouseClicks ||
+        next.keyboardEvents != quick_state_.keyboardEvents || picture_changed;
     quick_state_ = next;
     hud_enabled_ = next.performance;
+    if (cursor_changed) {
+        cursor_x_ = next.mouseCursorX;
+        cursor_y_ = next.mouseCursorY;
+        cursor_visible_ = next.mouseCursorVisible;
+        cursor_quad_dirty_ = true;
+    }
     if (picture_changed) transform_dirty_ = true;
     if (menu_changed) quick_dirty_ = true;
+}
+
+void DkVideoRenderer::set_ping_ms(int pingMs) {
+    const int next = pingMs < 0 ? -1 : std::clamp(pingMs, 0, 9999);
+    if (next == ping_ms_) return;
+    ping_ms_ = next;
+    quick_dirty_ = true;
 }
 
 void DkVideoRenderer::logf(const char* fmt, ...) {
@@ -315,6 +352,7 @@ bool DkVideoRenderer::init() {
                 sizeof(kGuideQuad));
     std::memcpy(static_cast<uint8_t*>(data_cpu_) + kQuickVtxOff, kQuickQuad,
                 sizeof(kQuickQuad));
+    update_cursor_quad();
 
     // Sampler descriptor (linear, clamp to edge). Written into the descriptor
     // set from the command buffer each frame (canonical deko3d pattern).
@@ -386,6 +424,32 @@ bool DkVideoRenderer::init() {
         guide_desc_.initialize(guide_image_);
     }
 
+    // Local virtual pointer. The 64x64 transparent texture contains a lilac
+    // arrow with a dark outline. Its quad moves independently from the other
+    // overlays, so pointer motion does not re-rasterize the Control Center.
+    cursor_pixels_.assign(kCursorTexW * kCursorTexH, 0);
+    {
+        uint32_t stride = kCursorTexW * 4;
+        dk::ImageLayout cursor_layout;
+        dk::ImageLayoutMaker{dev_}
+            .setFlags(DkImageFlags_UsageLoadStore | DkImageFlags_Usage2DEngine |
+                      DkImageFlags_PitchLinear)
+            .setFormat(DkImageFormat_RGBA8_Unorm)
+            .setDimensions(kCursorTexW, kCursorTexH)
+            .setPitchStride(stride)
+            .initialize(cursor_layout);
+        uint32_t sz = (cursor_layout.getSize() + 0xFFF) & ~0xFFFu;
+        cursor_memblock_ = dk::MemBlockMaker{dev_, sz}
+                               .setFlags(DkMemBlockFlags_CpuUncached |
+                                         DkMemBlockFlags_GpuCached |
+                                         DkMemBlockFlags_Image)
+                               .create();
+        cursor_cpu_ = cursor_memblock_.getCpuAddr();
+        cursor_image_.initialize(cursor_layout, cursor_memblock_, 0);
+        cursor_desc_.initialize(cursor_image_);
+    }
+    rasterize_cursor();
+
     // Two-dot handle + expanded quick settings panel. Keeping both in one
     // transparent texture makes open/close a cheap CPU re-rasterization and a
     // single overlay draw call.
@@ -410,17 +474,26 @@ bool DkVideoRenderer::init() {
         quick_image_.initialize(quick_layout, quick_memblock_, 0);
         quick_desc_.initialize(quick_image_);
     }
-    // System shared font (pl was initialized in main). A null font falls back to
-    // a panel with no text -- still proves the overlay, and never crashes.
-    if (!hud_font_) {
+    // System shared font (pl was initialized in main). The performance HUD
+    // keeps its 28 px face, while the dense session overlay gets dedicated
+    // 22/18 px faces so labels and values remain readable at 1280x720.
+    if (!hud_font_ || !session_font_ || !session_small_font_) {
         PlFontData fd;
         if (R_SUCCEEDED(plGetSharedFontByType(&fd, PlSharedFontType_Standard))) {
-            SDL_RWops* rw = SDL_RWFromConstMem(fd.address, fd.size);
-            if (rw) hud_font_ = TTF_OpenFontRW(rw, 1, 28);
+            const auto open_shared_font = [&](int pointSize) -> TTF_Font* {
+                SDL_RWops* rw = SDL_RWFromConstMem(fd.address, fd.size);
+                return rw ? TTF_OpenFontRW(rw, 1, pointSize) : nullptr;
+            };
+            if (!hud_font_) hud_font_ = open_shared_font(28);
+            if (!session_font_) session_font_ = open_shared_font(22);
+            if (!session_small_font_) session_small_font_ = open_shared_font(18);
         }
         if (!hud_font_) logf("deko3d: HUD font unavailable (panel only)");
+        if (!session_font_ || !session_small_font_)
+            logf("deko3d: compact session fonts unavailable; using HUD fallback");
     }
     rasterize_guide();
+    rasterize_cursor();
     rasterize_quick_menu();
 
     initialized_ = true;
@@ -441,6 +514,14 @@ void DkVideoRenderer::shutdown() {
         TTF_CloseFont(hud_font_);  // also frees the RWops (opened with freesrc=1)
         hud_font_ = nullptr;
     }
+    if (session_font_) {
+        TTF_CloseFont(session_font_);
+        session_font_ = nullptr;
+    }
+    if (session_small_font_) {
+        TTF_CloseFont(session_small_font_);
+        session_small_font_ = nullptr;
+    }
     mappings_.clear();
     current_mapping_ = -1;
     swapchain_ = nullptr;
@@ -455,6 +536,11 @@ void DkVideoRenderer::shutdown() {
     guide_memblock_ = nullptr;
     guide_cpu_ = nullptr;
     guide_pixels_.clear();
+    cursor_memblock_ = nullptr;
+    cursor_cpu_ = nullptr;
+    cursor_pixels_.clear();
+    cursor_visible_ = false;
+    cursor_quad_dirty_ = true;
     quick_memblock_ = nullptr;
     quick_cpu_ = nullptr;
     quick_pixels_.clear();
@@ -582,7 +668,6 @@ void DkVideoRenderer::update_transform(AVFrame* frame) {
     t.picture_data[1] = static_cast<float>(quick_state_.contrast) / 100.0f;
     t.picture_data[2] = static_cast<float>(quick_state_.saturation) / 100.0f;
     t.picture_data[3] = static_cast<float>(quick_state_.gamma) / 100.0f;
-    t.color_tune_data[0] = static_cast<float>(quick_state_.temperature) / 20.0f;
     std::memcpy(static_cast<uint8_t*>(data_cpu_) + kUniformTemplateOff, &t,
                 sizeof(t));
     logf("deko3d: color=%d full=%d cropY=%.4fx%.4f cropUV=%.4fx%.4f picture=%+d/%d/%d gamma=%.2f sharp=%d",
@@ -683,10 +768,11 @@ void DkVideoRenderer::blit_text(const char* s, int x, int y) {
     SDL_FreeSurface(surf);
 }
 
-void DkVideoRenderer::blit_quick_text(const char* s, int x, int y) {
-    if (!hud_font_ || !s || !*s) return;
+void DkVideoRenderer::blit_quick_text_font(TTF_Font* font, const char* s,
+                                                int x, int y) {
+    if (!font || !s || !*s) return;
     SDL_Color white{255, 255, 255, 255};
-    SDL_Surface* surf = TTF_RenderUTF8_Blended(hud_font_, s, white);
+    SDL_Surface* surf = TTF_RenderUTF8_Blended(font, s, white);
     if (!surf) return;
     SDL_LockSurface(surf);
     int bpp = surf->format->BytesPerPixel;
@@ -718,6 +804,21 @@ void DkVideoRenderer::blit_quick_text(const char* s, int x, int y) {
     SDL_FreeSurface(surf);
 }
 
+void DkVideoRenderer::blit_quick_text(const char* s, int x, int y) {
+    blit_quick_text_font(hud_font_, s, x, y);
+}
+
+void DkVideoRenderer::blit_session_text(const char* s, int x, int y) {
+    blit_quick_text_font(session_font_ ? session_font_ : hud_font_, s, x, y);
+}
+
+void DkVideoRenderer::blit_session_small_text(const char* s, int x, int y) {
+    TTF_Font* font = session_small_font_ ? session_small_font_
+                                        : (session_font_ ? session_font_
+                                                         : hud_font_);
+    blit_quick_text_font(font, s, x, y);
+}
+
 void DkVideoRenderer::rasterize_guide() {
     auto rgba = [](uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
         return static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
@@ -725,10 +826,10 @@ void DkVideoRenderer::rasterize_guide() {
                (static_cast<uint32_t>(a) << 24);
     };
     const uint32_t shadow = rgba(0, 0, 0, guide_pressed_ ? 180 : 125);
-    const uint32_t icon = guide_pressed_ ? rgba(255, 255, 255, 255)
-                                          : rgba(16, 124, 16, 255);
-    const uint32_t mark = guide_pressed_ ? rgba(16, 124, 16, 255)
-                                         : rgba(255, 255, 255, 255);
+    const uint32_t icon = guide_pressed_ ? rgba(245, 243, 255, 255)
+                                          : rgba(167, 139, 250, 255);
+    const uint32_t mark = guide_pressed_ ? rgba(109, 78, 180, 255)
+                                         : rgba(245, 243, 255, 255);
     std::fill(guide_pixels_.begin(), guide_pixels_.end(), 0);
 
     // Symbol only: a soft circular shadow replaces the old green square tile.
@@ -758,6 +859,83 @@ void DkVideoRenderer::rasterize_guide() {
     if (guide_cpu_)
         std::memcpy(guide_cpu_, guide_pixels_.data(), guide_pixels_.size() * 4);
     guide_rasterized_pressed_ = guide_pressed_;
+}
+
+void DkVideoRenderer::rasterize_cursor() {
+    auto rgba = [](uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+        return static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
+               (static_cast<uint32_t>(b) << 16) |
+               (static_cast<uint32_t>(a) << 24);
+    };
+    struct Point { int x; int y; };
+    const Point outline[] = {{4, 2}, {4, 49}, {16, 38}, {29, 62},
+                             {41, 56}, {28, 34}, {51, 34}};
+    const Point fillShape[] = {{8, 8}, {8, 40}, {17, 31}, {31, 56},
+                               {35, 54}, {22, 29}, {42, 29}};
+    const auto inside = [](int px, int py, const Point* pts,
+                           std::size_t count) {
+        bool result = false;
+        for (std::size_t i = 0, j = count - 1; i < count; j = i++) {
+            const bool crosses = ((pts[i].y > py) != (pts[j].y > py)) &&
+                (px < (pts[j].x - pts[i].x) * (py - pts[i].y) /
+                              static_cast<float>(pts[j].y - pts[i].y) +
+                          pts[i].x);
+            if (crosses) result = !result;
+        }
+        return result;
+    };
+
+    const uint32_t shadow = rgba(0, 0, 0, 215);
+    const uint32_t lilac = rgba(196, 181, 253, 255);
+    const uint32_t highlight = rgba(245, 243, 255, 255);
+    std::fill(cursor_pixels_.begin(), cursor_pixels_.end(), 0);
+    for (int y = 0; y < static_cast<int>(kCursorTexH); ++y) {
+        for (int x = 0; x < static_cast<int>(kCursorTexW); ++x) {
+            if (inside(x, y, outline, sizeof(outline) / sizeof(outline[0])))
+                cursor_pixels_[y * kCursorTexW + x] = shadow;
+            if (inside(x, y, fillShape, sizeof(fillShape) / sizeof(fillShape[0])))
+                cursor_pixels_[y * kCursorTexW + x] = lilac;
+        }
+    }
+    // Small bright leading edge keeps the pointer readable over dark and light
+    // game scenes without making the whole cursor visually heavy.
+    for (int y = 9; y <= 31; ++y) {
+        const int x = 9 + (y - 9) / 3;
+        if (x >= 0 && x < static_cast<int>(kCursorTexW))
+            cursor_pixels_[y * kCursorTexW + x] = highlight;
+    }
+    if (cursor_cpu_)
+        std::memcpy(cursor_cpu_, cursor_pixels_.data(),
+                    cursor_pixels_.size() * sizeof(uint32_t));
+}
+
+void DkVideoRenderer::update_cursor_quad() {
+    // 52x64 design pixels become roughly 35x43 pixels on the handheld, large
+    // enough to find instantly without obscuring UI elements underneath it.
+    constexpr float width = 52.0f;
+    constexpr float height = 64.0f;
+    // Keep the complete local pointer visible at the right and bottom edges.
+    // The remote hotspot still reaches the normalized edge; only the local
+    // visualization is inset by its own dimensions there.
+    const float px = std::clamp(
+        std::clamp(cursor_x_, 0.0f, 1.0f) * 1920.0f,
+        0.0f, 1920.0f - width);
+    const float py = std::clamp(
+        std::clamp(cursor_y_, 0.0f, 1.0f) * 1080.0f,
+        0.0f, 1080.0f - height);
+    const float left = px / 960.0f - 1.0f;
+    const float right = (px + width) / 960.0f - 1.0f;
+    const float top = 1.0f - py / 540.0f;
+    const float bottom = 1.0f - (py + height) / 540.0f;
+    const Vertex quad[] = {
+        {{left, top, 0.0f}, {0.0f, 0.0f}},
+        {{left, bottom, 0.0f}, {0.0f, 1.0f}},
+        {{right, bottom, 0.0f}, {1.0f, 1.0f}},
+        {{right, top, 0.0f}, {1.0f, 0.0f}},
+    };
+    std::memcpy(static_cast<uint8_t*>(data_cpu_) + kCursorVtxOff, quad,
+                sizeof(quad));
+    cursor_quad_dirty_ = false;
 }
 
 void DkVideoRenderer::rasterize_quick_menu() {
@@ -799,11 +977,11 @@ void DkVideoRenderer::rasterize_quick_menu() {
     };
 
     const uint32_t transparent = 0;
-    const uint32_t panel = rgba(5, 12, 17, 240);
-    const uint32_t surface = rgba(12, 25, 30, 226);
-    const uint32_t edge = rgba(42, 74, 72, 255);
-    const uint32_t accent = rgba(57, 224, 103, 255);
-    const uint32_t active = rgba(16, 124, 16, 240);
+    const uint32_t panel = rgba(13, 11, 22, 244);
+    const uint32_t surface = rgba(38, 34, 50, 232);
+    const uint32_t edge = rgba(91, 83, 112, 255);
+    const uint32_t accent = rgba(167, 139, 250, 255);
+    const uint32_t active = rgba(109, 78, 180, 242);
     const uint32_t glyph_shadow = rgba(0, 0, 0, 150);
     const uint32_t text = rgba(255, 255, 255, 255);
 
@@ -814,23 +992,46 @@ void DkVideoRenderer::rasterize_quick_menu() {
     // are visible; active state is conveyed by color, never by a square frame.
     circle(toggle.x + 23, toggle.y + toggle.h / 2 + 2, 9, glyph_shadow);
     circle(toggle.x + 49, toggle.y + toggle.h / 2 + 2, 9, glyph_shadow);
-    const uint32_t dot = quick_state_.open ? accent : text;
+    const uint32_t dot = (quick_state_.open || quick_state_.sessionActionsOpen) ? accent : text;
     circle(toggle.x + 23, toggle.y + toggle.h / 2, 6, dot);
     circle(toggle.x + 49, toggle.y + toggle.h / 2, 6, dot);
+
+    // Compact always-visible latency meter. The WebSocket ping is a true
+    // round trip to the active streaming gateway, not a guessed frame delay.
+    QuickRect ping_badge = local({1438, 12, 286, 64});
+    const uint32_t ping_color = ping_ms_ < 0
+        ? edge
+        : ping_ms_ < 60 ? rgba(139, 214, 164, 255)
+        : ping_ms_ < 120 ? rgba(251, 191, 36, 255)
+                         : rgba(248, 113, 113, 255);
+    fill(ping_badge.x, ping_badge.y, ping_badge.w, ping_badge.h,
+         rgba(24, 21, 34, 220));
+    frame(ping_badge.x, ping_badge.y, ping_badge.w, ping_badge.h, 2,
+          ping_color);
+    circle(ping_badge.x + 24, ping_badge.y + 32, 7, ping_color);
+    char ping_text[32];
+    if (ping_ms_ < 0)
+        std::snprintf(ping_text, sizeof(ping_text), "PING -- ms");
+    else
+        std::snprintf(ping_text, sizeof(ping_text), "PING %d ms", ping_ms_);
+    blit_quick_text(ping_text, ping_badge.x + 48, ping_badge.y + 13);
 
     if (quick_state_.open) {
         QuickRect menu = local(kQuickPanelRect);
         fill(menu.x, menu.y, menu.w, menu.h, panel);
         frame(menu.x, menu.y, menu.w, menu.h, 3, accent);
-        blit_quick_text("STREAM CONTROLS", menu.x + 20, menu.y + 16);
+        blit_quick_text("ZERODROID SETTINGS", menu.x + 20, menu.y + 16);
 
         const char* labels[kQuickRowCount] = {
-            "Performance", "Pacing", "Picture Profile", "Brightness", "Contrast",
-            "Saturation", "Gamma", "Sharpness", "Temperature"};
-        const char* pacing_labels[2] = {"Steady", "Smooth"};
-        const char* profile_labels[7] = {
-            "Signal Pure", "Midnight Cinema", "Solar Ember", "Razor Edge",
-            "Neon Pulse", "OLED Abyss", "Custom"};
+            "Performance", "Button layout", "Mouse speed", "Resolution",
+            "Picture preset", "Brightness", "Contrast", "Saturation",
+            "Gamma", "Sharpness"};
+        const char* mouse_labels[3] = {
+            "PRECISE", "NORMAL", "FAST"};
+        const char* resolution_labels[4] = {
+            "AUTO", "720P", "1080P", "1440P"};
+        const char* preset_labels[6] = {
+            "NATURAL", "SHARP", "VIVID", "CINEMA", "SOFT", "CUSTOM"};
         const char* sharp_labels[4] = {"Off", "Low", "Medium", "High"};
 
         for (int row = 0; row < kQuickRowCount; ++row) {
@@ -849,6 +1050,39 @@ void DkVideoRenderer::rasterize_quick_menu() {
                 continue;
             }
 
+            if (row == QuickController) {
+                fill(rr.x + 300, rr.y + 6, 154, rr.h - 12,
+                     quick_state_.xboxFaceLayout ? active
+                                                 : rgba(42, 49, 60, 240));
+                frame(rr.x + 300, rr.y + 6, 154, rr.h - 12, 2,
+                      quick_state_.xboxFaceLayout ? accent : edge);
+                blit_quick_text(quick_state_.xboxFaceLayout ? "XBOX"
+                                                             : "NINTENDO",
+                                rr.x + 314, rr.y + 12);
+                continue;
+            }
+
+            if (row == QuickMouseSpeed || row == QuickResolution ||
+                row == QuickPreset) {
+                QuickRect minus = local(quick_minus_rect(row));
+                QuickRect plus = local(quick_plus_rect(row));
+                fill(minus.x, minus.y + 4, minus.w, minus.h - 8,
+                     rgba(42, 49, 60, 240));
+                fill(plus.x, plus.y + 4, plus.w, plus.h - 8,
+                     rgba(42, 49, 60, 240));
+                frame(minus.x, minus.y + 4, minus.w, minus.h - 8, 2, edge);
+                frame(plus.x, plus.y + 4, plus.w, plus.h - 8, 2, edge);
+                blit_quick_text("-", minus.x + 25, minus.y + 10);
+                blit_quick_text("+", plus.x + 22, plus.y + 10);
+                const char* value = row == QuickMouseSpeed
+                    ? mouse_labels[quick_state_.mouseSpeed]
+                    : (row == QuickResolution
+                        ? resolution_labels[quick_state_.resolutionMode]
+                        : preset_labels[quick_state_.picturePreset]);
+                blit_quick_text(value, rr.x + 300, rr.y + 12);
+                continue;
+            }
+
             QuickRect minus = local(quick_minus_rect(row));
             QuickRect plus = local(quick_plus_rect(row));
             fill(minus.x, minus.y + 4, minus.w, minus.h - 8, rgba(42, 49, 60, 240));
@@ -858,14 +1092,8 @@ void DkVideoRenderer::rasterize_quick_menu() {
             blit_quick_text("-", minus.x + 25, minus.y + 10);
             blit_quick_text("+", plus.x + 22, plus.y + 10);
 
-            char value[32];
-            if (row == QuickPacing)
-                std::snprintf(value, sizeof(value), "%s",
-                              pacing_labels[std::clamp(quick_state_.pacing, 0, 1)]);
-            else if (row == QuickPictureProfile)
-                std::snprintf(value, sizeof(value), "%s",
-                              profile_labels[std::clamp(quick_state_.picture_profile, 0, 6)]);
-            else if (row == QuickBrightness)
+            char value[24];
+            if (row == QuickBrightness)
                 std::snprintf(value, sizeof(value), "%+d", quick_state_.brightness);
             else if (row == QuickContrast)
                 std::snprintf(value, sizeof(value), "%d%%", quick_state_.contrast);
@@ -874,18 +1102,161 @@ void DkVideoRenderer::rasterize_quick_menu() {
             else if (row == QuickGamma)
                 std::snprintf(value, sizeof(value), "%.2f",
                               quick_state_.gamma / 100.0f);
-            else if (row == QuickSharpness)
+            else
                 std::snprintf(value, sizeof(value), "%s",
-                              sharp_labels[std::clamp(quick_state_.sharpness, 0, 3)]);
-            else if (row == QuickTemperature)
-                std::snprintf(value, sizeof(value), "%+d", quick_state_.temperature);
-            blit_quick_text(value, rr.x + 280, rr.y + 12);
+                              sharp_labels[quick_state_.sharpness]);
+            blit_quick_text(value, rr.x + 300, rr.y + 12);
         }
+
+        QuickRect warning_box = local(kQuickNoticeRect);
+        fill(warning_box.x, warning_box.y, warning_box.w, warning_box.h,
+             rgba(45, 39, 61, 245));
+        frame(warning_box.x, warning_box.y, warning_box.w, warning_box.h, 2,
+              accent);
+        blit_quick_text("RESOLUTION", warning_box.x + 14,
+                        warning_box.y + 6);
+        blit_quick_text("Applies on the next game launch",
+                        warning_box.x + 14, warning_box.y + 44);
 
         QuickRect reset = local(kQuickResetRect);
         fill(reset.x, reset.y, reset.w, reset.h, surface);
         frame(reset.x, reset.y, reset.w, reset.h, 2, accent);
-        blit_quick_text("RESET IMAGE", reset.x + 55, reset.y + 8);
+        blit_quick_text("RESET IMAGE", reset.x + 55, reset.y + 10);
+
+        QuickRect mouse_help = local(kQuickMouseHelpRect);
+        fill(mouse_help.x, mouse_help.y, mouse_help.w, mouse_help.h,
+             rgba(24, 21, 34, 235));
+        blit_quick_text("MOUSE: DRAG=TRACKPAD  TAP=CLICK  ALT+TAB: (-)+X",
+                        mouse_help.x + 10, mouse_help.y + 8);
+    }
+
+    if (quick_state_.sessionActionsOpen) {
+        QuickRect menu = local(kSessionPanelRect);
+        fill(menu.x, menu.y, menu.w, menu.h, panel);
+        frame(menu.x, menu.y, menu.w, menu.h, 3, accent);
+        blit_session_text("ZERODROID CONTROL CENTER", menu.x + 18,
+                          menu.y + 16);
+
+        const uint32_t connected = rgba(92, 214, 133, 255);
+        const uint32_t warning = rgba(251, 191, 36, 255);
+        const bool healthy = quick_state_.sessionStatus == "CONNECTED" ||
+                             quick_state_.sessionStatus == "STREAMING";
+        const int badgeW = 128;
+        fill(menu.x + menu.w - badgeW - 18, menu.y + 14, badgeW, 34,
+             rgba(28, 54, 40, 238));
+        frame(menu.x + menu.w - badgeW - 18, menu.y + 14, badgeW, 34, 2,
+              healthy ? connected : warning);
+        blit_session_small_text(healthy ? "CONNECTED" : "CHECKING",
+                                menu.x + menu.w - badgeW - 8,
+                                menu.y + 20);
+
+        QuickRect status = local(kSessionStatusRect);
+        QuickRect actions = local(kSessionActionsRect);
+        fill(status.x, status.y, status.w, status.h, rgba(24, 21, 34, 238));
+        fill(actions.x, actions.y, actions.w, actions.h,
+             rgba(24, 21, 34, 238));
+        frame(status.x, status.y, status.w, status.h, 2, edge);
+        frame(actions.x, actions.y, actions.w, actions.h, 2, edge);
+        blit_session_text("LIVE SESSION", status.x + 14, status.y + 10);
+        blit_session_text("CONTROLS", actions.x + 14, actions.y + 10);
+
+        const auto compact = [](const std::string& value, std::size_t limit) {
+            if (value.size() <= limit) return value;
+            if (limit <= 3) return value.substr(0, limit);
+            return value.substr(0, limit - 3) + "...";
+        };
+        char value[96];
+        int sy = status.y + 48;
+        const auto stat_line = [&](const char* label,
+                                   const std::string& textValue) {
+            blit_session_small_text(label, status.x + 14, sy);
+            blit_session_text(textValue.c_str(), status.x + 14, sy + 21);
+            sy += 58;
+        };
+        stat_line("GAME", compact(quick_state_.currentGame.empty()
+                                      ? std::string("Boosteroid session")
+                                      : quick_state_.currentGame, 24));
+        std::snprintf(value, sizeof(value), "%dx%d -> %dx%d",
+                      quick_state_.streamWidth, quick_state_.streamHeight,
+                      quick_state_.outputWidth, quick_state_.outputHeight);
+        stat_line("VIDEO", value);
+        std::snprintf(value, sizeof(value), "%d ms", ping_ms_);
+        stat_line("PING", ping_ms_ < 0 ? std::string("-- ms")
+                                        : std::string(value));
+        std::snprintf(value, sizeof(value), "%u / %u",
+                      quick_state_.droppedGroups,
+                      quick_state_.recoveredGroups);
+        stat_line("UDP DROP / RECOVER", value);
+        std::snprintf(value, sizeof(value), "%u", quick_state_.recoveryRequests);
+        stat_line("RECOVERY EVENTS", value);
+        std::snprintf(value, sizeof(value), "%llu:%02llu",
+                      static_cast<unsigned long long>(quick_state_.sessionSeconds / 60),
+                      static_cast<unsigned long long>(quick_state_.sessionSeconds % 60));
+        stat_line("SESSION TIME", value);
+        stat_line("GATEWAY", compact(quick_state_.gatewayLabel.empty()
+                                         ? std::string("automatic")
+                                         : quick_state_.gatewayLabel, 24));
+
+        const auto action_button = [&](const QuickRect& absolute,
+                                       const char* label,
+                                       uint32_t border,
+                                       bool activeState = false) {
+            QuickRect r = local(absolute);
+            fill(r.x, r.y, r.w, r.h, activeState ? active : surface);
+            frame(r.x, r.y, r.w, r.h, 2, border);
+            blit_session_small_text(label, r.x + 14, r.y + 14);
+        };
+        action_button(kSessionGuideRect, "XBOX GUIDE", edge);
+        action_button(kSessionSteamRect, "STEAM MENU", connected);
+        action_button(kSessionAltTabRect, "ALT + TAB", accent);
+        action_button(kSessionKeyboardRect, "KEYBOARD INFO", edge);
+        action_button(kSessionMouseRect,
+                      quick_state_.mouseModeEnabled ? "MOUSE: ON" : "MOUSE: OFF",
+                      quick_state_.mouseModeEnabled ? connected : edge,
+                      quick_state_.mouseModeEnabled);
+        action_button(kSessionReconnectRect, "RECONNECT", warning);
+        action_button(kSessionSettingsRect, "GRAPHICS", accent);
+        action_button(kSessionCloseRect, "RETURN TO GAME", edge);
+
+        QuickRect help = local(kSessionHelpRect);
+        fill(help.x, help.y, help.w, help.h, rgba(45, 39, 61, 245));
+        frame(help.x, help.y, help.w, help.h, 2, accent);
+        blit_session_small_text("TOUCHPAD: drag anywhere to move the cursor",
+                                help.x + 12, help.y + 8);
+        blit_session_small_text("QUICK TAP: left click at the current cursor",
+                                help.x + 12, help.y + 36);
+        blit_session_small_text("(-)+R stick move | ZR left | R3 right",
+                                help.x + 12, help.y + 64);
+        blit_session_small_text("STEAM MENU sends SHIFT+TAB | (-)+X ALT+TAB",
+                                help.x + 12, help.y + 92);
+        std::snprintf(value, sizeof(value), "TX mouse %llu/%llu | keyboard %llu",
+                      static_cast<unsigned long long>(quick_state_.mouseMoves),
+                      static_cast<unsigned long long>(quick_state_.mouseClicks),
+                      static_cast<unsigned long long>(quick_state_.keyboardEvents));
+        blit_session_small_text(value, help.x + 12, help.y + 124);
+
+        if (quick_state_.reconnectConfirmOpen) {
+            QuickRect confirm = local(kReconnectConfirmPanelRect);
+            fill(confirm.x, confirm.y, confirm.w, confirm.h,
+                 rgba(13, 11, 22, 252));
+            frame(confirm.x, confirm.y, confirm.w, confirm.h, 3, warning);
+            blit_session_text("RECONNECT SAME SESSION?", confirm.x + 30,
+                              confirm.y + 24);
+            blit_session_small_text("Only local audio/video/control will close.",
+                                    confirm.x + 24, confirm.y + 82);
+            blit_session_small_text("The Boosteroid machine must stay running.",
+                                    confirm.x + 24, confirm.y + 116);
+            blit_session_small_text("Experimental: verify after reconnecting.",
+                                    confirm.x + 24, confirm.y + 150);
+            QuickRect cancel = local(kReconnectCancelRect);
+            QuickRect accept = local(kReconnectConfirmRect);
+            fill(cancel.x, cancel.y, cancel.w, cancel.h, surface);
+            fill(accept.x, accept.y, accept.w, accept.h, active);
+            frame(cancel.x, cancel.y, cancel.w, cancel.h, 2, edge);
+            frame(accept.x, accept.y, accept.w, accept.h, 2, warning);
+            blit_session_text("CANCEL", cancel.x + 42, cancel.y + 12);
+            blit_session_text("RECONNECT", accept.x + 22, accept.y + 12);
+        }
     }
 
     if (quick_cpu_)
@@ -944,29 +1315,19 @@ void DkVideoRenderer::update_hud(AVFrame* frame) {
     }
     char buf[220];
     if (net_valid_.load(std::memory_order_relaxed)) {
-        const int ping_ms = net_ping_ms_.load(std::memory_order_relaxed);
-        char network_line[96];
-        if (ping_ms >= 0) {
-            std::snprintf(network_line, sizeof(network_line),
-                          "%.1f Mbps  loss %.1f%%\nping %dms",
-                          net_mbps_.load(std::memory_order_relaxed),
-                          net_loss_.load(std::memory_order_relaxed), ping_ms);
-        } else {
-            std::snprintf(network_line, sizeof(network_line),
-                          "%.1f Mbps  loss %.1f%%\nping --",
-                          net_mbps_.load(std::memory_order_relaxed),
-                          net_loss_.load(std::memory_order_relaxed));
-        }
         std::snprintf(buf, sizeof(buf),
                       "%dx%d\nsrc %.0f  out %.0f  gen %.0f fps\n"
-                      "%s",
+                      "%.1f Mbps  loss %.1f%%\nbuf %dms  ping %dms",
                       frame->width, frame->height, fps_, output_fps_,
-                      generated_fps_, network_line);
+                      generated_fps_,
+                      net_mbps_.load(std::memory_order_relaxed),
+                      net_loss_.load(std::memory_order_relaxed),
+                      net_buffer_ms_.load(std::memory_order_relaxed), ping_ms_);
     } else {
         std::snprintf(buf, sizeof(buf),
-                      "%dx%d\nsrc %.0f  out %.0f  gen %.0f fps",
+                      "%dx%d\nsrc %.0f  out %.0f  gen %.0f fps\nping %dms",
                       frame->width, frame->height, fps_, output_fps_,
-                      generated_fps_);
+                      generated_fps_, ping_ms_);
     }
     if (hud_text_cache_ == buf) return;  // unchanged -> keep the current texture
     hud_text_cache_ = buf;
@@ -1070,6 +1431,7 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
     }
     if (guide_pressed_ != guide_rasterized_pressed_) rasterize_guide();
     if (quick_dirty_) rasterize_quick_menu();
+    if (cursor_quad_dirty_) update_cursor_quad();
 
     int slot = queue_.acquireImage(swapchain_);
 
@@ -1121,6 +1483,9 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
                      &next->luma_desc, sizeof(DkImageDescriptor));
     cmdbuf_.pushData(data_gpu_ + image_off + 6 * sizeof(DkImageDescriptor),
                      &next->chroma_desc, sizeof(DkImageDescriptor));
+    // Image descriptor #7 = local virtual mouse pointer.
+    cmdbuf_.pushData(data_gpu_ + image_off + 7 * sizeof(DkImageDescriptor),
+                     &cursor_desc_, sizeof(DkImageDescriptor));
 
     dk::ImageView view{framebuffers_[slot]};
     cmdbuf_.bindRenderTargets({&view});
@@ -1145,7 +1510,7 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
     cmdbuf_.bindDepthStencilState(depth_stencil);
 
     cmdbuf_.bindSamplerDescriptorSet(data_gpu_ + kSamplerOff, 1);
-    cmdbuf_.bindImageDescriptorSet(data_gpu_ + image_off, 7);
+    cmdbuf_.bindImageDescriptorSet(data_gpu_ + image_off, 8);
     cmdbuf_.barrier(DkBarrier_None,
                     DkInvalidateFlags_Image | DkInvalidateFlags_Descriptors);
 
@@ -1187,6 +1552,16 @@ bool DkVideoRenderer::render(AVFrame* frame, AVFrame* motion_frame,
     cmdbuf_.bindTextures(DkStage_Fragment, 0, {dkMakeTextureHandle(4, 0)});
     cmdbuf_.bindVtxBuffer(0, data_gpu_ + kQuickVtxOff, sizeof(kQuickQuad));
     cmdbuf_.draw(DkPrimitive_Quads, 4, 1, 0, 0);
+    if (cursor_visible_ && !quick_state_.open &&
+        !quick_state_.sessionActionsOpen) {
+        cmdbuf_.bindTextures(DkStage_Fragment, 0,
+                             {dkMakeTextureHandle(7, 0)});
+        cmdbuf_.bindVtxBuffer(0, data_gpu_ + kCursorVtxOff,
+                             4 * sizeof(Vertex));
+        cmdbuf_.draw(DkPrimitive_Quads, 4, 1, 0, 0);
+    }
+    // Keep the always-visible lilac X above the cursor so the session launcher
+    // can never be visually covered by a pointer parked in the top-right corner.
     cmdbuf_.bindTextures(DkStage_Fragment, 0, {dkMakeTextureHandle(3, 0)});
     cmdbuf_.bindVtxBuffer(0, data_gpu_ + kGuideVtxOff, sizeof(kGuideQuad));
     cmdbuf_.draw(DkPrimitive_Quads, 4, 1, 0, 0);

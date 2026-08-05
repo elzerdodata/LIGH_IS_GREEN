@@ -50,6 +50,7 @@ public:
     // Complete live state for the in-stream quick menu and picture controls.
     // Changes are reflected on the next rendered frame.
     void set_quick_menu_state(const QuickMenuState& state);
+    void set_ping_ms(int pingMs);
 
     // Compatibility helpers used by callers that only change one value.
     void set_sharpness(int level) {
@@ -70,10 +71,10 @@ public:
 
     // Live network stats for the HUD, fed once per second from the streaming
     // worker thread (stored atomically; read on the render thread).
-    void set_net_stats(float mbps, float loss_pct, int ping_ms) {
+    void set_net_stats(float mbps, float loss_pct, int buffer_ms) {
         net_mbps_.store(mbps, std::memory_order_relaxed);
         net_loss_.store(loss_pct, std::memory_order_relaxed);
-        net_ping_ms_.store(ping_ms, std::memory_order_relaxed);
+        net_buffer_ms_.store(buffer_ms, std::memory_order_relaxed);
         net_valid_.store(true, std::memory_order_relaxed);
     }
 
@@ -134,8 +135,13 @@ private:
     void rasterize_hud();              // compose panel bg + text into hud_cpu_
     void blit_text(const char* s, int x, int y);  // white text onto hud_pixels_
     void rasterize_guide();            // compose Guide/Home touch button
+    void rasterize_cursor();           // compose local virtual mouse pointer
+    void update_cursor_quad();         // move cursor quad without re-rasterizing
     void rasterize_quick_menu();       // compose dots + expanded picture panel
     void blit_quick_text(const char* s, int x, int y);
+    void blit_quick_text_font(TTF_Font* font, const char* s, int x, int y);
+    void blit_session_text(const char* s, int x, int y);
+    void blit_session_small_text(const char* s, int x, int y);
     // The render queue is asynchronous. Keep every NVDEC surface referenced
     // until the swapchain gives its framebuffer slot back to us, which proves
     // the GPU has finished sampling that slot's video textures.
@@ -188,6 +194,7 @@ private:
     bool linear_ = false;                // pitch-linear surface?
     bool transform_dirty_ = true;
     QuickMenuState quick_state_;
+    int ping_ms_ = -1;
     int color_space_ = -1;
     bool color_full_ = false;
     bool warned_not_hw_ = false;
@@ -199,6 +206,10 @@ private:
     static constexpr uint32_t kHudTexW = 512;
     static constexpr uint32_t kHudTexH = 160;
     TTF_Font* hud_font_ = nullptr;
+    // Dedicated smaller fonts for the 720p session overlay. Reusing the 28 px
+    // HUD font made labels, values and the status badge collide on handheld.
+    TTF_Font* session_font_ = nullptr;       // 22 px actions and values
+    TTF_Font* session_small_font_ = nullptr; // 18 px labels and help
     dk::UniqueMemBlock hud_memblock_;
     dk::Image hud_image_;
     dk::ImageDescriptor hud_desc_;
@@ -215,9 +226,7 @@ private:
     float generated_fps_ = 0.0f;
     std::atomic<float> net_mbps_{0.0f};   // set by Engine worker, read by update_hud
     std::atomic<float> net_loss_{0.0f};
-    // Live STUN consent-check RTT on the selected WebRTC media path. -1 until
-    // the peer answers the first check (and whenever the sample becomes stale).
-    std::atomic<int> net_ping_ms_{-1};
+    std::atomic<int> net_buffer_ms_{0};
     std::atomic<bool> net_valid_{false};
 
     // Always-on top-right Xbox Guide/Home touch overlay. It has its own RGBA
@@ -234,11 +243,26 @@ private:
     bool guide_pressed_ = false;
     bool guide_rasterized_pressed_ = false;
 
+    // Local virtual mouse pointer. It is rendered by ZERODROID itself because
+    // Boosteroid's native stream usually does not include a visible remote
+    // cursor. The UI loop controls visibility and hides it after inactivity.
+    static constexpr uint32_t kCursorTexW = 64;
+    static constexpr uint32_t kCursorTexH = 64;
+    dk::UniqueMemBlock cursor_memblock_;
+    dk::Image cursor_image_;
+    dk::ImageDescriptor cursor_desc_;
+    void* cursor_cpu_ = nullptr;
+    std::vector<uint32_t> cursor_pixels_;
+    bool cursor_visible_ = false;
+    bool cursor_quad_dirty_ = true;
+    float cursor_x_ = 0.5f;
+    float cursor_y_ = 0.5f;
+
     // Always-visible two-dot handle and its optional expanded quick panel.
     // One transparent RGBA texture covers both shapes and costs one overlay
     // draw call regardless of whether the panel is open.
     static constexpr uint32_t kQuickTexW = 672;
-    static constexpr uint32_t kQuickTexH = 812;
+    static constexpr uint32_t kQuickTexH = 928;
     dk::UniqueMemBlock quick_memblock_;
     dk::Image quick_image_;
     dk::ImageDescriptor quick_desc_;
