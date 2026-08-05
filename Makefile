@@ -12,10 +12,10 @@ include $(DEVKITPRO)/libnx/switch_rules
 
 APP_TITLE   := Light is Green
 APP_AUTHOR  := rmrf404 (original) / elzerdodata
-APP_VERSION := 0.8.1
+APP_VERSION := 0.8.2
 APP_ICON    := icon.jpg
 
-TARGET   := Light_is_Green-v0.8.1
+TARGET   := Light_is_Green-v0.8.2
 BUILD    := build-switch
 SOURCES  := src/core src/switch
 INCLUDES := src vendor deps/shim/include
