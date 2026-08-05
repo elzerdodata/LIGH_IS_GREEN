@@ -17,7 +17,7 @@ APP_ICON    := icon.jpg
 TARGET   := ZERODROID_v0.8.5
 BUILD    := build-switch
 SOURCES  := src/core src/switch
-INCLUDES := src vendor deps/shim/include
+INCLUDES := src vendor deps/switch/include switch/deps/switch/include deps/shim/include
 ROMFS    := romfs
 
 DEFINES := -DZERODROID_VERSION=\"$(APP_VERSION)\" -D__SWITCH__
