@@ -1,0 +1,13 @@
+prefix=/work/deps/switch
+exec_prefix=/work/deps/switch
+libdir=/work/deps/switch/lib
+includedir=/work/deps/switch/include
+
+Name: usrsctp
+Description: SCTP implementation
+URL: https://github.com/sctplab/usrsctp
+Version: 0.9.5.0
+Requires: 
+Libs: -L${libdir} -lusrsctp
+Libs.private: -lpthread
+Cflags: -I${includedir} 
