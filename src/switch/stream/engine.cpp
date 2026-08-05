@@ -110,6 +110,12 @@ unsigned long candidate_priority(const std::string& candidate) {
     return end && *end == '\0' ? priority : 0;
 }
 
+bool candidate_is_syntactically_valid(const std::string& candidate) {
+    if (candidate.rfind("candidate:", 0) != 0 && candidate.rfind("a=candidate:", 0) != 0)
+        return false;
+    return candidate.find(" typ ") != std::string::npos;
+}
+
 }  // namespace
 
 Engine::Engine(XboxAuth& auth, SDL_Renderer* renderer)
@@ -1144,33 +1150,19 @@ bool Engine::run_peer(GssvSession& session) {
     // SDP — and libpeer builds candidate pairs exactly once, inside
     // set_remote_description. So collect the server's candidates FIRST.
     std::vector<std::string> remote;
-    bool remote_has_real_candidate = false;
     {
-        // xHome's useful LAN/Teredo candidate can arrive well after its
-        // priority-100 fallback, so Remote Play gets a long gather window.
-        // xCloud is different: its normal public ingress is itself commonly a
-        // priority-100 13.104.x candidate. Accept that response immediately,
-        // just like the pre-regression client, instead of imposing a 15-second
-        // wait and then rejecting every valid cloud allocation.
         Uint64 gather_deadline =
             SDL_GetTicks64() + (home ? 25000 : 6000);
         int quiet_polls = 0;
-        // For xHome, priority distinguishes a full LAN/public route from its
-        // fallback. Do not apply this rule to xCloud: its working edge route
-        // may legitimately have priority 100.
-        auto has_real_candidate = [&remote]() {
-            for (const std::string& candidate : remote)
-                if (candidate_priority(candidate) > 1000) return true;
-            return false;
-        };
         while (!quit_ && SDL_GetTicks64() < gather_deadline) {
             size_t before = remote.size();
             bool response_done = false;
             try {
                 for (std::string& candidate :
                      session.receive_ice_candidates(&response_done)) {
-                    if (std::find(remote.begin(), remote.end(), candidate) ==
-                        remote.end())
+                    if (candidate_is_syntactically_valid(candidate) &&
+                        std::find(remote.begin(), remote.end(), candidate) ==
+                            remote.end())
                         remote.push_back(std::move(candidate));
                 }
             } catch (const std::exception& error) {
@@ -1178,36 +1170,23 @@ bool Engine::run_peer(GssvSession& session) {
             }
             quiet_polls = remote.size() == before ? quiet_polls + 1 : 0;
             if (!home) {
-                // Cloud candidate/end marker is a complete usable response.
-                // A failed ICE/DTLS attempt still falls through to the existing
-                // fresh-session retry, without delaying every good connection.
                 if (!remote.empty() || response_done) break;
-            } else if (has_real_candidate() &&
+            } else if (!remote.empty() &&
                        (response_done || quiet_polls >= 4)) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
-        remote_has_real_candidate = has_real_candidate();
     }
-    // libpeer checks pairs in insertion order. Put the public/Teredo route
-    // before xHome's priority-100 placeholder so an Internet connection does
-    // not burn several STUN timeouts on a known dead endpoint first.
-    std::stable_sort(remote.begin(), remote.end(),
-                     [](const std::string& a, const std::string& b) {
-                         return candidate_priority(a) > candidate_priority(b);
-                     });
+    // Preserve signaling/Teredo insertion order. The patched libpeer agent
+    // performs endpoint deduplication and routability ranking.
     log("collected " + std::to_string(remote.size()) + " remote candidates");
     for (const std::string& candidate : remote) log("  remote cand: " + candidate);
     for (const std::string& candidate : local_candidates_from_sdp(munged))
         log("  local  cand: " + candidate);
-    if (remote.empty() || (home && !remote_has_real_candidate)) {
-        log(remote.empty()
-                ? (home
-                       ? "xhome returned no remote ICE candidates; fresh route needed"
-                       : "xCloud returned no remote ICE candidates")
-                : "xhome returned only the non-routable fallback candidate; "
-                  "fresh route needed");
+    if (remote.empty()) {
+        log(home ? "xhome returned no valid remote ICE candidates; fresh route needed"
+                 : "xCloud returned no valid remote ICE candidates");
         set_status(home ? "No Xbox route yet - retrying..."
                         : "No server route yet - retrying...");
         return false;

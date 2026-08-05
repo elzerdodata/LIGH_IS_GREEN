@@ -6,6 +6,7 @@
 #include <switch.h>
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -214,6 +215,37 @@ void Gfx::draw_texture_cover(SDL_Texture* texture,
         source.y = (height - source.h) / 2;
     }
     SDL_RenderCopy(renderer_, texture, &source, &destination);
+}
+
+void Gfx::draw_texture_contain(SDL_Texture* texture,
+                               const SDL_Rect& destination) {
+    if (!texture || destination.w <= 0 || destination.h <= 0) return;
+
+    int source_width = 0;
+    int source_height = 0;
+    if (SDL_QueryTexture(texture, nullptr, nullptr, &source_width,
+                         &source_height) != 0 ||
+        source_width <= 0 || source_height <= 0) {
+        return;
+    }
+
+    const float scale_x =
+        static_cast<float>(destination.w) / source_width;
+    const float scale_y =
+        static_cast<float>(destination.h) / source_height;
+    const float scale = std::min(scale_x, scale_y);
+
+    const int render_width = std::max(
+        1, static_cast<int>(std::lround(source_width * scale)));
+    const int render_height = std::max(
+        1, static_cast<int>(std::lround(source_height * scale)));
+    SDL_Rect centered = {
+        destination.x + (destination.w - render_width) / 2,
+        destination.y + (destination.h - render_height) / 2,
+        render_width,
+        render_height,
+    };
+    SDL_RenderCopy(renderer_, texture, nullptr, &centered);
 }
 
 void Gfx::draw_brand_icon(const SDL_Rect& destination) {

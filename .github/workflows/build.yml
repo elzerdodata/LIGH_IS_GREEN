@@ -5,7 +5,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, build/light-is-green-v0.8.1, build/light-is-green-v0.8.2, fix/remote-play-wan-v0.8.3]
   pull_request:
 
 jobs:
@@ -21,9 +21,9 @@ jobs:
         run: docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 
       - name: Verify artifact
-        run: ls -l Light_is_Green.nro
+        run: ls -l Light_is_Green-v0.8.3.nro
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Light_is_Green-v0.8.0-nro
-          path: Light_is_Green.nro
+          name: Light_is_Green-v0.8.3-nro
+          path: Light_is_Green-v0.8.3.nro

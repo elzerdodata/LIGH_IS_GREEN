@@ -1,6 +1,6 @@
 # Light is Green
 
-> **Stable v0.8.0 / Estable v0.8.0**
+> **Stable v0.8.3 / Estable v0.8.3**
 
 English | [Español](#español)
 
@@ -13,7 +13,7 @@ Nintendo Switch** homebrew. Authentication, WebRTC, hardware H.264 decoding,
 GPU rendering, audio, and controller input all run on the console; no companion
 PC is required.
 
-## v0.8.0 stable release
+## v0.8.3 stable release
 
 - Builds the playable library from entitled **Game Pass**, **Stream Your Own
   Game (BYOG)** and **free-to-play** titles. It does not expose the full Xbox
