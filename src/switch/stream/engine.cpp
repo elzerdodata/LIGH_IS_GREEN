@@ -1461,7 +1461,7 @@ bool Engine::run_peer(GssvSession& session) {
                         }
                         peer_connection_send_remb(peer_, remb_kbps * 1000u);
 #ifdef __SWITCH__
-                        ping_ms = peer_connection_get_rtt_ms(peer_);
+                        ping_ms = 0;
 #endif
                     }
                 }
