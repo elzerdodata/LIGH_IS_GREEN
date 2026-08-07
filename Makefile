@@ -1,50 +1,44 @@
 #---------------------------------------------------------------------------------
-# Nintendo Switch build (devkitA64). Run inside devkitpro/devkita64:
-#   docker run --rm -v $PWD:/src -w /src devkitpro/devkita64 make
+# ZERODROID Nintendo Switch build Makefile (devkitA64 / libnx / deko3d)
 #---------------------------------------------------------------------------------
 .SUFFIXES:
 
 ifeq ($(strip $(DEVKITPRO)),)
-$(error "DEVKITPRO not set - build inside the devkitpro/devkita64 image")
+$(error "DEVKITPRO not set - build inside the devkitpro/devkita64 environment")
 endif
 
 include $(DEVKITPRO)/libnx/switch_rules
 
-APP_TITLE   := Light is Green
-APP_AUTHOR  := rmrf404 (original) / elzerdodata
-APP_VERSION := 0.8.4
+APP_TITLE   := ZERODROID
+APP_AUTHOR  := Zero Data
+APP_VERSION := 1.0.1
 APP_ICON    := icon.jpg
 
-TARGET   := Light_is_Green-v0.8.4
+TARGET   := ZERODROID_v1.0.1
 BUILD    := build-switch
 SOURCES  := src/core src/switch
 INCLUDES := src vendor deps/shim/include
 ROMFS    := romfs
 
-DEFINES := -DGNX_VERSION=\"$(APP_VERSION)\"
+DEFINES := -DZERODROID_VERSION=\"$(APP_VERSION)\" -D__SWITCH__
 
-# Native streaming switches on automatically once the WebRTC deps are built
-# (bash deps/build-switch.sh). Until then the app falls back to libnxbox.
-GNXROOT := $(dir $(abspath $(firstword $(MAKEFILE_LIST))))
-ifneq ($(strip $(wildcard $(GNXROOT)deps/switch/lib/libpeer.a)),)
-DEFINES     += -DGNX_NATIVE_STREAM
-SOURCES     += src/switch/stream
-EXTRA_LIBDIRS := $(GNXROOT)deps/switch
-STREAM_LIBS := -lpeer -lsrtp2 -lusrsctp
-STREAM_PKGS := libavcodec libavutil opus
-# Force a relink whenever the WebRTC archives are rebuilt (deps/build-switch.sh).
-# Without this, an incremental `make` keeps the stale .elf because no .cpp
-# changed, silently shipping the OLD libpeer.a.
-export GNX_STREAM_DEPS := $(wildcard $(GNXROOT)deps/switch/lib/lib*.a)
+ROOTDIR := $(dir $(abspath $(firstword $(MAKEFILE_LIST))))
+ifneq ($(strip $(wildcard $(ROOTDIR)deps/switch/lib/libpeer.a)),)
+SOURCES       += src/switch/stream
+EXTRA_LIBDIRS := $(ROOTDIR)deps/switch
+STREAM_LIBS   := -lpeer -lsrtp2 -lusrsctp
+STREAM_PKGS   := libavcodec libavutil opus
+DEFINES       += -DZERODROID_NATIVE_STREAMING=1
+export GNX_STREAM_DEPS := $(wildcard $(ROOTDIR)deps/switch/lib/lib*.a)
 endif
 
 ARCH := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
-CFLAGS   := -g -Wall -O2 -ffunction-sections $(ARCH) $(DEFINES) $(INCLUDE) \
+CFLAGS   := -g0 -Wall -O2 -ffunction-sections $(ARCH) $(DEFINES) $(INCLUDE) \
             -D__SWITCH__
 CXXFLAGS := $(CFLAGS) -fno-rtti -std=gnu++17
-ASFLAGS  := -g $(ARCH)
-LDFLAGS   = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) \
+ASFLAGS  := -g0 $(ARCH)
+LDFLAGS   = -specs=$(DEVKITPRO)/libnx/switch.specs -g0 $(ARCH) \
             -Wl,-Map,$(notdir $*.map)
 
 PKGCONF := /opt/devkitpro/portlibs/switch/bin/aarch64-none-elf-pkg-config
@@ -77,11 +71,8 @@ ifneq ($(strip $(ROMFS)),)
 export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 endif
 
-# switch_rules only *defaults* APP_ICON; the app Makefile must put the icon
-# and NACP on the elf2nro command line itself (as the official template does).
 export NROFLAGS += --icon=$(CURDIR)/$(APP_ICON) --nacp=$(CURDIR)/$(TARGET).nacp
 
-# deko3d shaders: compiled from GLSL to .dksh with uam and shipped in romfs.
 UAM        := $(DEVKITPRO)/tools/bin/uam
 SHADER_OUT := $(CURDIR)/romfs/shaders/video_vsh.dksh \
               $(CURDIR)/romfs/shaders/video_fsh.dksh \
@@ -105,26 +96,24 @@ $(CURDIR)/romfs/shaders/%_fsh.dksh: $(CURDIR)/shaders/%_fsh.glsl
 	@$(UAM) -s frag -o $@ $<
 
 $(BUILD):
-	@mkdir -p $@
+	@[ -d $@ ] || mkdir -p $@
+	@$(MAKE) --no-print-directory -C $@ -f $(CURDIR)/Makefile
 
 clean:
-	@rm -rf $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf $(SHADER_OUT)
+	@echo clean ...
+	@rm -fr $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp $(TARGET).map romfs/shaders
 
-#---------------------------------------------------------------------------------
 else
 
-all: $(OUTPUT).nro
+DEPENDS := $(OFILES:.o=.d)
 
-# Relink when our objects OR the prebuilt WebRTC archives change; regenerate
-# the NACP (and thus repackage the .nro) when the Makefile/version changes.
 $(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp
-$(OUTPUT).elf: $(OFILES) $(GNX_STREAM_DEPS)
-$(OFILES): $(MAKEFILE_LIST)
+$(OUTPUT).nacp:
+	@nacptool --create "$(APP_TITLE)" "$(APP_AUTHOR)" "$(APP_VERSION)" $@
 
-%.o: %.cpp
-	@echo $(notdir $<)
-	$(CXX) -MMD -MP -MF $(DEPSDIR)/$*.d $(CXXFLAGS) -c $< -o $@ $(ERROR_FILTER)
+$(OUTPUT).elf: $(OFILES)
 
--include $(DEPSDIR)/*.d
+-include $(DEPENDS)
 
 endif
+#---------------------------------------------------------------------------------

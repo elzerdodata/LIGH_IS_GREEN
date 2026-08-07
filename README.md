@@ -1,374 +1,200 @@
-# Light is Green
+# ZERODROID
 
-> **Stable v0.8.0 / Estable v0.8.0**
+**Zero Data - Nintendo Switch cloud gaming client**
 
-English | [Español](#español)
+ZERODROID is an open-source, unofficial Boosteroid client for Nintendo Switch
+homebrew. Version 1.0.1 provides QR login, a controller-first game library,
+native H.264 video, Opus audio and complete controller input.
 
-Light is Green is a community fork of
-[green-nx](https://github.com/rmrf404/green-nx), originally created by
-**rmrf404** and distributed under GPL-3.0.
+## v1.0.1 - Stable initial release
 
-It is a standalone, open-source **Xbox Cloud Gaming (xCloud) client for
-Nintendo Switch** homebrew. Authentication, WebRTC, hardware H.264 decoding,
-GPU rendering, audio, and controller input all run on the console; no companion
-PC is required.
+This is the first complete stable release of ZERODROID. It keeps the validated
+v0.8.5 streaming path and refreshes the entire native Switch interface with a
+controller-first visual system:
 
-## v0.8.0 stable release
+- Deep navy backgrounds and elevated, rounded panels that remain readable on
+  the Switch LCD and TV output.
+- Lilac is reserved for selection and primary actions; teal reports healthy
+  connection state without pretending to expose unavailable telemetry.
+- A persistent visual navigation rail, concise controller hints and explicit
+  loading, empty and error states make the library, QR login and Settings feel
+  like one coherent console application.
+- Real Boosteroid artwork is reused for the selected-title feature area. The
+  UI does not invent player profiles, achievements, screenshots, prices,
+  cloud-save data, bitrate controls or 4K stream modes.
+- The in-stream Control Center received the same navy/lilac/teal treatment
+  without changing its eight actions, native video descriptors or cursor path.
+- v1.0.1 corrects card typography and artwork framing, removes the redundant
+  Install section and makes the sidebar, top tabs, search and Settings usable
+  by touch as well as by controller.
 
-- Builds the playable library from entitled **Game Pass**, **Stream Your Own
-  Game (BYOG)** and **free-to-play** titles. It does not expose the full Xbox
-  store, and duplicate entries are merged.
-- Adds an **Owned & Free** tab and launches every title with the Xbox offering
-  that granted its entitlement. Accounts without Game Pass can still load
-  eligible free-to-play and owned cloud games.
-- Recovers faster from silent xCloud media routes: a cloud DTLS route is retired
-  after about 6 seconds in practice and the next allocation starts as soon as
-  teardown finishes. Remote Play retains its more conservative xHome timing.
-- Caps cover textures and pending artwork jobs to protect Switch memory, and
-  recovers safely from video allocation pressure by resynchronizing the stream.
-- Keeps region bypass independent from server selection, supports Xbox's live
-  datacenter list and optional strict server forcing, and exposes bitrate and
-  quality controls.
-- Replaces the old audio `BUF` value with true live **PING**, measured as STUN
-  round-trip time on the active WebRTC media route.
+Use it only on a Switch with legal homebrew support and a legitimate
+Boosteroid account. The release QA checklist remains available in
+[V1.0_TEST_PLAN.md](V1.0_TEST_PLAN.md).
 
-## v0.7.1 smoothness preview
+> [!IMPORTANT]
+> ZERODROID is a beta and is not affiliated with or endorsed by Boosteroid or
+> Nintendo. It requires a legitimate Boosteroid account and does not provide,
+> download or bypass access to games, subscriptions, DRM or Nintendo software.
 
-- Detects 30/60 fps cadence from the H.264 RTP 90 kHz media timestamps instead
-  of packet/decode arrival time, so Wi-Fi bursts cannot make Smooth or Motion
-  switch rhythm incorrectly.
-- Smooth keeps its one-frame jitter reserve but now sheds stale excess reserve
-  after a burst, preventing latency from accumulating for the rest of a stream.
-- Uses deko3d's asynchronous triple-buffer flow and pins every NVDEC surface
-  until its framebuffer slot is returned. This removes the full GPU drain that
-  previously ran after every presented frame.
-- Adds `video|` diagnostics to `stream-log.txt` for packet, assembled-frame,
-  drop, NACK, resync, access-unit-size and decoder-queue analysis.
-- v0.7.1 remains a preview; v0.6.0 is still the stable release. For the most
-  fluid result, use **Smooth**. Motion keeps the v0.7 experimental warning.
+## Retained from v0.8.5
 
-## v0.7.0 preview
+- Adds **STEAM MENU** to the session Control Center. The action sends `Shift+Tab`, Steam's default overlay shortcut, closes the ZERODROID panel and reveals the local pointer when mouse mode is enabled so Steam's Exit Game controls can be reached immediately.
+- Adds a visible local lilac mouse pointer over the native stream. It follows the same normalized coordinates sent to Boosteroid and remains visible even when the remote service does not draw its own cursor.
+- The pointer appears when mouse mode is activated, the touchscreen is touched, a mouse button is used or `Minus + right stick` moves it.
+- The pointer automatically disappears after three seconds of inactivity and reappears at the same saved position on the next mouse action. It remains locally visible at the right and bottom edges instead of being clipped completely off-screen.
+- Retains relative trackpad behavior: touching a different part of the screen does not teleport the cursor; dragging applies only the finger movement delta, and a quick tap performs one left click at the current pointer position.
+- Retains the readable 22 px/18 px Control Center typography and reorganizes the action column to fit eight buttons without overlap.
 
-- Fixes the thin green/magenta corruption stripe at the bottom/right video
-  edge by sampling the visible luma and chroma texel centres independently,
-  never NVDEC's uninitialized alignment padding.
-- Adds live **Pacing: Steady / Smooth / Motion** controls to the in-stream
-  two-dot touch panel. Changing mode releases old queued/interpolation surfaces
-  without restarting WebRTC.
-- **Motion is 100% experimental and may cause rapid green flashing.** It now
-  rejects unproven or incompatible secondary decoder surfaces and uses a normal
-  Smooth refresh instead, but users should immediately switch back if flashing
-  is observed. Motion is never restored automatically after restarting the app.
-- Shows the selected server region throughout the xCloud sign-in and connection
-  screen, updating to Xbox's actual region as soon as login completes.
-- Adds an experimental **1080p Console quality** option for Remote Play. If
-  negotiation or first video fails, the app starts a fresh session
-  automatically with the stable 720p profile.
-- Beta 2 separates console wake/registration retries from WebRTC media retries,
-  adds progressive teardown backoff, refreshes the xHome route periodically,
-  gives remote ICE/DTLS negotiation more time, and fixes compressed Teredo
-  candidate conversion for Remote Play outside the LAN.
-- Keeps Remote Play available away from home through Xbox's xHome service.
-  Success depends on Remote Features, NAT, IPv6/Teredo and UDP connectivity.
-- Expands the performance overlay with source, output and generated FPS.
+## Included from v0.8.4.4
 
-The v0.7 releases remain available as historical previews. **v0.8.0 is the
-recommended stable release.** Do not publish `stream-log.txt`: connection
-diagnostics can include IP candidates.
+- One unified source tree containing the complete v0.8.3 catalog work, the v0.8.4 display/library redesign and every later recovery/input hotfix.
+- Touching the lilac Xbox/X icon in the top-right corner opens a large session control center instead of immediately sending Guide/Home.
+- The control center displays the current game, gateway, stream/output resolutions, ping, session time, UDP recovery counters and mouse/keyboard transmission counters.
+- Large touch actions provide Xbox Guide/Home, ALT+TAB, mouse enable/disable, graphics settings, reconnect and return to game.
+- Reconnect requires confirmation and attempts to preserve the remote Boosteroid machine while rebuilding only ZERODROID's local transport. This remains experimental and must be verified on real hardware.
+- B closes the control center. Plus+Minus is an optional secondary shortcut; touching the lilac X is the primary control.
+- While an overlay is open, ZERODROID sends neutral controller input so the game cannot move or react behind the menu.
+- The keyboard tile is intentionally informational in this build. Antigravity must not fake remote text injection or block the deko3d streaming window with an untested software-keyboard implementation.
 
-## What's new in v0.6.0
+## Included from v0.8.4.3
 
-- Separates **Region bypass** from the new **Server region** selector.
-- Adds Auto, Chile Central, Brazil South, and every additional xCloud
-  datacenter returned by Xbox during login.
-- Refreshes and caches the live datacenter list, with a safe fallback to the
-  Xbox default when a selected region is unavailable.
-- Changes the normal 1080p high-bitrate preset to the Windows allocation pool
-  while preserving the former Tizen/TV fingerprint as an experimental option.
-- Records the selected region and host in `stream-log.txt` for queue diagnosis.
+- Fixes desktop mouse/keyboard packets on native `/native` streams by using the browser-style `id_cmd` and `from_udp` envelope expected by Boosteroid.
+- Adds **Minus + X** for ALT+TAB, matching the browser client's keyboard event sequence.
+- Adds left click/drag with **Minus + ZR** or **Minus + ZL**, while **Minus + R3** remains right click.
+- Reconnect Same Session closes only the local Switch transport before attempting a new attachment to the active app.
 
-## Features
+## Included from v0.8.4.2
 
-- Microsoft **device-code sign-in**; no password is typed on the console.
-- Game library with cover art, favorites, history, search, and console remote
-  play.
-- Live xCloud queue estimate while a server is allocated.
-- Native WebRTC streaming with hardware H.264 decoding and zero-copy deko3d
-  rendering.
-- Opus audio, 60 fps video, and 720p / 1080p / 1080p HQ Windows modes, plus an
-  experimental Tizen HQ profile.
-- Independent region bypass and xCloud server selection, configurable game
-  language, button mapping, vibration, video pacing, volume, and image controls.
-- Performance HUD with video bitrate, packet loss, and live WebRTC-route ping.
+- Fixes gradual-stick updates that could leave the remote game at a partial movement value and make a running character fall back to walking.
+- Applies a radial dead zone, expands the useful Joy-Con outer range to full scale and refreshes held axes periodically.
+- Adds a virtual mouse: touch/drag the Switch screen, or hold **Minus** and move the right stick.
+- While holding **Minus**, press **R3** for right click. A plain Minus tap still sends the normal View/Back button.
+- Adds Precise, Normal and Fast mouse speeds to the in-stream two-dot settings panel.
+- Shows the mouse controls on the main library screen and inside the quick settings panel.
 
-## Requirements
+## Included from v0.8.4.1
 
-- A Nintendo Switch running
-  [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere) custom firmware.
-- A Microsoft/Xbox account. Game Pass is required for the subscription catalog;
-  eligible owned cloud games and free-to-play titles can work without it.
-- A 5 GHz Wi-Fi connection or docked Ethernet is recommended.
+- Fixes the native 1080p freeze reported as `native sequence gap: waiting for a clean IDR`.
+- Uses a larger reorder window suitable for the heavier 1080p UDP stream.
+- Tries soft decoder concealment before discarding the H.264 reference chain.
+- Reasserts stream visibility during recovery and retries without allowing a permanent frozen frame.
+- Collapses repeated missing group IDs into one recovery event and logs the recovery duration.
+
+## Included from v0.8.4
+
+- Selectable Auto, 720p, 1080p and experimental 1440p stream profiles.
+- Auto requests 720p in handheld mode and 1080p while docked.
+- Natural, Sharp, Vivid, Cinema, Soft and Custom picture presets in the in-stream two-dot menu.
+- Persistent brightness, contrast, saturation, gamma and sharpness controls.
+- Four-column library, compact fonts, two-line titles and uncropped horizontal artwork.
+
+## Included from v0.8.3
+
+- Removed the 50-game ceiling: **My Games** and the Boosteroid catalog now
+  traverse every available API page, with duplicate and loop protection.
+- The current interface uses My Games, Catalog, Favorites and Recently Played;
+  Install and Play remains a catalog badge rather than a redundant section.
+- Catalog cards identify games already in My Games, free titles, Install and
+  Play entries and titles that require a legitimate store license.
+- Pressing **A** on an uninstalled catalog title uses Boosteroid's official
+  add-to-library action. Game purchases remain in each authorized external
+  store; ZERODROID does not sell, bundle or unlock licenses.
+- Hardened native UDP and WebRTC H.264 recovery: frames are kept in sequence,
+  incomplete access units are dropped, corrupt decoder output is never shown,
+  and playback resumes on a clean IDR while the last good frame stays visible.
+
+## Included from v0.8.2
+
+- Search the library with the native Nintendo Switch keyboard.
+- All, Favorites and Recently Played library tabs.
+- Persistent favorites and a 30-game recent history stored locally.
+- Spanish and English interface selector in Settings.
+
+## Included from v0.8.1
+
+- Completely new ZERODROID identity and lilac/graphite visual system.
+- Original ZD application icon.
+- Live gateway ping meter during streaming.
+- Touch Xbox Guide/Home button. Both stick clicks also send Guide.
+- Touch two-dot menu during streaming.
+- In-stream performance HUD, Nintendo/Xbox face-button layout and image
+  controls.
+- Library Settings menu for distant regions, preferred server and controller
+  layout.
 
 ## Installation
 
-1. Copy `Light_is_Green.nro` to `sdmc:/switch/` on the SD card.
-2. Launch it in **title mode** by holding **R** while opening an installed game.
-   Applet mode does not provide enough memory for hardware video decoding.
-3. Enter the device code shown by the app at `microsoft.com/link`.
-   Tokens and cached data are stored in `sdmc:/switch/green-nx/`.
-
-### Controls
-
-| Context | Controls |
-| --- | --- |
-| Library | Left stick / d-pad: move · **A**: open/play · **Y**: search · **X**: favorite · **ZR**: refresh · **ZL**: settings · **+**: exit |
-| Settings | Left/right: change · **A**: open/confirm · **B**: back |
-| In stream | Switch pad: Xbox controls · tap **••**: image/stats panel · tap the small **Xbox symbol** or press **L3 + R3**: Guide · hold **-** + **+**: quit |
-
-## Build
-
-Build inside the `devkitpro/devkita64` Docker image:
-
-```sh
-# Build WebRTC dependencies once
-bash deps/build-switch.sh
-
-# Build the application
-docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
-```
-
-The output is `Light_is_Green.nro`. The desktop core-development harness can
-be built with `make -f Makefile.pc`.
-
-### Source layout
+Download `ZERODROID_v1.0.1.nro` from the
+[v1.0.1 GitHub release](../../releases/tag/v1.0.1) and copy it to:
 
 ```text
-src/core/            authentication, catalog, HTTP, xCloud protocol
-src/switch/          SDL2 interface, covers, and input
-src/switch/stream/   WebRTC, RTP, NVDEC, deko3d, and Opus streaming engine
-shaders/             deko3d video shaders
-deps/                Switch dependency build scripts and patches
-romfs/ui/            interface artwork
+sdmc:/switch/ZERODROID/ZERODROID.nro
 ```
 
-## Third-party software
+Launch Homebrew Menu through title takeover by holding **R** while opening an
+installed game. Album/applet mode does not provide enough memory for streaming.
 
-| Project | License | Purpose |
-| --- | --- | --- |
-| [libpeer](https://github.com/sepfy/libpeer) (patched) | MIT | WebRTC, ICE, DTLS-SRTP, SCTP |
-| [libsrtp](https://github.com/cisco/libsrtp) | BSD-3 | SRTP encryption |
-| [usrsctp](https://github.com/sctplab/usrsctp) | BSD-3 | SCTP data channels |
-| [mbedTLS](https://github.com/Mbed-TLS/mbedtls) | Apache-2.0 | TLS and DTLS cryptography |
-| [FFmpeg](https://ffmpeg.org) with [NVTEGRA](https://github.com/averne/FFmpeg) | LGPL-2.1+ | Hardware H.264 decoding |
-| [deko3d](https://github.com/devkitPro/deko3d) | zlib | GPU rendering |
-| [SDL2](https://libsdl.org), SDL2_ttf, SDL2_image | zlib | Interface, input, and images |
-| [Opus](https://opus-codec.org) | BSD-3 | Audio decoding |
-| [libcurl](https://curl.se) | curl | HTTPS |
-| [nlohmann/json](https://github.com/nlohmann/json) | MIT | JSON |
-| [devkitPro / libnx](https://devkitpro.org) | various | Switch toolchain and OS APIs |
+The console must already be capable of running legal homebrew. ZERODROID does
+not include or install custom firmware.
 
-## Disclaimer
+## Controls
 
-Light is Green is an experimental, non-commercial hobby project provided as-is
-for personal use. It is not affiliated with, endorsed by, or supported by
-Microsoft or Nintendo. Xbox, Xbox Cloud Gaming, and Game Pass are Microsoft
-trademarks. Nintendo Switch is a Nintendo trademark. You must provide your own
-valid subscription and hardware.
+- **Minus in the library:** ZERODROID Settings.
+- **ZL / ZR:** switch in this exact order: My Games, Catalog, Favorites and Recent.
+- **L / R:** move one library page backward or forward.
+- **Y in the library:** search using the system keyboard.
+- **A in Catalog:** add a title to My Games; press again to play.
+- **Touch navigation:** tap the sidebar or the matching top tab to select a
+  section; tap Search or Settings to open those native views.
+- **X in any library section:** add or remove the selected game from Favorites.
+- **R3 in the library:** refresh the Boosteroid library.
+- **Drag the touchscreen during streaming:** use the screen as a relative trackpad; the cursor continues from its current position.
+- **Quick touchscreen tap:** left click at the cursor's current position without teleporting it.
+- **Virtual pointer:** appears on mouse/touch activity and hides after three seconds without losing its position.
+- **Hold Minus + right stick:** move the remote mouse without touching the screen.
+- **Hold Minus + ZR or ZL:** press/hold the remote left mouse button for click and drag.
+- **Hold Minus + R3:** press/release the remote right mouse button.
+- **Hold Minus + X:** send ALT+TAB to the remote Windows desktop.
+- **Tap Minus:** send the normal View/Back controller button.
+- **Two dots during streaming:** open the touch settings panel and choose mouse speed.
+- **Touch Xbox/X symbol:** open session actions: Guide/Home, Steam Menu, ALT+TAB, reconnect, graphics or close.
+- **STEAM MENU in the Control Center:** send Shift+Tab to open Steam Overlay, then close the ZERODROID panel.
+- **Press both sticks:** send Xbox Guide/Home without touch.
+- **L + R + Minus:** stop streaming and return to the library.
 
-## License and credits
+Application data is stored only under `sdmc:/switch/ZERODROID/`.
 
-- License: [GPL-3.0](LICENSE)
-- Original project and core implementation: **rmrf404** —
-  [green-nx](https://github.com/rmrf404/green-nx)
-- Light is Green fork and v0.2–v0.8.0 work: **elzerdodata**
+## Technical overview
 
----
+- C++17 application built with devkitA64 and libnx.
+- SDL2 library and login UI; deko3d video presentation while streaming.
+- FFmpeg/libavcodec H.264 decoding and Opus audio playback.
+- libpeer, WebRTC data channels, SRTP and SCTP for the streaming transport.
+- Device-code QR authentication; the resulting session remains on the SD card.
+- No analytics, advertising, referral links or telemetry.
 
-# Español
+## Build from source
 
-Light is Green es un fork comunitario de
-[green-nx](https://github.com/rmrf404/green-nx), creado originalmente por
-**rmrf404** y distribuido bajo la licencia GPL-3.0.
+The standard devkitPro Switch toolchain and Switch portlibs are required. The
+WebRTC dependency bundle can be built reproducibly with Docker:
 
-Es un cliente homebrew independiente y de código abierto de **Xbox Cloud
-Gaming (xCloud) para Nintendo Switch**. La autenticación, WebRTC, decodificación
-H.264 por hardware, renderizado en GPU, audio y controles funcionan en la
-consola; no requiere una PC auxiliar.
-
-## Versión estable v0.8.0
-
-- Construye la biblioteca jugable con títulos habilitados de **Game Pass**,
-  **Stream Your Own Game (BYOG)** y **free-to-play**. No muestra toda la tienda
-  Xbox y combina los duplicados.
-- Agrega la pestaña **Propios y gratis** y abre cada juego con la oferta Xbox que
-  concedió su acceso. Las cuentas sin Game Pass aún pueden cargar juegos gratis
-  y juegos propios compatibles con cloud.
-- Se recupera más rápido de rutas multimedia silenciosas: descarta una ruta
-  DTLS cloud después de unos 6 segundos en la práctica e inicia la siguiente
-  asignación apenas termina el cierre. Remote Play mantiene tiempos xHome más
-  conservadores.
-- Limita las texturas de carátulas y los trabajos de imágenes pendientes para
-  proteger la memoria de Switch, y se recupera de presión de memoria de video
-  resincronizando el stream.
-- Mantiene el bypass regional separado de la selección de servidor, admite la
-  lista real de datacenters de Xbox y el forzado opcional, e incluye controles
-  de calidad y bitrate.
-- Sustituye el antiguo valor `BUF` por **PING** real en vivo, medido como tiempo
-  de ida y vuelta STUN sobre la ruta WebRTC activa.
-
-## Avance de fluidez v0.7.1
-
-- Detecta la cadencia de 30/60 fps mediante los timestamps RTP de 90 kHz del
-  video H.264, no mediante el momento irregular en que llegan o se decodifican
-  los paquetes. Una ráfaga de Wi-Fi ya no cambia erróneamente el ritmo.
-- Smooth conserva una trama de reserva contra jitter, pero descarta reserva
-  vieja sobrante después de una ráfaga para que la latencia no quede acumulada.
-- Activa el triple buffer asíncrono de deko3d y mantiene cada superficie NVDEC
-  referenciada hasta que su framebuffer vuelve a estar disponible. Se elimina
-  el vaciado completo de la GPU que antes ocurría después de cada imagen.
-- Agrega líneas `video|` al diagnóstico con paquetes, tramas, descartes, NACK,
-  resincronizaciones, tamaño de unidad y cola del decodificador.
-- v0.7.1 continúa siendo preliminar; v0.6.0 sigue estable. Para priorizar
-  fluidez usa **Smooth**. Motion conserva toda la advertencia experimental.
-
-## Avance de v0.7.0
-
-- Corrige la franja fina verde/magenta del borde inferior/derecho del video:
-  luma y croma ahora se muestrean desde sus texeles visibles y nunca desde el
-  relleno de alineación sin inicializar de NVDEC.
-- Agrega **Pacing: Steady / Smooth / Motion** al panel táctil de los dos puntos
-  dentro del juego. El cambio se aplica en caliente, libera las superficies del
-  modo anterior y no reinicia WebRTC.
-- **Motion es 100% experimental y podría causar pantalla verde parpadeante.**
-  Ahora rechaza superficies secundarias no comprobadas o incompatibles y usa
-  un refresco Smooth normal, pero se debe volver inmediatamente a Smooth o
-  Steady si aparece parpadeo. Motion nunca se restaura automáticamente al
-  reiniciar la aplicación.
-- Muestra la región del servidor durante el inicio de sesión y la conexión a
-  xCloud, y cambia a la región real elegida por Xbox al terminar el login.
-- Agrega **Calidad de consola 1080p** experimental para Remote Play. Si falla
-  la negociación o no llega el primer video, la aplicación abre una sesión
-  nueva con el perfil estable de 720p.
-- Beta 2 separa los reintentos de encendido/registro de los reintentos WebRTC,
-  agrega espera progresiva entre sesiones, renueva periódicamente la ruta
-  xHome, concede más tiempo a la negociación ICE/DTLS remota y corrige la
-  conversión de candidatos Teredo comprimidos para jugar fuera de la red local.
-- Mantiene Remote Play fuera de casa mediante el servicio xHome de Xbox. Su
-  funcionamiento depende de Remote Features, NAT, IPv6/Teredo y conectividad
-  UDP.
-- Amplía el overlay de rendimiento con FPS de origen, salida y generados.
-
-Las versiones v0.7 siguen disponibles como avances históricos. **v0.8.0 es la
-versión estable recomendada.** No publiques `stream-log.txt`: el diagnóstico
-puede incluir candidatos de direcciones IP.
-
-## Novedades de v0.6.0
-
-- Separa **Región de bypass** del nuevo selector **Región del servidor**.
-- Agrega Auto, Chile Central, Brazil South y todos los datacenters adicionales
-  de xCloud que Xbox devuelva al iniciar sesión.
-- Actualiza y guarda la lista real de datacenters, con retorno seguro al
-  servidor predeterminado de Xbox cuando una región no esté disponible.
-- Cambia el modo normal de 1080p con alta tasa al pool Windows y conserva el
-  perfil anterior Tizen/TV como opción experimental.
-- Registra la región y el host seleccionados en `stream-log.txt` para facilitar
-  el diagnóstico de colas.
-
-## Funciones
-
-- Inicio de sesión de Microsoft mediante **código de dispositivo**; no se
-  escribe la contraseña en la consola.
-- Biblioteca con carátulas, favoritos, historial, búsqueda y juego remoto desde
-  una consola Xbox.
-- Estimación en vivo de la cola de xCloud mientras se asigna un servidor.
-- Streaming WebRTC nativo con decodificación H.264 por hardware y renderizado
-  deko3d sin copias adicionales.
-- Audio Opus, video a 60 fps y modos 720p / 1080p / 1080p HQ Windows, además de
-  un perfil HQ Tizen experimental.
-- Bypass geográfico y servidor de xCloud independientes, además de idioma,
-  distribución de botones, vibración, suavizado, volumen y controles de imagen.
-- HUD de rendimiento con bitrate de video, pérdida de paquetes y ping en vivo
-  sobre la ruta WebRTC.
-
-## Requisitos
-
-- Nintendo Switch con el firmware personalizado
-  [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere).
-- Cuenta Microsoft/Xbox. Game Pass es necesario para el catálogo de la
-  suscripción; los juegos propios compatibles con cloud y los free-to-play
-  pueden funcionar sin él.
-- Se recomienda Wi-Fi de 5 GHz o Ethernet mediante el dock.
-
-## Instalación
-
-1. Copia `Light_is_Green.nro` a `sdmc:/switch/` en la tarjeta SD.
-2. Inícialo en **modo título** manteniendo **R** al abrir un juego instalado.
-   El modo applet no ofrece suficiente memoria para decodificar video por
-   hardware.
-3. Introduce el código mostrado por la app en `microsoft.com/link`.
-   Los tokens y datos en caché se guardan en `sdmc:/switch/green-nx/`.
-
-### Controles
-
-| Contexto | Controles |
-| --- | --- |
-| Biblioteca | Stick izquierdo / cruceta: mover · **A**: abrir/jugar · **Y**: buscar · **X**: favorito · **ZR**: actualizar · **ZL**: ajustes · **+**: salir |
-| Ajustes | Izquierda/derecha: cambiar · **A**: abrir/confirmar · **B**: volver |
-| En partida | Controles de Switch: controles Xbox · tocar **••**: panel de imagen/datos · tocar el **símbolo pequeño de Xbox** o pulsar **L3 + R3**: Guide · mantener **-** + **+**: salir |
-
-## Compilación
-
-Compila dentro de la imagen Docker `devkitpro/devkita64`:
-
-```sh
-# Compilar una vez las dependencias WebRTC
+```bash
+cd switch
 bash deps/build-switch.sh
-
-# Compilar la aplicación
-docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
+make -j4
 ```
 
-El resultado es `Light_is_Green.nro`. El entorno de desarrollo del núcleo para
-PC se compila con `make -f Makefile.pc`.
+The dependency script clones upstream sources, applies the Switch-specific
+patches in `switch/deps/patches/`, and places generated libraries under the
+ignored `switch/deps/switch/` directory.
 
-### Estructura del código
+## Beta status and feedback
 
-```text
-src/core/            autenticación, catálogo, HTTP y protocolo xCloud
-src/switch/          interfaz SDL2, carátulas y controles
-src/switch/stream/   WebRTC, RTP, NVDEC, deko3d y motor de audio Opus
-shaders/             shaders de video para deko3d
-deps/                scripts y parches de dependencias para Switch
-romfs/ui/            arte de interfaz
-```
+Service-side API or streaming changes can temporarily break an unofficial
+client. Please include the ZERODROID version, server region and relevant lines
+from `sdmc:/switch/ZERODROID/stream.log` in reproducible bug reports. Remove
+any personal information before posting logs publicly.
 
-## Software de terceros
-
-| Proyecto | Licencia | Uso |
-| --- | --- | --- |
-| [libpeer](https://github.com/sepfy/libpeer) (con parches) | MIT | WebRTC, ICE, DTLS-SRTP, SCTP |
-| [libsrtp](https://github.com/cisco/libsrtp) | BSD-3 | Cifrado SRTP |
-| [usrsctp](https://github.com/sctplab/usrsctp) | BSD-3 | Canales de datos SCTP |
-| [mbedTLS](https://github.com/Mbed-TLS/mbedtls) | Apache-2.0 | Criptografía TLS y DTLS |
-| [FFmpeg](https://ffmpeg.org) con [NVTEGRA](https://github.com/averne/FFmpeg) | LGPL-2.1+ | Decodificación H.264 por hardware |
-| [deko3d](https://github.com/devkitPro/deko3d) | zlib | Renderizado en GPU |
-| [SDL2](https://libsdl.org), SDL2_ttf, SDL2_image | zlib | Interfaz, controles e imágenes |
-| [Opus](https://opus-codec.org) | BSD-3 | Decodificación de audio |
-| [libcurl](https://curl.se) | curl | HTTPS |
-| [nlohmann/json](https://github.com/nlohmann/json) | MIT | JSON |
-| [devkitPro / libnx](https://devkitpro.org) | varias | Toolchain y APIs del sistema Switch |
-
-## Aviso
-
-Light is Green es un proyecto experimental, no comercial y de afición,
-entregado tal cual para uso personal. No está afiliado, respaldado ni soportado
-por Microsoft o Nintendo. Xbox, Xbox Cloud Gaming y Game Pass son marcas de
-Microsoft. Nintendo Switch es una marca de Nintendo. Debes proporcionar tu
-propia suscripción válida y tu hardware.
-
-## Licencia y créditos
-
-- Licencia: [GPL-3.0](LICENSE)
-- Proyecto original e implementación base: **rmrf404** —
-  [green-nx](https://github.com/rmrf404/green-nx)
-- Fork Light is Green y trabajo de v0.2–v0.7.1: **elzerdodata**
+Licensed under Apache-2.0. Third-party components remain under their respective
+licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -35,7 +35,7 @@ bool VideoDecoder::init(SDL_Renderer* renderer) {
     if (!context_) return false;
 
     context_->flags |= AV_CODEC_FLAG_LOW_DELAY;
-    context_->flags2 |= AV_CODEC_FLAG2_FAST;
+    context_->err_recognition = AV_EF_CAREFUL | AV_EF_BITSTREAM;
 
 #ifdef __SWITCH__
     if (av_hwdevice_ctx_create(&hw_device_, AV_HWDEVICE_TYPE_NVTEGRA, nullptr,
@@ -95,8 +95,14 @@ bool VideoDecoder::decode(const uint8_t* data, size_t size) {
     bool rendered = false;
     while (avcodec_receive_frame(context_, frame_) == 0) {
         if (frame_->decode_error_flags != 0 ||
-            (frame_->flags & AV_FRAME_FLAG_CORRUPT))
+            (frame_->flags & AV_FRAME_FLAG_CORRUPT)) {
             error_ = true;
+            // Never replace the held last-good frame with decoder concealment
+            // from a damaged predictive chain. That is the macro-blocked image
+            // seen on hardware after a lost UDP/RTP packet.
+            av_frame_unref(frame_);
+            continue;
+        }
 #ifdef __SWITCH__
         // Zero-copy: keep the raw NVTEGRA surface for the deko3d renderer -- no
         // GPU->CPU transfer, no software colour conversion (both of which
@@ -115,6 +121,13 @@ bool VideoDecoder::decode(const uint8_t* data, size_t size) {
 #endif
     }
     return rendered;
+}
+
+void VideoDecoder::flush() {
+    if (context_) avcodec_flush_buffers(context_);
+    if (frame_) av_frame_unref(frame_);
+    if (held_frame_) av_frame_unref(held_frame_);
+    error_ = false;
 }
 
 bool VideoDecoder::upload(AVFrame* frame) {

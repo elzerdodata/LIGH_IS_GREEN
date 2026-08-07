@@ -25,6 +25,9 @@ public:
     // Feed one access unit; returns true if a new frame was rendered into
     // the texture.
     bool decode(const uint8_t* data, size_t size);
+    // Discard all predictive references after packet loss. The caller keeps
+    // the last good presented frame and resumes only with a clean IDR.
+    void flush();
 
     // True (and reset) if a decode error/corrupt frame was seen since the last
     // call -- the caller should ask the server for a fresh keyframe.
