@@ -8,6 +8,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "../../vendor/json.hpp"
@@ -153,6 +154,89 @@ bool decode_teredo(const std::string& addr, std::string* ipv4, int* port) {
     return true;
 }
 
+bool is_ipv4_literal(const std::string& address) {
+    size_t start = 0;
+    for (int octet = 0; octet < 4; ++octet) {
+        size_t dot = address.find('.', start);
+        if ((octet < 3 && dot == std::string::npos) ||
+            (octet == 3 && dot != std::string::npos))
+            return false;
+        size_t end = dot == std::string::npos ? address.size() : dot;
+        if (end == start || end - start > 3) return false;
+        unsigned value = 0;
+        for (size_t i = start; i < end; ++i) {
+            if (address[i] < '0' || address[i] > '9') return false;
+            value = value * 10 + static_cast<unsigned>(address[i] - '0');
+        }
+        if (value > 255) return false;
+        start = end + 1;
+    }
+    return start == address.size() + 1;
+}
+
+int configuration_port(const json& details, const char* key) {
+    if (!details.contains(key)) return 0;
+    try {
+        const json& value = details[key];
+        long long port = 0;
+        if (value.is_number_integer() || value.is_number_unsigned()) {
+            port = value.get<long long>();
+        } else if (value.is_string()) {
+            const std::string text = value.get<std::string>();
+            char* end = nullptr;
+            port = std::strtol(text.c_str(), &end, 10);
+            if (!end || *end != '\0') return 0;
+        }
+        return port > 0 && port <= 65535 ? static_cast<int>(port) : 0;
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+// libpeer's pinned STUN parser accepts IPv4/hostname URLs with an explicit
+// port. Normalize the browser form and reject TURN or IPv6 URLs here; the
+// Switch build has no IPv6 transport and no complete TURN relay path.
+bool normalize_stun_url(const std::string& input, std::string* normalized) {
+    if (input.rfind("stun:", 0) != 0) return false;
+    std::string target = input.substr(5);
+    size_t query = target.find('?');
+    if (query != std::string::npos) target.resize(query);
+    if (target.empty() || target.find_first_of("/\\ \t\r\n[]") !=
+                              std::string::npos)
+        return false;
+
+    std::string host = target;
+    int port = 3478;
+    size_t colon = target.rfind(':');
+    if (colon != std::string::npos) {
+        // A second colon means an IPv6 literal, unsupported by this build.
+        if (target.find(':') != colon) return false;
+        host = target.substr(0, colon);
+        std::string port_text = target.substr(colon + 1);
+        char* end = nullptr;
+        long parsed = std::strtol(port_text.c_str(), &end, 10);
+        if (!end || *end != '\0' || parsed <= 0 || parsed > 65535)
+            return false;
+        port = static_cast<int>(parsed);
+    }
+    // agent_gather_candidate uses a fixed 64-byte hostname buffer.
+    if (host.empty() || host.size() > 63) return false;
+    *normalized = "stun:" + host + ":" + std::to_string(port);
+    return true;
+}
+
+void add_configuration_endpoint(StreamConfiguration* config,
+                                const std::string& address, int port) {
+    if (!is_ipv4_literal(address) || port <= 0 || port > 65535) return;
+    auto same_endpoint = [&](const StreamEndpoint& endpoint) {
+        return endpoint.address == address && endpoint.port == port;
+    };
+    if (std::find_if(config->direct_endpoints.begin(),
+                     config->direct_endpoints.end(), same_endpoint) ==
+        config->direct_endpoints.end())
+        config->direct_endpoints.push_back({address, port});
+}
+
 }  // namespace
 
 GssvSession::GssvSession(Http& http, EndpointCredentials credentials,
@@ -258,6 +342,74 @@ SessionState GssvSession::refresh_state() {
         error_details_ = response.value("errorDetails", json::object()).dump();
     }
     return state_;
+}
+
+StreamConfiguration GssvSession::fetch_stream_configuration() {
+    StreamConfiguration config;
+    try {
+        HttpResponse response = http_.get(url("/configuration"), headers());
+        if (!response.ok() || response.body.empty()) return config;
+
+        json parsed = json::parse(response.body, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object() ||
+            !parsed.contains("serverDetails"))
+            return config;
+
+        json details = parsed["serverDetails"];
+        // Some service versions have serialized this inner object as a JSON
+        // string. Accept both forms without exposing the response in logs.
+        if (details.is_string())
+            details = json::parse(details.get<std::string>(), nullptr, false);
+        if (details.is_discarded() || !details.is_object()) return config;
+        config.fetched = true;
+
+        if (details.contains("stunServerAddresses") &&
+            details["stunServerAddresses"].is_array()) {
+            for (const json& item : details["stunServerAddresses"]) {
+                if (!item.is_string()) continue;
+                std::string server;
+                if (!normalize_stun_url(item.get<std::string>(), &server) ||
+                    std::find(config.stun_servers.begin(),
+                              config.stun_servers.end(), server) !=
+                        config.stun_servers.end())
+                    continue;
+                config.stun_servers.push_back(std::move(server));
+            }
+        }
+
+        const std::array<std::pair<const char*, const char*>, 3> endpoint_keys{{
+            {"ipAddress", "port"},
+            {"ipV4Address", "ipV4Port"},
+            {"ipV6Address", "ipV6Port"},
+        }};
+        for (const auto& [address_key, port_key] : endpoint_keys) {
+            if (!details.contains(address_key) ||
+                !details[address_key].is_string())
+                continue;
+            std::string address = details[address_key].get<std::string>();
+            int reported_port = configuration_port(details, port_key);
+            if (is_ipv4_literal(address)) {
+                add_configuration_endpoint(&config, address, reported_port);
+                add_configuration_endpoint(&config, address, 9002);
+                continue;
+            }
+
+            // Native IPv6 cannot be used by this Switch/libpeer build. Teredo
+            // is still useful because it encodes the console's public IPv4
+            // and NAT-mapped UDP port.
+            std::string ipv4;
+            int teredo_port = 0;
+            if (!decode_teredo(address, &ipv4, &teredo_port)) continue;
+            add_configuration_endpoint(&config, ipv4, reported_port);
+            add_configuration_endpoint(&config, ipv4, 9002);
+            add_configuration_endpoint(&config, ipv4, teredo_port);
+        }
+    } catch (const std::exception&) {
+        // Configuration improves NAT traversal but is not required by the
+        // legacy signaling path; never abort a session when it is unavailable.
+        return StreamConfiguration{};
+    }
+    return config;
 }
 
 std::optional<int> GssvSession::fetch_wait_time(

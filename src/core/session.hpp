@@ -26,6 +26,20 @@ enum class SessionState {
     Failed,
 };
 
+// Sanitized subset of the session /configuration response used by the native
+// WebRTC stack. Credentials (including any TURN data) are intentionally not
+// retained here.
+struct StreamEndpoint {
+    std::string address;
+    int port = 0;
+};
+
+struct StreamConfiguration {
+    bool fetched = false;
+    std::vector<std::string> stun_servers;
+    std::vector<StreamEndpoint> direct_endpoints;
+};
+
 // One xCloud streaming session: create -> poll state -> connect (passport
 // token) -> SDP offer/answer -> ICE exchange -> keepalive loop.
 class GssvSession {
@@ -42,6 +56,11 @@ public:
     void start_home(const std::string& server_id);
 
     SessionState refresh_state();
+
+    // Best-effort GET /{sessionPath}/configuration. Returns an empty,
+    // fetched=false result if the endpoint or payload is unavailable so the
+    // caller can retain its legacy STUN/ICE path.
+    StreamConfiguration fetch_stream_configuration();
 
     // Best-effort queue estimate for a cloud title. The wait-time endpoint is
     // advisory and may be unavailable, so callers must keep polling the

@@ -946,11 +946,19 @@ void DkVideoRenderer::update_hud(AVFrame* frame) {
     if (net_valid_.load(std::memory_order_relaxed)) {
         const int ping_ms = net_ping_ms_.load(std::memory_order_relaxed);
         char network_line[96];
-        if (ping_ms >= 0) {
+        if (ping_ms > 0) {
             std::snprintf(network_line, sizeof(network_line),
                           "%.1f Mbps  loss %.1f%%\nping %dms",
                           net_mbps_.load(std::memory_order_relaxed),
                           net_loss_.load(std::memory_order_relaxed), ping_ms);
+        } else if (ping_ms == 0) {
+            // The consent clock has 1 ms resolution. A genuine local-path RTT
+            // may quantize to zero; label it accurately instead of looking
+            // like the old hard-coded 0 ms regression.
+            std::snprintf(network_line, sizeof(network_line),
+                          "%.1f Mbps  loss %.1f%%\nping <1ms",
+                          net_mbps_.load(std::memory_order_relaxed),
+                          net_loss_.load(std::memory_order_relaxed));
         } else {
             std::snprintf(network_line, sizeof(network_line),
                           "%.1f Mbps  loss %.1f%%\nping --",

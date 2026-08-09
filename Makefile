@@ -11,11 +11,11 @@ endif
 include $(DEVKITPRO)/libnx/switch_rules
 
 APP_TITLE   := Light is Green
-APP_AUTHOR  := rmrf404 (original) / elzerdodata
-APP_VERSION := 0.8.4
+APP_AUTHOR  := elzerdodata
+APP_VERSION := 1.0.4
 APP_ICON    := icon.jpg
 
-TARGET   := Light_is_Green-v0.8.4
+TARGET   := Light_is_Green-v1.0.4
 BUILD    := build-switch
 SOURCES  := src/core src/switch
 INCLUDES := src vendor deps/shim/include
@@ -40,11 +40,11 @@ endif
 
 ARCH := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
-CFLAGS   := -g -Wall -O2 -ffunction-sections $(ARCH) $(DEFINES) $(INCLUDE) \
+CFLAGS   := -Wall -O2 -ffunction-sections $(ARCH) $(DEFINES) $(INCLUDE) \
             -D__SWITCH__
 CXXFLAGS := $(CFLAGS) -fno-rtti -std=gnu++17
-ASFLAGS  := -g $(ARCH)
-LDFLAGS   = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) \
+ASFLAGS  := $(ARCH)
+LDFLAGS   = -specs=$(DEVKITPRO)/libnx/switch.specs $(ARCH) \
             -Wl,-Map,$(notdir $*.map)
 
 PKGCONF := /opt/devkitpro/portlibs/switch/bin/aarch64-none-elf-pkg-config

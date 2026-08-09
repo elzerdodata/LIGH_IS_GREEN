@@ -6,7 +6,7 @@ name: build
 on:
   workflow_dispatch:
   push:
-    branches: [main, build/light-is-green-v0.8.1, build/light-is-green-v0.8.2]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -21,10 +21,17 @@ jobs:
       - name: Build Light_is_Green.nro
         run: docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 
-      - name: Verify artifact
-        run: ls -l Light_is_Green-v0.8.2.nro
+      - name: Locate artifact
+        id: artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          nro="$(find . -maxdepth 1 -type f -name 'Light_is_Green-v*.nro' -print -quit)"
+          test -n "$nro"
+          ls -lh "$nro"
+          echo "path=$nro" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Light_is_Green-v0.8.2-nro
-          path: Light_is_Green-v0.8.2.nro
+          name: Light_is_Green-nro
+          path: ${{ steps.artifact.outputs.path }}

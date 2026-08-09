@@ -128,7 +128,5 @@ contener candidatos de direcciones de red.
 
 ## Credits / Créditos
 
-Light is Green is a GPL-3.0 community fork of
-[green-nx](https://github.com/rmrf404/green-nx), originally created by
-**rmrf404**. The original author retains full credit for the core project;
-v0.8.0 fork contributions are by **elzerdodata**.
+These historical v0.x notes are retained for release continuity. Current
+licensing and distribution information is provided in `LICENSE` and `NOTICE`.

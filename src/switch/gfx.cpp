@@ -70,9 +70,13 @@ bool Gfx::create_window_renderer() {
 #ifdef __SWITCH__
     background_ = IMG_LoadTexture(renderer_, "romfs:/ui/light_is_green_bg.png");
     brand_icon_ = IMG_LoadTexture(renderer_, "romfs:/ui/app_icon.png");
+    if (!background_) background_ = IMG_LoadTexture(renderer_, "romfs:/ui/v1/lig_aurora_bg_1280x720.jpg");
+    if (!brand_icon_) brand_icon_ = IMG_LoadTexture(renderer_, "romfs:/ui/v1/lig_mark_128.png");
 #else
     background_ = IMG_LoadTexture(renderer_, "romfs/ui/light_is_green_bg.png");
     brand_icon_ = IMG_LoadTexture(renderer_, "romfs/ui/app_icon.png");
+    if (!background_) background_ = IMG_LoadTexture(renderer_, "romfs/ui/v1/lig_aurora_bg_1280x720.jpg");
+    if (!brand_icon_) brand_icon_ = IMG_LoadTexture(renderer_, "romfs/ui/v1/lig_mark_128.png");
 #endif
     if (background_) SDL_SetTextureBlendMode(background_, SDL_BLENDMODE_BLEND);
     if (brand_icon_) SDL_SetTextureBlendMode(brand_icon_, SDL_BLENDMODE_BLEND);

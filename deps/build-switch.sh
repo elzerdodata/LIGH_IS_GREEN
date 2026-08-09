@@ -15,6 +15,7 @@
 set -euo pipefail
 
 LIBPEER_REPO="https://github.com/sepfy/libpeer"
+LIBPEER_COMMIT="9319aa434cb9e893faed0293ba9d2a21eca59c8b"
 DOCKER_IMAGE="devkitpro/devkita64"
 
 # ---------------------------------------------------------------------------
@@ -100,6 +101,9 @@ int main(void) {
   PeerConnection* pc = peer_connection_create(&config);
   peer_connection_create_offer(pc);
   peer_connection_loop(pc);
+  /* Build-time ABI guard: the app's HUD requires the consent-path RTT API.
+     A stale archive/header pair must fail here, not later in the NRO link. */
+  (void)peer_connection_get_rtt_ms(pc);
   peer_connection_destroy(pc);
   peer_deinit();
   return 0;
@@ -126,10 +130,19 @@ LIBPEER_DIR="$DEPS_DIR/src/libpeer"
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 command -v git >/dev/null || { echo "git is required" >&2; exit 1; }
 
-# 1) Clone (shallow, with submodules) if missing.
+# 1) Fetch the reviewed upstream revision (with submodules) if missing. The
+# Switch patch is intentionally tied to this exact struct layout; building an
+# arbitrary future HEAD can silently break the opaque PeerConnection ABI.
 if [[ ! -e "$LIBPEER_DIR/.git" ]]; then
   mkdir -p "$DEPS_DIR/src"
-  git clone --recursive --depth 1 --shallow-submodules "$LIBPEER_REPO" "$LIBPEER_DIR"
+  git init "$LIBPEER_DIR"
+  git -C "$LIBPEER_DIR" remote add origin "$LIBPEER_REPO"
+  git -C "$LIBPEER_DIR" fetch --depth 1 origin "$LIBPEER_COMMIT"
+  git -C "$LIBPEER_DIR" checkout --detach FETCH_HEAD
+  git -C "$LIBPEER_DIR" submodule update --init --recursive --depth 1
+elif [[ "$(git -C "$LIBPEER_DIR" rev-parse HEAD)" != "$LIBPEER_COMMIT" ]]; then
+  echo "libpeer source is not the reviewed commit $LIBPEER_COMMIT" >&2
+  exit 1
 fi
 
 # 2) Apply patches (idempotent: skipped when already applied).

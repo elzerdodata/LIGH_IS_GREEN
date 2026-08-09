@@ -16,20 +16,22 @@ struct Color {
     Uint8 r, g, b, a = 255;
 };
 
-// Palette — "OLED premium" (docs-design/green-nx-redesign.dc.html, card 1a)
-constexpr Color kBg{4, 9, 13};              // v0.4 fallback background
-constexpr Color kBar{6, 12, 18, 236};        // header/footer glass
-constexpr Color kSurface{10, 20, 27, 224};   // translucent cards and rows
-constexpr Color kSurfaceHi{18, 38, 43, 238}; // focused glass surface
-constexpr Color kAccent{16, 124, 16};         // Xbox green
-constexpr Color kFocus{57, 224, 103};         // emerald focus / glow
-constexpr Color kText{240, 243, 248};     // #F0F3F8 primary text
-constexpr Color kTextDim{152, 162, 179};  // #98A2B3 secondary text, hints
-constexpr Color kWarn{240, 180, 60};      // #F0B43C favorites, notices
-constexpr Color kError{232, 104, 104};    // #E86868 errors
-constexpr Color kChip{28, 34, 48};        // #1C2230 button chips, separators
-constexpr Color kChipEdge{42, 50, 66};    // #2A3242 chip border
-constexpr Color kFaint{91, 100, 116};     // #5b6474 tertiary (counters, idle tabs)
+// Light is Green v1.0: deep aurora glass with a restrained emerald focus.
+// All glow is drawn with inexpensive SDL frames; the background remains one
+// static texture so browsing the 6-by-3 catalogue stays memory-safe.
+constexpr Color kBg{2, 8, 9};                // fallback background
+constexpr Color kBar{3, 14, 15, 238};        // header/footer glass
+constexpr Color kSurface{7, 24, 25, 226};    // translucent cards and rows
+constexpr Color kSurfaceHi{12, 40, 40, 240}; // focused glass surface
+constexpr Color kAccent{0, 166, 101};        // primary emerald action
+constexpr Color kFocus{45, 244, 165};        // focus / glow
+constexpr Color kText{237, 255, 247};        // primary text
+constexpr Color kTextDim{164, 205, 191};     // secondary text, hints
+constexpr Color kWarn{246, 196, 78};         // favorites, notices
+constexpr Color kError{239, 109, 121};       // errors
+constexpr Color kChip{13, 40, 40};           // button chips, separators
+constexpr Color kChipEdge{43, 104, 94};      // chip border
+constexpr Color kFaint{101, 147, 135};       // counters, idle tabs
 
 // XS 24 hints/captions · Note(S) 30 metadata/status · Body(M) 38 tabs/rows ·
 // Title(L) 54 screen+game titles · Huge(XL) 100 sign-in code, logo.

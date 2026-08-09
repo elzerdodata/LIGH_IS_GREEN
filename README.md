@@ -1,374 +1,173 @@
 # Light is Green
 
-> **Stable v0.8.0 / Estable v0.8.0**
+![Light is Green mark](romfs/ui/v1/lig_mark_128.png)
 
-English | [Español](#español)
+> **Official v1.0.4 / Versión oficial v1.0.4**
+> *Special thanks to @Djihads80 for the new custom icon and background! / ¡Un agradecimiento especial a @Djihads80 por el nuevo ícono y fondo personalizados!* 🎉
 
-Light is Green is a community fork of
-[green-nx](https://github.com/rmrf404/green-nx), originally created by
-**rmrf404** and distributed under GPL-3.0.
+<p align="center">
+  <img src="docs/showcase_1.jpg" width="48%">
+  <img src="docs/showcase_2.jpg" width="48%">
+  <img src="docs/showcase_3.jpg" width="48%">
+  <img src="docs/showcase_4.jpg" width="48%">
+</p>
 
-It is a standalone, open-source **Xbox Cloud Gaming (xCloud) client for
-Nintendo Switch** homebrew. Authentication, WebRTC, hardware H.264 decoding,
-GPU rendering, audio, and controller input all run on the console; no companion
-PC is required.
+[English](#english) · [Español](#español)
 
-## v0.8.0 stable release
+## English
 
-- Builds the playable library from entitled **Game Pass**, **Stream Your Own
-  Game (BYOG)** and **free-to-play** titles. It does not expose the full Xbox
-  store, and duplicate entries are merged.
-- Adds an **Owned & Free** tab and launches every title with the Xbox offering
-  that granted its entitlement. Accounts without Game Pass can still load
-  eligible free-to-play and owned cloud games.
-- Recovers faster from silent xCloud media routes: a cloud DTLS route is retired
-  after about 6 seconds in practice and the next allocation starts as soon as
-  teardown finishes. Remote Play retains its more conservative xHome timing.
-- Caps cover textures and pending artwork jobs to protect Switch memory, and
-  recovers safely from video allocation pressure by resynchronizing the stream.
-- Keeps region bypass independent from server selection, supports Xbox's live
-  datacenter list and optional strict server forcing, and exposes bitrate and
-  quality controls.
-- Replaces the old audio `BUF` value with true live **PING**, measured as STUN
-  round-trip time on the active WebRTC media route.
+Light is Green is an independently maintained, open-source Cloud Play and
+Remote Play client for Nintendo Switch homebrew. Authentication, catalogue,
+native WebRTC streaming, hardware H.264 decoding, GPU presentation, audio, and
+controller input run on the console—no companion PC is required.
 
-## v0.7.1 smoothness preview
+### v1.0.0 — official identity
 
-- Detects 30/60 fps cadence from the H.264 RTP 90 kHz media timestamps instead
-  of packet/decode arrival time, so Wi-Fi bursts cannot make Smooth or Motion
-  switch rhythm incorrectly.
-- Smooth keeps its one-frame jitter reserve but now sheds stale excess reserve
-  after a burst, preventing latency from accumulating for the rest of a stream.
-- Uses deko3d's asynchronous triple-buffer flow and pins every NVDEC surface
-  until its framebuffer slot is returned. This removes the full GPU drain that
-  previously ran after every presented frame.
-- Adds `video|` diagnostics to `stream-log.txt` for packet, assembled-frame,
-  drop, NACK, resync, access-unit-size and decoder-queue analysis.
-- v0.7.1 remains a preview; v0.6.0 is still the stable release. For the most
-  fluid result, use **Smooth**. Motion keeps the v0.7 experimental warning.
+- Original Light is Green mark and aurora background, compact command-deck
+  header, dark glass panels, and restrained emerald focus motion.
+- A content-first 6 × 3 library retains 18 visible games, uncropped cover art,
+  readable card titles, and a full selected-title marquee.
+- Redesigned game details and source selection use complete titles and real
+  Cloud Play / Remote Play actions.
+- Cloud Launch reports only actual values: Session → ICE → DTLS → Video stages,
+  effective Xbox server region, source, and configured quality.
+- New data location: `sdmc:/switch/light-is-green/`. At first launch, v1
+  non-destructively imports account data, settings, favourites, history, and
+  cached server regions when the new files do not already exist. The prior
+  folder and its cover-art cache remain untouched.
 
-## v0.7.0 preview
+### Catalogue scope
 
-- Fixes the thin green/magenta corruption stripe at the bottom/right video
-  edge by sampling the visible luma and chroma texel centres independently,
-  never NVDEC's uninitialized alignment padding.
-- Adds live **Pacing: Steady / Smooth / Motion** controls to the in-stream
-  two-dot touch panel. Changing mode releases old queued/interpolation surfaces
-  without restarting WebRTC.
-- **Motion is 100% experimental and may cause rapid green flashing.** It now
-  rejects unproven or incompatible secondary decoder surfaces and uses a normal
-  Smooth refresh instead, but users should immediately switch back if flashing
-  is observed. Motion is never restored automatically after restarting the app.
-- Shows the selected server region throughout the xCloud sign-in and connection
-  screen, updating to Xbox's actual region as soon as login completes.
-- Adds an experimental **1080p Console quality** option for Remote Play. If
-  negotiation or first video fails, the app starts a fresh session
-  automatically with the stable 720p profile.
-- Beta 2 separates console wake/registration retries from WebRTC media retries,
-  adds progressive teardown backoff, refreshes the xHome route periodically,
-  gives remote ICE/DTLS negotiation more time, and fixes compressed Teredo
-  candidate conversion for Remote Play outside the LAN.
-- Keeps Remote Play available away from home through Xbox's xHome service.
-  Success depends on Remote Features, NAT, IPv6/Teredo and UDP connectivity.
-- Expands the performance overlay with source, output and generated FPS.
+The library intentionally shows only cloud-playable games returned for the
+signed-in account: Game Pass titles, eligible Stream Your Own Game / BYOG
+titles, and eligible free-to-play titles. It is **not** a view of the full Xbox
+Store. Duplicate entitlements are merged and each title launches through the
+offering that granted access.
 
-The v0.7 releases remain available as historical previews. **v0.8.0 is the
-recommended stable release.** Do not publish `stream-log.txt`: connection
-diagnostics can include IP candidates.
+### Features
 
-## What's new in v0.6.0
+- Microsoft device-code sign-in; no password is entered on the console.
+- Search, favourites, history, multiple accounts, and contained cover art.
+- Cloud Play plus Remote Play from a linked Xbox console. Remote availability
+  depends on Xbox Remote Features, NAT, IPv6/Teredo, and UDP connectivity.
+- Native WebRTC media path, hardware H.264 decode, zero-copy deko3d video,
+  Opus audio, and Switch controller support.
+- Game Pass / Owned & Free tabs, server-region selection, optional region
+  bypass, quality and bitrate controls, language, mapping, vibration, pacing,
+  picture controls, and in-stream diagnostics.
 
-- Separates **Region bypass** from the new **Server region** selector.
-- Adds Auto, Chile Central, Brazil South, and every additional xCloud
-  datacenter returned by Xbox during login.
-- Refreshes and caches the live datacenter list, with a safe fallback to the
-  Xbox default when a selected region is unavailable.
-- Changes the normal 1080p high-bitrate preset to the Windows allocation pool
-  while preserving the former Tizen/TV fingerprint as an experimental option.
-- Records the selected region and host in `stream-log.txt` for queue diagnosis.
+### Requirements and installation
 
-## Features
-
-- Microsoft **device-code sign-in**; no password is typed on the console.
-- Game library with cover art, favorites, history, search, and console remote
-  play.
-- Live xCloud queue estimate while a server is allocated.
-- Native WebRTC streaming with hardware H.264 decoding and zero-copy deko3d
-  rendering.
-- Opus audio, 60 fps video, and 720p / 1080p / 1080p HQ Windows modes, plus an
-  experimental Tizen HQ profile.
-- Independent region bypass and xCloud server selection, configurable game
-  language, button mapping, vibration, video pacing, volume, and image controls.
-- Performance HUD with video bitrate, packet loss, and live WebRTC-route ping.
-
-## Requirements
-
-- A Nintendo Switch running
-  [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere) custom firmware.
-- A Microsoft/Xbox account. Game Pass is required for the subscription catalog;
-  eligible owned cloud games and free-to-play titles can work without it.
-- A 5 GHz Wi-Fi connection or docked Ethernet is recommended.
-
-## Installation
-
-1. Copy `Light_is_Green.nro` to `sdmc:/switch/` on the SD card.
-2. Launch it in **title mode** by holding **R** while opening an installed game.
+1. Use a Nintendo Switch with [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere)
+   custom firmware, a Microsoft/Xbox account, and preferably 5 GHz Wi-Fi or
+   docked Ethernet.
+2. Copy `Light_is_Green-v1.0.4.nro` to `sdmc:/switch/`.
+3. Launch in **title mode** by holding **R** while opening an installed game.
    Applet mode does not provide enough memory for hardware video decoding.
-3. Enter the device code shown by the app at `microsoft.com/link`.
-   Tokens and cached data are stored in `sdmc:/switch/green-nx/`.
+4. Enter the displayed device code at `microsoft.com/link`.
 
 ### Controls
 
 | Context | Controls |
 | --- | --- |
-| Library | Left stick / d-pad: move · **A**: open/play · **Y**: search · **X**: favorite · **ZR**: refresh · **ZL**: settings · **+**: exit |
+| Library | Left stick / d-pad: move · **A**: details/play · **Y**: search · **X**: favourite · **ZR**: refresh · **ZL**: settings · **+**: exit |
 | Settings | Left/right: change · **A**: open/confirm · **B**: back |
-| In stream | Switch pad: Xbox controls · tap **••**: image/stats panel · tap the small **Xbox symbol** or press **L3 + R3**: Guide · hold **-** + **+**: quit |
+| In stream | Tap **••**: picture/performance panel · tap the small Xbox symbol or press **L3 + R3**: Guide · hold **−** + **+**: leave stream |
 
-## Build
-
-Build inside the `devkitpro/devkita64` Docker image:
+### Build
 
 ```sh
-# Build WebRTC dependencies once
 bash deps/build-switch.sh
-
-# Build the application
 docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 ```
 
-The output is `Light_is_Green.nro`. The desktop core-development harness can
-be built with `make -f Makefile.pc`.
+The output is `Light_is_Green-v1.0.4.nro`. The desktop core harness builds with
+`make -f Makefile.pc`.
 
-### Source layout
+### License and third-party notices
 
-```text
-src/core/            authentication, catalog, HTTP, xCloud protocol
-src/switch/          SDL2 interface, covers, and input
-src/switch/stream/   WebRTC, RTP, NVDEC, deko3d, and Opus streaming engine
-shaders/             deko3d video shaders
-deps/                Switch dependency build scripts and patches
-romfs/ui/            interface artwork
-```
-
-## Third-party software
-
-| Project | License | Purpose |
-| --- | --- | --- |
-| [libpeer](https://github.com/sepfy/libpeer) (patched) | MIT | WebRTC, ICE, DTLS-SRTP, SCTP |
-| [libsrtp](https://github.com/cisco/libsrtp) | BSD-3 | SRTP encryption |
-| [usrsctp](https://github.com/sctplab/usrsctp) | BSD-3 | SCTP data channels |
-| [mbedTLS](https://github.com/Mbed-TLS/mbedtls) | Apache-2.0 | TLS and DTLS cryptography |
-| [FFmpeg](https://ffmpeg.org) with [NVTEGRA](https://github.com/averne/FFmpeg) | LGPL-2.1+ | Hardware H.264 decoding |
-| [deko3d](https://github.com/devkitPro/deko3d) | zlib | GPU rendering |
-| [SDL2](https://libsdl.org), SDL2_ttf, SDL2_image | zlib | Interface, input, and images |
-| [Opus](https://opus-codec.org) | BSD-3 | Audio decoding |
-| [libcurl](https://curl.se) | curl | HTTPS |
-| [nlohmann/json](https://github.com/nlohmann/json) | MIT | JSON |
-| [devkitPro / libnx](https://devkitpro.org) | various | Switch toolchain and OS APIs |
-
-## Disclaimer
-
-Light is Green is an experimental, non-commercial hobby project provided as-is
-for personal use. It is not affiliated with, endorsed by, or supported by
-Microsoft or Nintendo. Xbox, Xbox Cloud Gaming, and Game Pass are Microsoft
-trademarks. Nintendo Switch is a Nintendo trademark. You must provide your own
-valid subscription and hardware.
-
-## License and credits
-
-- License: [GPL-3.0](LICENSE)
-- Original project and core implementation: **rmrf404** —
-  [green-nx](https://github.com/rmrf404/green-nx)
-- Light is Green fork and v0.2–v0.8.0 work: **elzerdodata**
+Light is Green is an experimental, non-commercial hobby project provided as-is.
+It is not affiliated with, endorsed by, or supported by Microsoft or Nintendo.
+The project is distributed under [GPL-3.0](LICENSE); see [NOTICE](NOTICE) for
+modified-work and third-party notice guidance.
 
 ---
 
-# Español
+## Español
 
-Light is Green es un fork comunitario de
-[green-nx](https://github.com/rmrf404/green-nx), creado originalmente por
-**rmrf404** y distribuido bajo la licencia GPL-3.0.
+Light is Green es un cliente de Cloud Play y Remote Play para homebrew de
+Nintendo Switch, mantenido de forma independiente y de código abierto. La
+autenticación, catálogo, streaming WebRTC nativo, decodificación H.264 por
+hardware, presentación en GPU, audio y controles funcionan en la consola: no
+requiere una PC auxiliar.
 
-Es un cliente homebrew independiente y de código abierto de **Xbox Cloud
-Gaming (xCloud) para Nintendo Switch**. La autenticación, WebRTC, decodificación
-H.264 por hardware, renderizado en GPU, audio y controles funcionan en la
-consola; no requiere una PC auxiliar.
+### v1.0.0 — identidad oficial
 
-## Versión estable v0.8.0
+- Icono y fondo aurora originales, cabecera compacta tipo consola, paneles de
+  vidrio oscuro y foco verde con movimiento discreto.
+- Biblioteca 6 × 3 centrada en contenido: 18 juegos visibles, carátulas sin
+  recorte, títulos legibles y marquee completo para el juego seleccionado.
+- Ficha y selector de origen rediseñados, con títulos completos y acciones
+  reales de Cloud Play / Remote Play.
+- Cloud Launch muestra sólo valores reales: fases Session → ICE → DTLS → Video,
+  región efectiva devuelta por Xbox, origen y calidad configurada.
+- Nueva carpeta de datos: `sdmc:/switch/light-is-green/`. En el primer inicio,
+  v1 importa cuentas, ajustes, favoritos, historial y regiones guardadas de
+  forma no destructiva cuando los archivos nuevos todavía no existen. La carpeta
+  anterior y su caché de carátulas no se modifican.
 
-- Construye la biblioteca jugable con títulos habilitados de **Game Pass**,
-  **Stream Your Own Game (BYOG)** y **free-to-play**. No muestra toda la tienda
-  Xbox y combina los duplicados.
-- Agrega la pestaña **Propios y gratis** y abre cada juego con la oferta Xbox que
-  concedió su acceso. Las cuentas sin Game Pass aún pueden cargar juegos gratis
-  y juegos propios compatibles con cloud.
-- Se recupera más rápido de rutas multimedia silenciosas: descarta una ruta
-  DTLS cloud después de unos 6 segundos en la práctica e inicia la siguiente
-  asignación apenas termina el cierre. Remote Play mantiene tiempos xHome más
-  conservadores.
-- Limita las texturas de carátulas y los trabajos de imágenes pendientes para
-  proteger la memoria de Switch, y se recupera de presión de memoria de video
-  resincronizando el stream.
-- Mantiene el bypass regional separado de la selección de servidor, admite la
-  lista real de datacenters de Xbox y el forzado opcional, e incluye controles
-  de calidad y bitrate.
-- Sustituye el antiguo valor `BUF` por **PING** real en vivo, medido como tiempo
-  de ida y vuelta STUN sobre la ruta WebRTC activa.
+### Alcance del catálogo
 
-## Avance de fluidez v0.7.1
+La biblioteca muestra intencionalmente sólo juegos cloud jugables que Xbox
+devuelve para la cuenta iniciada: títulos de Game Pass, títulos elegibles de
+Stream Your Own Game / BYOG y títulos elegibles free-to-play. **No** es una
+vista de toda la tienda Xbox. Las licencias duplicadas se unifican y cada juego
+se abre con la oferta que concede el acceso.
 
-- Detecta la cadencia de 30/60 fps mediante los timestamps RTP de 90 kHz del
-  video H.264, no mediante el momento irregular en que llegan o se decodifican
-  los paquetes. Una ráfaga de Wi-Fi ya no cambia erróneamente el ritmo.
-- Smooth conserva una trama de reserva contra jitter, pero descarta reserva
-  vieja sobrante después de una ráfaga para que la latencia no quede acumulada.
-- Activa el triple buffer asíncrono de deko3d y mantiene cada superficie NVDEC
-  referenciada hasta que su framebuffer vuelve a estar disponible. Se elimina
-  el vaciado completo de la GPU que antes ocurría después de cada imagen.
-- Agrega líneas `video|` al diagnóstico con paquetes, tramas, descartes, NACK,
-  resincronizaciones, tamaño de unidad y cola del decodificador.
-- v0.7.1 continúa siendo preliminar; v0.6.0 sigue estable. Para priorizar
-  fluidez usa **Smooth**. Motion conserva toda la advertencia experimental.
+### Funciones
 
-## Avance de v0.7.0
+- Inicio de sesión de Microsoft por código de dispositivo; la contraseña no se
+  escribe en la consola.
+- Búsqueda, favoritos, historial, varias cuentas y carátulas sin recorte.
+- Cloud Play y Remote Play desde una Xbox vinculada. El acceso remoto depende de
+  Xbox Remote Features, NAT, IPv6/Teredo y conectividad UDP.
+- Ruta multimedia WebRTC nativa, decodificación H.264 por hardware, video
+  deko3d sin copias adicionales, audio Opus y controles de Switch.
+- Pestañas Game Pass / Propios y gratis, región de servidor, bypass regional
+  opcional, calidad, bitrate, idioma, mapeo, vibración, pacing, imagen y
+  diagnósticos durante el stream.
 
-- Corrige la franja fina verde/magenta del borde inferior/derecho del video:
-  luma y croma ahora se muestrean desde sus texeles visibles y nunca desde el
-  relleno de alineación sin inicializar de NVDEC.
-- Agrega **Pacing: Steady / Smooth / Motion** al panel táctil de los dos puntos
-  dentro del juego. El cambio se aplica en caliente, libera las superficies del
-  modo anterior y no reinicia WebRTC.
-- **Motion es 100% experimental y podría causar pantalla verde parpadeante.**
-  Ahora rechaza superficies secundarias no comprobadas o incompatibles y usa
-  un refresco Smooth normal, pero se debe volver inmediatamente a Smooth o
-  Steady si aparece parpadeo. Motion nunca se restaura automáticamente al
-  reiniciar la aplicación.
-- Muestra la región del servidor durante el inicio de sesión y la conexión a
-  xCloud, y cambia a la región real elegida por Xbox al terminar el login.
-- Agrega **Calidad de consola 1080p** experimental para Remote Play. Si falla
-  la negociación o no llega el primer video, la aplicación abre una sesión
-  nueva con el perfil estable de 720p.
-- Beta 2 separa los reintentos de encendido/registro de los reintentos WebRTC,
-  agrega espera progresiva entre sesiones, renueva periódicamente la ruta
-  xHome, concede más tiempo a la negociación ICE/DTLS remota y corrige la
-  conversión de candidatos Teredo comprimidos para jugar fuera de la red local.
-- Mantiene Remote Play fuera de casa mediante el servicio xHome de Xbox. Su
-  funcionamiento depende de Remote Features, NAT, IPv6/Teredo y conectividad
-  UDP.
-- Amplía el overlay de rendimiento con FPS de origen, salida y generados.
+### Requisitos e instalación
 
-Las versiones v0.7 siguen disponibles como avances históricos. **v0.8.0 es la
-versión estable recomendada.** No publiques `stream-log.txt`: el diagnóstico
-puede incluir candidatos de direcciones IP.
-
-## Novedades de v0.6.0
-
-- Separa **Región de bypass** del nuevo selector **Región del servidor**.
-- Agrega Auto, Chile Central, Brazil South y todos los datacenters adicionales
-  de xCloud que Xbox devuelva al iniciar sesión.
-- Actualiza y guarda la lista real de datacenters, con retorno seguro al
-  servidor predeterminado de Xbox cuando una región no esté disponible.
-- Cambia el modo normal de 1080p con alta tasa al pool Windows y conserva el
-  perfil anterior Tizen/TV como opción experimental.
-- Registra la región y el host seleccionados en `stream-log.txt` para facilitar
-  el diagnóstico de colas.
-
-## Funciones
-
-- Inicio de sesión de Microsoft mediante **código de dispositivo**; no se
-  escribe la contraseña en la consola.
-- Biblioteca con carátulas, favoritos, historial, búsqueda y juego remoto desde
-  una consola Xbox.
-- Estimación en vivo de la cola de xCloud mientras se asigna un servidor.
-- Streaming WebRTC nativo con decodificación H.264 por hardware y renderizado
-  deko3d sin copias adicionales.
-- Audio Opus, video a 60 fps y modos 720p / 1080p / 1080p HQ Windows, además de
-  un perfil HQ Tizen experimental.
-- Bypass geográfico y servidor de xCloud independientes, además de idioma,
-  distribución de botones, vibración, suavizado, volumen y controles de imagen.
-- HUD de rendimiento con bitrate de video, pérdida de paquetes y ping en vivo
-  sobre la ruta WebRTC.
-
-## Requisitos
-
-- Nintendo Switch con el firmware personalizado
-  [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere).
-- Cuenta Microsoft/Xbox. Game Pass es necesario para el catálogo de la
-  suscripción; los juegos propios compatibles con cloud y los free-to-play
-  pueden funcionar sin él.
-- Se recomienda Wi-Fi de 5 GHz o Ethernet mediante el dock.
-
-## Instalación
-
-1. Copia `Light_is_Green.nro` a `sdmc:/switch/` en la tarjeta SD.
-2. Inícialo en **modo título** manteniendo **R** al abrir un juego instalado.
-   El modo applet no ofrece suficiente memoria para decodificar video por
-   hardware.
-3. Introduce el código mostrado por la app en `microsoft.com/link`.
-   Los tokens y datos en caché se guardan en `sdmc:/switch/green-nx/`.
+1. Usa una Nintendo Switch con firmware personalizado
+   [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere), una cuenta
+   Microsoft/Xbox y preferiblemente Wi-Fi de 5 GHz o Ethernet por dock.
+2. Copia `Light_is_Green-v1.0.4.nro` a `sdmc:/switch/`.
+3. Ábrelo en **modo título**, manteniendo **R** al abrir un juego instalado.
+   El modo applet no tiene memoria suficiente para video por hardware.
+4. Ingresa el código mostrado en `microsoft.com/link`.
 
 ### Controles
 
 | Contexto | Controles |
 | --- | --- |
-| Biblioteca | Stick izquierdo / cruceta: mover · **A**: abrir/jugar · **Y**: buscar · **X**: favorito · **ZR**: actualizar · **ZL**: ajustes · **+**: salir |
+| Biblioteca | Stick izquierdo / cruceta: mover · **A**: detalles/jugar · **Y**: buscar · **X**: favorito · **ZR**: actualizar · **ZL**: ajustes · **+**: salir |
 | Ajustes | Izquierda/derecha: cambiar · **A**: abrir/confirmar · **B**: volver |
-| En partida | Controles de Switch: controles Xbox · tocar **••**: panel de imagen/datos · tocar el **símbolo pequeño de Xbox** o pulsar **L3 + R3**: Guide · mantener **-** + **+**: salir |
+| En stream | Toca **••**: panel de imagen/rendimiento · toca el símbolo pequeño de Xbox o pulsa **L3 + R3**: Guide · mantén **−** + **+**: salir del stream |
 
-## Compilación
-
-Compila dentro de la imagen Docker `devkitpro/devkita64`:
+### Compilación
 
 ```sh
-# Compilar una vez las dependencias WebRTC
 bash deps/build-switch.sh
-
-# Compilar la aplicación
 docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 ```
 
-El resultado es `Light_is_Green.nro`. El entorno de desarrollo del núcleo para
-PC se compila con `make -f Makefile.pc`.
+El resultado es `Light_is_Green-v1.0.4.nro`. El entorno de pruebas del núcleo
+para PC se compila con `make -f Makefile.pc`.
 
-### Estructura del código
+### Licencia y avisos de terceros
 
-```text
-src/core/            autenticación, catálogo, HTTP y protocolo xCloud
-src/switch/          interfaz SDL2, carátulas y controles
-src/switch/stream/   WebRTC, RTP, NVDEC, deko3d y motor de audio Opus
-shaders/             shaders de video para deko3d
-deps/                scripts y parches de dependencias para Switch
-romfs/ui/            arte de interfaz
-```
-
-## Software de terceros
-
-| Proyecto | Licencia | Uso |
-| --- | --- | --- |
-| [libpeer](https://github.com/sepfy/libpeer) (con parches) | MIT | WebRTC, ICE, DTLS-SRTP, SCTP |
-| [libsrtp](https://github.com/cisco/libsrtp) | BSD-3 | Cifrado SRTP |
-| [usrsctp](https://github.com/sctplab/usrsctp) | BSD-3 | Canales de datos SCTP |
-| [mbedTLS](https://github.com/Mbed-TLS/mbedtls) | Apache-2.0 | Criptografía TLS y DTLS |
-| [FFmpeg](https://ffmpeg.org) con [NVTEGRA](https://github.com/averne/FFmpeg) | LGPL-2.1+ | Decodificación H.264 por hardware |
-| [deko3d](https://github.com/devkitPro/deko3d) | zlib | Renderizado en GPU |
-| [SDL2](https://libsdl.org), SDL2_ttf, SDL2_image | zlib | Interfaz, controles e imágenes |
-| [Opus](https://opus-codec.org) | BSD-3 | Decodificación de audio |
-| [libcurl](https://curl.se) | curl | HTTPS |
-| [nlohmann/json](https://github.com/nlohmann/json) | MIT | JSON |
-| [devkitPro / libnx](https://devkitpro.org) | varias | Toolchain y APIs del sistema Switch |
-
-## Aviso
-
-Light is Green es un proyecto experimental, no comercial y de afición,
-entregado tal cual para uso personal. No está afiliado, respaldado ni soportado
-por Microsoft o Nintendo. Xbox, Xbox Cloud Gaming y Game Pass son marcas de
-Microsoft. Nintendo Switch es una marca de Nintendo. Debes proporcionar tu
-propia suscripción válida y tu hardware.
-
-## Licencia y créditos
-
-- Licencia: [GPL-3.0](LICENSE)
-- Proyecto original e implementación base: **rmrf404** —
-  [green-nx](https://github.com/rmrf404/green-nx)
-- Fork Light is Green y trabajo de v0.2–v0.7.1: **elzerdodata**
+Light is Green es un proyecto experimental, no comercial y de afición, entregado
+tal cual. No está afiliado, respaldado ni soportado por Microsoft o Nintendo.
+Se distribuye bajo [GPL-3.0](LICENSE); consulta [NOTICE](NOTICE) para los avisos
+de obra modificada y de terceros.

@@ -1,4 +1,4 @@
-// PC test harness for the green-nx core: sign in and list playable games
+// PC test harness for the Light is Green core: sign in and list playable games
 // from the terminal, before any Switch code exists.
 
 #include <chrono>
@@ -15,7 +15,7 @@ namespace {
 
 std::string token_store_path() {
     const char* home = std::getenv("HOME");
-    return std::string(home ? home : ".") + "/.green-nx-tokens.json";
+    return std::string(home ? home : ".") + "/.light-is-green-tokens.json";
 }
 
 int cmd_login(gnx::XboxAuth& auth) {

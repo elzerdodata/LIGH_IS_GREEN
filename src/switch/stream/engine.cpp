@@ -1,9 +1,11 @@
 #include "engine.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstdarg>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <sstream>
@@ -54,6 +56,10 @@ namespace {
 // individual NALUs corrupts the stream, so on overflow we clear and recover
 // with a keyframe instead.
 constexpr size_t kMaxQueuedVideo = 64;
+// Pinned libpeer stores at most ten remote candidates in Agent. Enforce the
+// same bound here after endpoint deduplication so authoritative xHome routes
+// are not silently discarded inside the C library.
+constexpr size_t kMaxRemoteIceCandidates = 10;
 
 struct TierProfile {
     int width, height, bitrate_kbps, fps;
@@ -114,6 +120,21 @@ bool candidate_is_syntactically_valid(const std::string& candidate) {
     if (candidate.rfind("candidate:", 0) != 0 && candidate.rfind("a=candidate:", 0) != 0)
         return false;
     return candidate.find(" typ ") != std::string::npos;
+}
+
+bool candidate_endpoint(const std::string& candidate, std::string* address,
+                        int* port) {
+    std::istringstream fields(candidate);
+    std::array<std::string, 6> parts;
+    for (std::string& part : parts)
+        if (!(fields >> part)) return false;
+
+    char* end = nullptr;
+    unsigned long parsed = std::strtoul(parts[5].c_str(), &end, 10);
+    if (!end || *end != '\0' || parsed == 0 || parsed > 65535) return false;
+    *address = parts[4];
+    *port = static_cast<int>(parsed);
+    return !address->empty();
 }
 
 }  // namespace
@@ -189,10 +210,11 @@ void Engine::start_common(const std::string& title_id, QualityTier tier,
         if (log_file_) std::fclose(log_file_);
 #ifdef __SWITCH__
         // Keep the previous session's log: rotate instead of overwrite.
-        std::remove("sdmc:/switch/green-nx/stream-log-prev.txt");
-        std::rename("sdmc:/switch/green-nx/stream-log.txt",
-                    "sdmc:/switch/green-nx/stream-log-prev.txt");
-        log_file_ = std::fopen("sdmc:/switch/green-nx/stream-log.txt", "w");
+        std::remove("sdmc:/switch/light-is-green/stream-log-prev.txt");
+        std::rename("sdmc:/switch/light-is-green/stream-log.txt",
+                    "sdmc:/switch/light-is-green/stream-log-prev.txt");
+        log_file_ =
+            std::fopen("sdmc:/switch/light-is-green/stream-log.txt", "w");
         // Logging is diagnostic and must not stall the sole RTP socket pump.
         // A synchronous fflush for the once-per-second audio line was enough
         // to produce a small regular video hitch on SD cards. Keep the session
@@ -1043,8 +1065,44 @@ bool Engine::run_peer(GssvSession& session) {
     state_ = EngineState::Negotiating;
     set_status("Negotiating connection...");
 
+    const bool home = !home_server_id_.empty();
+    StreamConfiguration stream_config = session.fetch_stream_configuration();
+    if (stream_config.fetched) {
+        log("session configuration: " +
+            std::to_string(stream_config.stun_servers.size()) +
+            " supported STUN server(s), " +
+            std::to_string(stream_config.direct_endpoints.size()) +
+            " direct endpoint(s)");
+        for (const std::string& server : stream_config.stun_servers)
+            log("  configuration STUN: " + server);
+        if (home) {
+            for (const StreamEndpoint& endpoint :
+                 stream_config.direct_endpoints)
+                log("  xHome direct endpoint: " + endpoint.address + ":" +
+                    std::to_string(endpoint.port));
+        }
+    } else {
+        log("session configuration unavailable; using legacy ICE fallback");
+    }
+
     PeerConfiguration config{};
-    config.ice_servers[0].urls = "stun:stun.l.google.com:19302";
+    constexpr size_t kMaxIceServers =
+        sizeof(config.ice_servers) / sizeof(config.ice_servers[0]);
+    size_t configured_stun = 0;
+    for (const std::string& server : stream_config.stun_servers) {
+        if (configured_stun >= kMaxIceServers) break;
+        config.ice_servers[configured_stun++].urls = server.c_str();
+    }
+    // Preserve the previous known-good STUN server when configuration is
+    // absent, and retain it as a final fallback whenever an array slot remains.
+    constexpr const char* kLegacyStun = "stun:stun.l.google.com:19302";
+    if (configured_stun < kMaxIceServers &&
+        std::find(stream_config.stun_servers.begin(),
+                  stream_config.stun_servers.end(), kLegacyStun) ==
+            stream_config.stun_servers.end())
+        config.ice_servers[configured_stun++].urls = kLegacyStun;
+    log("using " + std::to_string(configured_stun) +
+        " STUN server(s) for local candidate gathering");
     config.audio_codec = CODEC_OPUS;
     config.video_codec = CODEC_H264;
     config.datachannel = DATA_CHANNEL_BINARY;
@@ -1088,7 +1146,6 @@ bool Engine::run_peer(GssvSession& session) {
     // No b=AS/TIAS lines: working clients don't send them; the bitrate cap is
     // declared via clientdevicecapabilities.maxBitrateKbps instead.
     std::string munged = sdp_force_stereo(offer);  // no-op safety net
-    bool home = !home_server_id_.empty();
     if (home) {
         // Keep the known-good Remote Play offer at 720p by default. The beta
         // 1080p path changes only media capabilities after the Android session
@@ -1153,6 +1210,7 @@ bool Engine::run_peer(GssvSession& session) {
     {
         Uint64 gather_deadline =
             SDL_GetTicks64() + (home ? 25000 : 6000);
+        Uint64 first_candidate_at = 0;
         int quiet_polls = 0;
         while (!quit_ && SDL_GetTicks64() < gather_deadline) {
             size_t before = remote.size();
@@ -1168,20 +1226,88 @@ bool Engine::run_peer(GssvSession& session) {
             } catch (const std::exception& error) {
                 log(std::string("ice poll failed: ") + error.what());
             }
+            if (first_candidate_at == 0 && !remote.empty())
+                first_candidate_at = SDL_GetTicks64();
             quiet_polls = remote.size() == before ? quiet_polls + 1 : 0;
             if (!home) {
                 if (!remote.empty() || response_done) break;
-            } else if (!remote.empty() &&
-                       (response_done || quiet_polls >= 4)) {
-                break;
+            } else if (!remote.empty()) {
+                // xHome may pause for more than a second between trickled
+                // candidates.  Four quiet polls alone used to stop collection
+                // after ~1.2 s and could omit the only route that works across
+                // the internet.  Honor the explicit end marker immediately;
+                // otherwise require a four-second stabilization window as well
+                // as the quiet period, still bounded by the 25 s hard cap.
+                const bool stabilized =
+                    first_candidate_at != 0 &&
+                    SDL_GetTicks64() - first_candidate_at >= 4000 &&
+                    quiet_polls >= 4;
+                if (response_done || stabilized) break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
     }
-    // Preserve signaling/Teredo insertion order. The patched libpeer agent
-    // performs endpoint deduplication and routability ranking.
+
+    // The xHome /configuration response exposes the console's direct media
+    // addresses before /ice trickle completes. Working web clients also try
+    // each reported port plus UDP 9002. Add those IPv4-safe routes as
+    // conservative host candidates; configuration parsing already deduplicated
+    // them.
+    if (home) {
+        size_t foundation = 90;
+        for (const StreamEndpoint& endpoint : stream_config.direct_endpoints) {
+            remote.push_back("candidate:" + std::to_string(foundation++) +
+                             " 1 UDP 16777215 " + endpoint.address + " " +
+                             std::to_string(endpoint.port) + " typ host");
+        }
+    }
+    // libpeer checks one remote endpoint at a time, so signaling order is a
+    // direct connection-time decision. Xbox can list placeholder candidates
+    // with priority 1 before the usable public srflx endpoint. Try the highest
+    // priority first while preserving Xbox/Teredo order for equal priorities;
+    // the patched agent still performs endpoint deduplication and moves
+    // unroutable private-LAN candidates to the final tier.
+    std::stable_sort(remote.begin(), remote.end(),
+                     [](const std::string& left, const std::string& right) {
+                         return candidate_priority(left) >
+                                candidate_priority(right);
+                     });
+
+    // Keep only the highest-priority representation of an address:port pair.
+    // This also prevents duplicate /ice and /configuration routes from using
+    // all ten remote slots before the useful WAN endpoint is considered.
+    std::vector<std::string> selected_remote;
+    std::vector<std::string> selected_endpoints;
+    size_t duplicate_endpoints = 0;
+    size_t over_limit = 0;
+    for (std::string& candidate : remote) {
+        std::string address;
+        int port = 0;
+        std::string key;
+        if (candidate_endpoint(candidate, &address, &port))
+            key = address + ":" + std::to_string(port);
+        if (!key.empty() &&
+            std::find(selected_endpoints.begin(), selected_endpoints.end(),
+                      key) != selected_endpoints.end()) {
+            ++duplicate_endpoints;
+            continue;
+        }
+        if (selected_remote.size() >= kMaxRemoteIceCandidates) {
+            ++over_limit;
+            continue;
+        }
+        if (!key.empty()) selected_endpoints.push_back(std::move(key));
+        selected_remote.push_back(std::move(candidate));
+    }
+    remote.swap(selected_remote);
+    if (duplicate_endpoints || over_limit)
+        log("remote candidate selection removed " +
+            std::to_string(duplicate_endpoints) + " duplicate endpoint(s) and " +
+            std::to_string(over_limit) + " candidate(s) above libpeer's limit");
     log("collected " + std::to_string(remote.size()) + " remote candidates");
-    for (const std::string& candidate : remote) log("  remote cand: " + candidate);
+    for (const std::string& candidate : remote)
+        log("  remote cand priority=" +
+            std::to_string(candidate_priority(candidate)) + ": " + candidate);
     for (const std::string& candidate : local_candidates_from_sdp(munged))
         log("  local  cand: " + candidate);
     if (remote.empty()) {
@@ -1461,7 +1587,10 @@ bool Engine::run_peer(GssvSession& session) {
                         }
                         peer_connection_send_remb(peer_, remb_kbps * 1000u);
 #ifdef __SWITCH__
-                        ping_ms = 0;
+                        // RTT comes from the consent-freshness STUN exchange on
+                        // the selected media path. It is independent from the
+                        // audio queue depth (BUF) and from signaling/API time.
+                        ping_ms = peer_connection_get_rtt_ms(peer_);
 #endif
                     }
                 }

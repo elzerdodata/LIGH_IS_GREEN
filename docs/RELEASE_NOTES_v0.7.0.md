@@ -47,6 +47,5 @@ This is a preview release. v0.6.0 remains the recommended stable version.
 
 ## Credits
 
-Light is Green is a GPL-3.0 community fork of
-[green-nx](https://github.com/rmrf404/green-nx), originally created by
-**rmrf404**. Light is Green development is credited to **elzerdodata**.
+These historical v0.x notes are retained for release continuity. Current
+licensing and distribution information is provided in `LICENSE` and `NOTICE`.

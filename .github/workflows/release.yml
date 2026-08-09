@@ -31,11 +31,7 @@ jobs:
           nro="$(find . -maxdepth 1 -type f -name '*.nro' -print -quit)"
           test -n "$nro"
 
-          if [[ "$RELEASE_TAG" == v0.1.* ]]; then
-            asset="green-nx-ZD-$RELEASE_TAG.nro"
-          else
-            asset="Light_is_Green-$RELEASE_TAG.nro"
-          fi
+          asset="Light_is_Green-$RELEASE_TAG.nro"
 
           cp "$nro" "$asset"
           sha256sum "$asset" > "$asset.sha256"

@@ -1,4 +1,4 @@
-// Light_is_Green: community fork of green-nx by rmrf404.
+// Light is Green v1.0 for Nintendo Switch.
 //
 // SDL2 frontend: splash -> device-code sign-in -> game library grid with box
 // art and search -> native WebRTC streaming (see src/switch/stream/).
@@ -9,6 +9,7 @@
 #include <switch.h>
 #endif
 
+#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>  // rmdir: removing an account's directory
 
@@ -44,10 +45,15 @@ using namespace gnx;
 namespace {
 
 #ifdef __SWITCH__
-constexpr const char* kDataDir = "sdmc:/switch/green-nx";
+constexpr const char* kDataDir = "sdmc:/switch/light-is-green";
+constexpr const char* kLegacyDataDir = "sdmc:/switch/green-nx";
 #else
-const std::string kDataDirStr = std::string(getenv("HOME")) + "/.green-nx";
+const std::string kDataDirStr =
+    std::string(getenv("HOME")) + "/.light-is-green";
+const std::string kLegacyDataDirStr =
+    std::string(getenv("HOME")) + "/.green-nx";
 const char* kDataDir = kDataDirStr.c_str();
+const char* kLegacyDataDir = kLegacyDataDirStr.c_str();
 #endif
 
 std::string data_path(const char* leaf) {
@@ -57,7 +63,7 @@ std::string data_path(const char* leaf) {
 // ---- Accounts -------------------------------------------------------------
 // More than one person can use the same console, so each signed-in account
 // owns a directory under users/ holding its tokens and its cached library:
-//   sdmc:/switch/green-nx/users/<id>/{tokens,games,consoles,favorites,history}.json
+//   sdmc:/switch/light-is-green/users/<id>/{tokens,games,consoles,favorites,history}.json
 // Device-wide state (settings, box art, logs) stays at the root, so switching
 // accounts keeps the console's own preferences and never re-downloads covers.
 // users.json is the registry: the known accounts plus which one is active.
@@ -86,6 +92,64 @@ std::string user_path(const char* leaf) {
 const char* const kAccountFiles[] = {"tokens.json", "games.json",
                                      "consoles.json", "favorites.json",
                                      "history.json"};
+
+// v1 owns a new data directory. Import the small account/configuration files
+// from the prior directory exactly once, without moving or overwriting anything.
+// Cover art deliberately stays behind: it is disposable cache data and copying
+// it can make the first v1 launch slow or duplicate a large directory on SD.
+const char* const kDeviceFiles[] = {"settings.json", "server-regions.json",
+                                    "users.json", "consoles-log.txt"};
+
+bool path_exists(const std::string& path) {
+    struct stat status {};
+    return stat(path.c_str(), &status) == 0;
+}
+
+bool directory_exists(const std::string& path) {
+    struct stat status {};
+    return stat(path.c_str(), &status) == 0 && S_ISDIR(status.st_mode);
+}
+
+bool copy_file_if_missing(const std::string& source,
+                          const std::string& destination) {
+    if (path_exists(destination)) return true;
+    std::ifstream input(source, std::ios::binary);
+    if (!input) return false;
+    std::ofstream output(destination, std::ios::binary);
+    if (!output) return false;
+    output << input.rdbuf();
+    return static_cast<bool>(output);
+}
+
+void migrate_legacy_data_if_needed() {
+    mkdir(kDataDir, 0755);
+    if (!directory_exists(kLegacyDataDir)) return;
+
+    const std::string old_root = kLegacyDataDir;
+    const std::string new_root = kDataDir;
+    for (const char* leaf : kDeviceFiles)
+        copy_file_if_missing(old_root + "/" + leaf, new_root + "/" + leaf);
+
+    const std::string old_users = old_root + "/users";
+    if (!directory_exists(old_users)) return;
+    const std::string new_users = new_root + "/users";
+    mkdir(new_users.c_str(), 0755);
+
+    DIR* directory = opendir(old_users.c_str());
+    if (!directory) return;
+    while (dirent* entry = readdir(directory)) {
+        const std::string id = entry->d_name;
+        if (id == "." || id == "..") continue;
+        const std::string old_account = old_users + "/" + id;
+        if (!directory_exists(old_account)) continue;
+        const std::string new_account = new_users + "/" + id;
+        mkdir(new_account.c_str(), 0755);
+        for (const char* leaf : kAccountFiles)
+            copy_file_if_missing(old_account + "/" + leaf,
+                                 new_account + "/" + leaf);
+    }
+    closedir(directory);
+}
 
 void make_account_dir(const std::string& id) {
     mkdir((std::string(kDataDir) + "/users").c_str(), 0755);
@@ -456,6 +520,8 @@ struct App {
     int cursor = 0;
     Uint32 library_focus_started = 0;  // v0.5 card-selection motion
     LibraryTab tab = LibraryTab::All;
+    bool library_sidebar_focused = false;
+    int library_sidebar_cursor = 0;
     std::vector<std::string> favorites;  // title_ids, marked by the user
     std::vector<std::string> history;    // title_ids, most-recent first
     std::atomic<int> load_state{0};  // 0 running, 1 ok, 2 error
@@ -1111,7 +1177,7 @@ std::string keyboard_input(const std::string& initial) {
 #endif
 }
 
-// ---- scenes (layout per docs-design/green-nx-redesign.dc.html) ------------
+// ---- scenes (Light is Green v1.0 native layout) ---------------------------
 
 constexpr int kMargin = 60;    // TV-safe margin on all edges
 constexpr int kFooterH = 84;
@@ -1215,27 +1281,45 @@ void draw_hints(App& app, const std::vector<Hint>& hints,
     }
 }
 
-// Focus system, layer 2+3 of card 1a: 6px kFocus border + two concentric
-// "glow" frames (6px at +6 with 40% alpha, 8px at +14 with 15% alpha).
+// Focus system: a compact animated emerald edge and two cheap translucent
+// frames. This gives the selected game motion without a blur texture or a
+// per-pixel post-process on Switch.
 void draw_focus_frames(App& app, const SDL_Rect& r) {
-    app.gfx.frame(r, gfx::kFocus, 6);
-    app.gfx.frame({r.x - 6, r.y - 6, r.w + 12, r.h + 12},
-                  {gfx::kFocus.r, gfx::kFocus.g, gfx::kFocus.b, 102}, 6);
-    app.gfx.frame({r.x - 14, r.y - 14, r.w + 28, r.h + 28},
-                  {gfx::kFocus.r, gfx::kFocus.g, gfx::kFocus.b, 38}, 8);
+    const float pulse = 0.5f + 0.5f * std::sin(SDL_GetTicks() / 260.0f);
+    app.gfx.frame(r, gfx::kFocus, 4);
+    app.gfx.frame({r.x - 5, r.y - 5, r.w + 10, r.h + 10},
+                  {gfx::kFocus.r, gfx::kFocus.g, gfx::kFocus.b,
+                   static_cast<Uint8>(66 + 54 * pulse)},
+                  4);
+    app.gfx.frame({r.x - 11, r.y - 11, r.w + 22, r.h + 22},
+                  {gfx::kFocus.r, gfx::kFocus.g, gfx::kFocus.b,
+                   static_cast<Uint8>(20 + 30 * pulse)},
+                  5);
 }
 
-// Compact cinematic header shared by the library and secondary screens.
+// Compact command-deck header shared by the library and secondary screens.
 void draw_header(App& app) {
     app.gfx.fill({0, 0, gfx::kWidth, 108}, gfx::kBar);
-    app.gfx.fill({0, 106, gfx::kWidth, 2}, {34, 67, 70, 170});
-    SDL_Rect icon = {kMargin, 18, 72, 72};
+    app.gfx.fill({0, 104, gfx::kWidth, 2}, {40, 118, 103, 165});
+    app.gfx.fill({0, 106, gfx::kWidth, 2}, {0, 0, 0, 96});
+    SDL_Rect icon = {kMargin, 16, 76, 76};
     app.gfx.draw_brand_icon(icon);
-    app.gfx.text("Light is Green", kMargin + 92, 23, gfx::FontSize::Body,
+    app.gfx.text("Light is Green", kMargin + 98, 20, gfx::FontSize::Body,
                  gfx::kText);
-    app.gfx.text(std::string("v") + GNX_VERSION, kMargin + 92, 65,
-                 gfx::FontSize::Small,
-                 gfx::kFocus);
+    app.gfx.text(std::string("V") + GNX_VERSION + "  /  CLOUD LIBRARY",
+                 kMargin + 98, 64, gfx::FontSize::Small, gfx::kFocus);
+
+    const bool signed_in = !app.gamertag.empty();
+    const std::string player = signed_in ? app.gamertag : "PLAYER";
+    const std::string status = signed_in ? "CLOUD READY" : "SIGN IN";
+    const int status_width = app.gfx.text_width(status, gfx::FontSize::Small);
+    const int player_width = app.gfx.text_width(player, gfx::FontSize::Small);
+    const int right = gfx::kWidth - kMargin;
+    app.gfx.fill({right - 16, 36, 9, 9}, signed_in ? gfx::kFocus : gfx::kFaint);
+    app.gfx.text(status, right - 30 - status_width, 56, gfx::FontSize::Small,
+                 signed_in ? gfx::kFocus : gfx::kFaint);
+    app.gfx.text(player, right - player_width, 20, gfx::FontSize::Small,
+                 gfx::kText);
 }
 
 // Fallback cover: per-title dark hue + big translucent initials, so a grid
@@ -1284,12 +1368,11 @@ void draw_splash(App& app) {
     if (elapsed > 300) {
         app.gfx.text("Light is Green", x0 + 156, 408, gfx::FontSize::Huge,
                      gfx::kText);
-        app.gfx.text_centered("Xbox Cloud Gaming for Nintendo Switch",
+        app.gfx.text_centered("Cloud gaming for Nintendo Switch",
                               gfx::kWidth / 2, 548, gfx::FontSize::Note,
                               gfx::kTextDim);
-        app.gfx.text_centered("Community fork of green-nx by rmrf404",
-                              gfx::kWidth / 2, 594, gfx::FontSize::Small,
-                              gfx::kFaint);
+        app.gfx.text_centered("OFFICIAL V1.0", gfx::kWidth / 2, 594,
+                              gfx::FontSize::Small, gfx::kFocus);
     }
     // The bar IS the boot indicator: no spinner (card 1b).
     SDL_Rect track = {gfx::kWidth / 2 - 180, 648, 360, 6};
@@ -1386,23 +1469,33 @@ void draw_signin(App& app) {
     draw_hints(app, {{"ZL", "Settings · region bypass"}, {"B", "Exit"}});
 }
 
-// v0.8.1 library geometry: 18 games per page in a readable 6-by-3 grid.
-// A normal card reserves a true 16:9 viewport (272x153) and two title lines.
+// v1.0.3 sidebar preview: the persistent controller-first rail replaces both
+// top navigation rows. The content deck keeps three complete rows and six
+// full-bleed cards per row without crowding the focus glow or touch targets.
 constexpr int kColumns = 6;
-constexpr int kCardW = 272;
-constexpr int kCardH = 216;
-constexpr int kGapX = 24;
-constexpr int kGapY = 16;
-constexpr int kGridX = 72;
+constexpr int kCardW = 250;
+constexpr int kCardH = 214;
+constexpr int kGapX = 12;
+constexpr int kGapY = 12;
+constexpr int kGridX = 292;
 constexpr int kGridY = 280;
 constexpr int kRowsVisible = 3;
 constexpr int kPageSize = kColumns * kRowsVisible;
-constexpr int kFilterTabsX = 560;
-constexpr int kFilterTabsY = 126;
 constexpr SDL_Rect kLibraryHero{60, 196, 1800, 450};
-constexpr SDL_Rect kLibraryPanel{60, 196, 1800, 768};
-constexpr SDL_Rect kLibraryNav{798, 18, 324, 72};
-constexpr SDL_Rect kLibrarySettingsTab{960, 24, 152, 60};
+constexpr SDL_Rect kLibraryPanel{276, 124, 1584, 840};
+constexpr SDL_Rect kLibrarySidebar{34, 124, 226, 840};
+constexpr int kSidebarItemX = 48;
+constexpr int kSidebarItemW = 198;
+constexpr int kSidebarItemH = 66;
+constexpr int kSidebarTabY = 188;
+constexpr int kSidebarItemGap = 12;
+constexpr int kSidebarSearchY = 612;
+constexpr int kSidebarSettingsY = 690;
+constexpr int kConsoleGridX = 292;
+constexpr int kConsoleGridY = 280;
+constexpr int kConsoleCardW = 500;
+constexpr int kConsoleCardH = 380;
+constexpr int kConsoleGapX = 30;
 constexpr Uint32 kLibraryFocusMotionMs = 220;
 
 float library_focus_motion(const App& app) {
@@ -1435,6 +1528,127 @@ const char* kPacingLabels[kPacingLevels] = {
 const char* kMappingLabels[2] = {"Positional (Switch A = Xbox B)",
                                  "Match labels (Switch A = Xbox A)"};
 const char* kSharpnessLabels[4] = {"Off", "Low", "Medium", "High"};
+
+int library_tab_count(const App& app) {
+    return app.consoles.empty() ? kGameTabCount : kTabCount;
+}
+
+SDL_Rect library_sidebar_tab_rect(int index) {
+    return {kSidebarItemX,
+            kSidebarTabY + index * (kSidebarItemH + kSidebarItemGap),
+            kSidebarItemW, kSidebarItemH};
+}
+
+SDL_Rect library_sidebar_action_rect(int index, int tabs) {
+    return {kSidebarItemX,
+            index == tabs ? kSidebarSearchY : kSidebarSettingsY,
+            kSidebarItemW, kSidebarItemH};
+}
+
+void activate_library_tab(App& app, int index) {
+    const int tabs = library_tab_count(app);
+    if (index < 0 || index >= tabs) return;
+    app.tab = static_cast<LibraryTab>(index);
+    app.cursor = 0;
+    app.console_cursor = 0;
+    app.library_sidebar_cursor = index;
+    apply_filter(app);
+}
+
+void draw_library_sidebar_item(App& app, const SDL_Rect& item,
+                               const char* label, bool active, bool focused,
+                               const char* shortcut = nullptr) {
+    const gfx::Color idle = {4, 24, 26, 224};
+    const gfx::Color selected = {0, 121, 83, 116};
+    app.gfx.fill(item, focused ? gfx::kSurfaceHi : active ? selected : idle);
+    app.gfx.frame(item, focused ? gfx::kFocus
+                                : active ? gfx::Color{45, 244, 165, 165}
+                                         : gfx::Color{43, 104, 94, 125},
+                  focused ? 3 : 1);
+    app.gfx.fill({item.x + 16, item.y + 29, 12, 12},
+                 active || focused ? gfx::kFocus : gfx::kFaint);
+    // Keep localized/long labels inside the rail and away from the shortcut.
+    SDL_Rect label_clip = {item.x + 40, item.y + 4,
+                           item.w - 52 - (shortcut ? 34 : 0), item.h - 8};
+    SDL_RenderSetClipRect(app.gfx.renderer(), &label_clip);
+    app.gfx.text(label, item.x + 44, item.y + 19, gfx::FontSize::Small,
+                 active || focused ? gfx::kText : gfx::kTextDim);
+    SDL_RenderSetClipRect(app.gfx.renderer(), nullptr);
+    if (shortcut) {
+        const int shortcut_w =
+            app.gfx.text_width(shortcut, gfx::FontSize::Small);
+        app.gfx.text(shortcut, item.x + item.w - shortcut_w - 16,
+                     item.y + 19, gfx::FontSize::Small,
+                     focused ? gfx::kFocus : gfx::kFaint);
+    }
+    if (active)
+        app.gfx.fill({item.x + item.w - 6, item.y + 12, 4, item.h - 24},
+                     gfx::kFocus);
+}
+
+void draw_library_sidebar(App& app, bool settings_active = false,
+                          bool loading = false) {
+    app.gfx.fill(kLibrarySidebar, {2, 14, 15, 232});
+    app.gfx.frame(kLibrarySidebar, {43, 104, 94, 170}, 2);
+    app.gfx.text("BROWSE", kSidebarItemX + 4, 145, gfx::FontSize::Small,
+                 gfx::kFocus);
+
+    // Loading runs concurrently with the catalog worker. Use a static rail in
+    // that scene so rendering never reads vectors while the worker replaces
+    // them.
+    const int tabs = loading ? kGameTabCount : library_tab_count(app);
+    for (int i = 0; i < tabs; ++i) {
+        draw_library_sidebar_item(
+            app, library_sidebar_tab_rect(i), kTabNames[i],
+            !loading && !settings_active && static_cast<int>(app.tab) == i,
+            !loading && !settings_active && app.library_sidebar_focused &&
+                app.library_sidebar_cursor == i);
+    }
+
+    app.gfx.fill({kSidebarItemX + 8, 600, kSidebarItemW - 16, 2},
+                 {43, 104, 94, 130});
+    const int search_index = tabs;
+    const int settings_index = tabs + 1;
+    draw_library_sidebar_item(
+        app, library_sidebar_action_rect(search_index, tabs), "Search",
+        !loading && !settings_active && !app.query.empty(),
+        !loading && !settings_active && app.library_sidebar_focused &&
+            app.library_sidebar_cursor == search_index,
+        "Y");
+    draw_library_sidebar_item(
+        app, library_sidebar_action_rect(settings_index, tabs), "Settings",
+        !loading && settings_active,
+        !loading && !settings_active && app.library_sidebar_focused &&
+            app.library_sidebar_cursor == settings_index,
+        "ZL");
+
+    SDL_Rect status = {kSidebarItemX, 790, kSidebarItemW, 150};
+    app.gfx.fill(status, {4, 31, 31, 224});
+    app.gfx.frame(status, {43, 104, 94, 145}, 1);
+    app.gfx.fill({status.x + 18, status.y + 22, 12, 12}, gfx::kFocus);
+    SDL_Rect status_title_clip = {status.x + 40, status.y + 4,
+                                  status.w - 54, 42};
+    SDL_RenderSetClipRect(app.gfx.renderer(), &status_title_clip);
+    app.gfx.text(loading ? "SYNCING" : "CLOUD READY", status.x + 44,
+                 status.y + 10, gfx::FontSize::Small, gfx::kFocus);
+    SDL_RenderSetClipRect(app.gfx.renderer(), nullptr);
+    if (loading) {
+        app.gfx.text("Xbox library", status.x + 18, status.y + 57,
+                     gfx::FontSize::Small, gfx::kTextDim);
+        app.gfx.text("Please wait", status.x + 18, status.y + 101,
+                     gfx::FontSize::Small, gfx::kText);
+        return;
+    }
+    const char* compact_quality = app.settings.quality == 0 ? "720p"
+                                  : app.settings.quality == 3 ? "1080p · Tizen"
+                                  : app.settings.quality == 2 ? "1080p · HQ"
+                                                               : "1080p";
+    app.gfx.text(compact_quality, status.x + 18, status.y + 57,
+                 gfx::FontSize::Small, gfx::kTextDim);
+    app.gfx.text(std::to_string(app.visible.size()) + " games",
+                 status.x + 18, status.y + 101, gfx::FontSize::Small,
+                 gfx::kText);
+}
 
 std::string selected_game_meta(const App& app, const Game& game) {
     std::string meta = "Xbox Cloud Gaming · ";
@@ -1613,9 +1827,14 @@ const gfx::Color kSkeleton[6] = {{22, 27, 36}, {20, 24, 33}, {18, 21, 29},
 
 void draw_loading(App& app) {
     draw_header(app);
-    app.gfx.fill({kMargin, 124, 420, 54}, gfx::kSurface);
-    app.gfx.fill(kLibraryPanel, {7, 19, 23, 220});
-    app.gfx.frame(kLibraryPanel, {35, 91, 82, 120}, 2);
+    draw_library_sidebar(app, false, true);
+    app.gfx.fill(kLibraryPanel, {2, 14, 15, 214});
+    app.gfx.frame(kLibraryPanel, {43, 104, 94, 155}, 2);
+    SDL_Rect status_deck = {kGridX, 142, 1560, 104};
+    app.gfx.fill(status_deck, {7, 31, 31, 232});
+    app.gfx.frame(status_deck, {43, 104, 94, 185}, 1);
+    app.gfx.text("SYNCING LIBRARY", status_deck.x + 24, status_deck.y + 34,
+                 gfx::FontSize::Small, gfx::kFocus);
     for (int slot = 0; slot < kPageSize; ++slot) {
         int column = slot % kColumns;
         int row = slot / kColumns;
@@ -1623,9 +1842,12 @@ void draw_loading(App& app) {
                       kGridY + row * (kCardH + kGapY), kCardW, kCardH},
                      kSkeleton[slot % 6]);
     }
-    app.gfx.spinner(gfx::kWidth - kMargin - 20, 216, SDL_GetTicks());
-    app.gfx.text_centered(app.status, gfx::kWidth / 2, 210,
-                          gfx::FontSize::Note, gfx::kTextDim);
+    app.gfx.spinner(status_deck.x + status_deck.w - 32,
+                    status_deck.y + status_deck.h / 2, SDL_GetTicks());
+    app.gfx.text_centered(app.status,
+                           status_deck.x + status_deck.w / 2,
+                           status_deck.y + 35,
+                           gfx::FontSize::Note, gfx::kTextDim);
 }
 
 // Remove one complete UTF-8 code point from the end. This prevents a title
@@ -1689,12 +1911,14 @@ std::vector<std::string> wrap_library_title(App& app,
 }
 
 void draw_library_title_marquee(App& app, const std::string& title,
-                                const SDL_Rect& box) {
+                                 const SDL_Rect& box,
+                                 gfx::FontSize size = gfx::FontSize::Small,
+                                 gfx::Color color = gfx::kText) {
     SDL_Renderer* renderer = app.gfx.renderer();
     SDL_RenderSetClipRect(renderer, &box);
-    const int width = app.gfx.text_width(title, gfx::FontSize::Small);
+    const int width = app.gfx.text_width(title, size);
     if (width <= box.w) {
-        app.gfx.text(title, box.x, box.y, gfx::FontSize::Small, gfx::kText);
+        app.gfx.text(title, box.x, box.y, size, color);
     } else {
         const int overflow = width - box.w;
         const int pause = 90;  // 1.5 s at the 60 Hz-oriented tick division.
@@ -1710,14 +1934,25 @@ void draw_library_title_marquee(App& app, const std::string& title,
             offset = travel;
         else
             offset = 2 * pause + 2 * travel - phase;
-        app.gfx.text(title, box.x - offset, box.y, gfx::FontSize::Small,
-                     gfx::kText);
+        app.gfx.text(title, box.x - offset, box.y, size, color);
     }
     SDL_RenderSetClipRect(renderer, nullptr);
 }
 
-// One library card. Artwork uses aspect-contain, so the complete source image
-// remains visible. Titles are measured by pixels and wrapped into two lines.
+void draw_centered_clipped_text(App& app, const std::string& text,
+                                const SDL_Rect& box, int y,
+                                gfx::FontSize size, gfx::Color color) {
+    SDL_Renderer* renderer = app.gfx.renderer();
+    SDL_RenderSetClipRect(renderer, &box);
+    app.gfx.text_centered(text, box.x + box.w / 2, y, size, color);
+    SDL_RenderSetClipRect(renderer, nullptr);
+}
+
+// Professional full-bleed library card. Portrait covers are intentionally
+// cropped only in this teaser grid; the detail screen still uses aspect-
+// contain so the complete source image remains available. A dark title scrim
+// keeps two measured lines readable without recreating the large black bars
+// produced by letterboxing.
 void draw_card(App& app, const Game& game, const SDL_Rect& card,
                bool focused) {
     SDL_Rect dst = card;
@@ -1726,27 +1961,38 @@ void draw_card(App& app, const Game& game, const SDL_Rect& card,
         dst = scale_about_center(card, scale);
     }
 
-    app.gfx.fill(dst, gfx::kSurface);
-    const int artwork_height = std::min(dst.h - 58, (dst.w * 9) / 16);
-    SDL_Rect artwork = {dst.x, dst.y, dst.w, artwork_height};
     SDL_Texture* cover = app.covers->get(game.title_id, game.box_art_url);
     if (cover)
-        app.gfx.draw_texture_contain(cover, artwork);
+        app.gfx.draw_texture_cover(cover, dst);
     else
-        draw_cover_fallback(app, game, artwork, gfx::FontSize::Title);
+        draw_cover_fallback(app, game, dst, gfx::FontSize::Title);
 
-    SDL_Rect title_area = {dst.x, artwork.y + artwork.h, dst.w,
-                           dst.h - artwork.h};
-    app.gfx.fill(title_area, focused ? gfx::kSurfaceHi : gfx::kSurface);
+    // Two inexpensive translucent bands create a readable gradient transition
+    // without blur textures or render targets. The opaque part is deliberately
+    // shallow: the cover still occupies the whole visual card.
+    SDL_Rect title_fade = {dst.x, dst.y + dst.h - 80, dst.w, 16};
+    SDL_Rect title_area = {dst.x, dst.y + dst.h - 64, dst.w, 64};
+    app.gfx.fill(title_fade, focused ? gfx::Color{2, 28, 27, 118}
+                                     : gfx::Color{1, 10, 13, 104});
+    app.gfx.fill(title_area, focused ? gfx::Color{3, 31, 29, 240}
+                                     : gfx::Color{2, 14, 17, 232});
+    app.gfx.fill({title_area.x + 10, title_area.y,
+                  title_area.w - 20, 2},
+                 focused ? gfx::kFocus : gfx::Color{43, 104, 94, 174});
     const std::string& label = game.name.empty() ? game.title_id : game.name;
     const std::vector<std::string> lines =
         wrap_library_title(app, label, std::max(1, dst.w - 24));
-    int line_y = title_area.y + 3;
+    int line_y = title_area.y + 6;
     for (size_t i = 0; i < lines.size() && i < 2; ++i) {
         app.gfx.text(lines[i], dst.x + 12, line_y, gfx::FontSize::Small,
                      gfx::kText);
-        line_y += 27;
+        line_y += 25;
     }
+
+    // Draw the edge after the artwork and scrim so it cannot disappear below
+    // a full-bleed texture.
+    app.gfx.frame(dst, focused ? gfx::kFocus : gfx::Color{43, 104, 94, 150},
+                  focused ? 2 : 1);
 
     if (is_favorite(app, game.title_id)) {
         SDL_Rect badge = {dst.x + 8, dst.y + 8, 36, 36};
@@ -1786,7 +2032,7 @@ void draw_selected_game_info(App& app, const Game& game) {
 
     const std::string& raw_title =
         game.name.empty() ? game.title_id : game.name;
-    std::string title = raw_title.substr(0, 40);
+    std::string title = raw_title;
     std::string meta = selected_game_meta(app, game);
     int text_x = kLibraryHero.x + 42;
     app.gfx.text("FEATURED", text_x, kLibraryHero.y + 190 + slide,
@@ -1815,19 +2061,24 @@ void draw_selected_game_info(App& app, const Game& game) {
 void draw_empty_state(App& app, const std::string& glyph, gfx::Color glyph_col,
                       const std::string& title, const std::string& pre,
                       const char* chip_key, const std::string& post) {
+    const int content_center = kLibraryPanel.x + kLibraryPanel.w / 2;
     if (!glyph.empty()) {
-        SDL_Rect box = {gfx::kWidth / 2 - 60, 380, 120, 120};
+        SDL_Rect box = {content_center - 60, 380, 120, 120};
         app.gfx.fill(box, gfx::kSurface);
         app.gfx.text_centered(glyph, box.x + 60, box.y + 28,
                               gfx::FontSize::Title, glyph_col);
     }
-    app.gfx.text_centered(title, gfx::kWidth / 2, 540, gfx::FontSize::Body,
+    SDL_Rect title_clip = {kLibraryPanel.x + 48, 522,
+                           kLibraryPanel.w - 96, 64};
+    SDL_RenderSetClipRect(app.gfx.renderer(), &title_clip);
+    app.gfx.text_centered(title, content_center, 540, gfx::FontSize::Body,
                           gfx::kText);
+    SDL_RenderSetClipRect(app.gfx.renderer(), nullptr);
     int pre_w = app.gfx.text_width(pre, gfx::FontSize::Note);
     int post_w = app.gfx.text_width(post, gfx::FontSize::Note);
     int cw = chip_key ? chip_width(app, chip_key) : 0;
     int total = pre_w + (chip_key ? 14 + cw + 14 : 0) + post_w;
-    int x = (gfx::kWidth - total) / 2;
+    int x = content_center - total / 2;
     x += app.gfx.text(pre, x, 616, gfx::FontSize::Note, gfx::kTextDim);
     if (chip_key) {
         draw_chip(app, chip_key, x + 14, 612, false);
@@ -1872,7 +2123,8 @@ void draw_empty_state(App& app, const std::string& glyph, gfx::Color glyph_col,
         for (int i = 0; i < static_cast<int>(app.consoles.size()) && i < 3;
              ++i) {
             const HomeConsole& console = app.consoles[i];
-            bool focused = i == app.console_cursor;
+            bool focused = i == app.console_cursor &&
+                           !app.library_sidebar_focused;
             SDL_Rect card = {kGridX + i * (560 + 56), 300, 560, 380};
             app.gfx.fill(card, focused ? gfx::kSurfaceHi : gfx::kSurface);
             SDL_Rect icon = {card.x + 48, card.y + 56, 72, 72};
@@ -2000,89 +2252,38 @@ void draw_empty_state(App& app, const std::string& glyph, gfx::Color glyph_col,
                      {"+", "Exit"}});
 }
 
-// v0.5.1 library: content-first 8-by-3 grid using only the stable v0.4
-// catalog fields (name and cover). A opens the existing detail screen.
+// v1.0.3 library: one persistent navigation hierarchy on the left, with the
+// content deck and its three grid rows on the right. Shoulder shortcuts remain
+// available, but the rail is also reachable by pressing Left from column zero.
 void draw_library(App& app) {
     draw_header(app);
-
-    app.gfx.fill(kLibraryNav, {10, 20, 27, 238});
-    const char* primary_labels[2] = {"Library", "Settings"};
-    for (int i = 0; i < 2; ++i) {
-        SDL_Rect item = {kLibraryNav.x + 6 + i * 156,
-                         kLibraryNav.y + 6, 152, 60};
-        if (i == 0) {
-            app.gfx.fill(item, {16, 124, 93, 104});
-            app.gfx.frame(item, {57, 224, 160, 150}, 2);
-        }
-        app.gfx.text_centered(primary_labels[i], item.x + item.w / 2,
-                              item.y + 13, gfx::FontSize::Small,
-                              i == 0 ? gfx::kFocus : gfx::kTextDim);
-    }
-
-    std::string player = app.gamertag.empty() ? "Player" : app.gamertag;
-    int player_right = gfx::kWidth - kMargin - 54;
-    app.gfx.text(player,
-                 player_right -
-                     app.gfx.text_width(player, gfx::FontSize::Small),
-                 21, gfx::FontSize::Small, gfx::kText);
-    const std::string ready = "CLOUD READY";
-    app.gfx.text(ready,
-                 player_right -
-                     app.gfx.text_width(ready, gfx::FontSize::Small),
-                 56, gfx::FontSize::Small, gfx::kFocus);
-    app.gfx.fill({gfx::kWidth - kMargin - 38, 28, 38, 38}, gfx::kAccent);
-    app.gfx.frame({gfx::kWidth - kMargin - 42, 24, 46, 46},
-                  {57, 224, 160, 110}, 3);
-
-    SDL_Rect search = {kMargin, 124, 420, 54};
-    app.gfx.fill(search, {18, 31, 38, 232});
-    app.gfx.frame(search, {49, 69, 77, 180}, 2);
-    app.gfx.text("Y", search.x + 20, search.y + 10,
-                 gfx::FontSize::Small, gfx::kFocus);
-    app.gfx.text(app.query.empty() ? "Search your library" : app.query,
-                 search.x + 58, search.y + 10, gfx::FontSize::Small,
-                 app.query.empty() ? gfx::kTextDim : gfx::kText);
-
-    int tabs = app.consoles.empty() ? kGameTabCount : kTabCount;
-    int tx = kFilterTabsX;
-    app.gfx.text("L/R", tx - 76, kFilterTabsY + 8,
-                 gfx::FontSize::Small, gfx::kFaint);
-    for (int t = 0; t < tabs; ++t) {
-        bool active = static_cast<int>(app.tab) == t;
-        int width = app.gfx.text_width(kTabNames[t], gfx::FontSize::Small);
-        SDL_Rect pill = {tx - 16, kFilterTabsY, width + 32, 48};
-        if (active) {
-            app.gfx.fill(pill, {16, 124, 93, 92});
-            app.gfx.frame(pill, {57, 224, 160, 140}, 2);
-        }
-        app.gfx.text(kTabNames[t], tx, kFilterTabsY + 8,
-                     gfx::FontSize::Small,
-                     active ? gfx::kText : gfx::kFaint);
-        tx += width + 50;
-    }
-
-    std::string cloud = "xCloud · ";
-    cloud += kQualityLabels[app.settings.quality];
-    int cloud_width = app.gfx.text_width(cloud, gfx::FontSize::Small);
-    int cloud_x = gfx::kWidth - kMargin - cloud_width;
-    app.gfx.fill({cloud_x - 22, 145, 10, 10}, gfx::kFocus);
-    app.gfx.text(cloud, cloud_x, 133, gfx::FontSize::Small,
-                 gfx::kTextDim);
+    app.gfx.fill(kLibraryPanel, {2, 14, 15, 214});
+    app.gfx.frame(kLibraryPanel, {43, 104, 94, 155}, 2);
+    draw_library_sidebar(app);
 
     if (app.tab == LibraryTab::Consoles) {
         for (int i = 0; i < static_cast<int>(app.consoles.size()) && i < 3;
              ++i) {
             const HomeConsole& console = app.consoles[i];
-            bool focused = i == app.console_cursor;
-            SDL_Rect card = {kMargin + i * 620, 270, 560, 380};
+            bool focused = i == app.console_cursor &&
+                           !app.library_sidebar_focused;
+            SDL_Rect card = {kConsoleGridX + i * (kConsoleCardW + kConsoleGapX),
+                             kConsoleGridY, kConsoleCardW, kConsoleCardH};
             app.gfx.fill(card, focused ? gfx::kSurfaceHi : gfx::kSurface);
-            SDL_Rect icon = {card.x + 48, card.y + 56, 72, 72};
-            app.gfx.fill(icon, focused ? gfx::kAccent : gfx::kChip);
-            app.gfx.text_centered("X", icon.x + 36, icon.y + 14,
-                                  gfx::FontSize::Body, gfx::kText);
-            app.gfx.text(console.name.empty() ? "Your Xbox" : console.name,
-                         card.x + 48, card.y + 164, gfx::FontSize::Body,
-                         gfx::kText);
+            app.gfx.frame(card, focused ? gfx::kFocus
+                                        : gfx::Color{43, 104, 94, 145},
+                          focused ? 3 : 1);
+            SDL_Rect icon = {card.x + 40, card.y + 46, 88, 88};
+            app.gfx.fill(icon, {5, 34, 33, 238});
+            app.gfx.frame(icon, focused ? gfx::kFocus : gfx::kChipEdge, 2);
+            app.gfx.draw_brand_icon({icon.x + 10, icon.y + 10,
+                                     icon.w - 20, icon.h - 20});
+            const std::string console_name =
+                console.name.empty() ? "Your Xbox" : console.name;
+            draw_library_title_marquee(
+                app, console_name,
+                {card.x + 40, card.y + 164, card.w - 80, 48},
+                gfx::FontSize::Body);
             app.gfx.text("Remote play from", card.x + 48, card.y + 220,
                          gfx::FontSize::Note, gfx::kTextDim);
             app.gfx.text(console.console_type, card.x + 48, card.y + 260,
@@ -2133,18 +2334,23 @@ void draw_library(App& app) {
     app.cursor = std::clamp(app.cursor, 0,
                             static_cast<int>(app.visible.size()) - 1);
     const Game& selected = app.games[app.visible[app.cursor]];
-    app.gfx.fill(kLibraryPanel, {3, 13, 17, 210});
-    app.gfx.frame(kLibraryPanel, {35, 91, 82, 155}, 2);
+    SDL_Rect command_deck = {kGridX, 142, 1560, 104};
+    app.gfx.fill(command_deck, {7, 31, 31, 232});
+    app.gfx.frame(command_deck, {43, 104, 94, 185}, 1);
 
     const char* section = app.tab == LibraryTab::Favorites
                               ? "Favorites"
-                          : app.tab == LibraryTab::History
-                              ? "Recently played"
-                          : app.tab == LibraryTab::OwnedFree
-                              ? "Stream Your Own Game & free-to-play"
-                              : "All games";
-    app.gfx.text(section, kMargin + 20, 212, gfx::FontSize::Note,
-                 gfx::kText);
+                           : app.tab == LibraryTab::History
+                               ? "Recently played"
+                           : app.tab == LibraryTab::OwnedFree
+                               ? "Owned + Free"
+                               : "All games";
+    app.gfx.text(section, command_deck.x + 24, command_deck.y + 17,
+                 gfx::FontSize::Small,
+                 gfx::kFocus);
+    app.gfx.fill({command_deck.x + 214, command_deck.y + 14, 2,
+                  command_deck.h - 20},
+                 {43, 104, 94, 190});
     int page_start = (app.cursor / kPageSize) * kPageSize;
     int page_number = page_start / kPageSize + 1;
     int page_count =
@@ -2153,15 +2359,28 @@ void draw_library(App& app) {
                         std::to_string(page_number) + "/" +
                         std::to_string(page_count);
     app.gfx.text(count,
-                 gfx::kWidth - kMargin -
+                 command_deck.x + command_deck.w - 24 -
                      app.gfx.text_width(count, gfx::FontSize::Small),
-                 216, gfx::FontSize::Small, gfx::kFocus);
+                 command_deck.y + 58, gfx::FontSize::Small, gfx::kFocus);
 
     const std::string& selected_label =
         selected.name.empty() ? selected.title_id : selected.name;
-    SDL_Rect selected_title_box = {kMargin + 20, 242,
-                                   gfx::kWidth - 2 * kMargin - 40, 32};
+    SDL_Rect selected_title_box = {command_deck.x + 244,
+                                   command_deck.y + 12, 650, 32};
     draw_library_title_marquee(app, selected_label, selected_title_box);
+    draw_library_title_marquee(
+        app, selected_game_meta(app, selected),
+        {command_deck.x + 244, command_deck.y + 55, 650, 30},
+        gfx::FontSize::Small, gfx::kTextDim);
+    app.gfx.text("A  DETAILS", command_deck.x + 930,
+                 command_deck.y + 17, gfx::FontSize::Small,
+                 gfx::kText);
+    app.gfx.text(is_favorite(app, selected.title_id) ? "X  PINNED"
+                                                      : "X  FAVORITE",
+                 command_deck.x + 1120, command_deck.y + 17,
+                 gfx::FontSize::Small,
+                 is_favorite(app, selected.title_id) ? gfx::kWarn
+                                                      : gfx::kTextDim);
 
     int focused_slot = app.cursor - page_start;
     for (int slot = 0; slot < kPageSize; ++slot) {
@@ -2179,7 +2398,9 @@ void draw_library(App& app) {
     SDL_Rect focused_card = {kGridX + focused_column * (kCardW + kGapX),
                              kGridY + focused_row * (kCardH + kGapY),
                              kCardW, kCardH};
-    draw_card(app, selected, focused_card, true);
+    // Exactly one control owns the focus glow. While the rail is active the
+    // selected game remains the current item, but its card is visually idle.
+    draw_card(app, selected, focused_card, !app.library_sidebar_focused);
 
     draw_hints(app, {{"A", "Details", true},
                      {"X", "Favorite"},
@@ -2197,12 +2418,19 @@ void draw_detail(App& app) {
         return;
     const Game& game = app.games[app.detail_index];
 
-    SDL_Rect cover_rect = {kGridX, 120, 520, 780};
+    draw_header(app);
+    SDL_Rect stage = {kMargin, 132, gfx::kWidth - 2 * kMargin, 790};
+    app.gfx.fill(stage, {2, 14, 15, 220});
+    app.gfx.frame(stage, {43, 104, 94, 170}, 2);
+
+    SDL_Rect cover_rect = {1240, 180, 500, 660};
+    app.gfx.fill(cover_rect, gfx::kSurface);
     SDL_Texture* cover = app.covers->get(game.title_id, game.box_art_url);
     if (cover)
-        app.gfx.draw_texture(cover, cover_rect);
+        app.gfx.draw_texture_contain(cover, cover_rect);
     else
         draw_cover_fallback(app, game, cover_rect, gfx::FontSize::Huge);
+    app.gfx.frame(cover_rect, {45, 244, 165, 145}, 2);
     bool fav = is_favorite(app, game.title_id);
     if (fav) {
         SDL_Rect badge = {cover_rect.x + 12, cover_rect.y + 12, 56, 56};
@@ -2211,20 +2439,24 @@ void draw_detail(App& app) {
                               gfx::FontSize::Body, gfx::kBg);
     }
 
-    int rx = 790;
+    int rx = 120;
     const std::string& title = game.name.empty() ? game.title_id : game.name;
-    app.gfx.text(title.substr(0, 34), rx, 150, gfx::FontSize::Title,
-                 gfx::kText);
+    app.gfx.text("GAME DETAILS", rx, 170, gfx::FontSize::Small,
+                 gfx::kFocus);
+    draw_library_title_marquee(app, title, {rx, 210, 1040, 70},
+                               gfx::FontSize::Title);
 
     // Meta chips: kSurface pills with XS text.
     int cx2 = rx;
     auto meta_chip = [&](const std::string& label, gfx::Color color) {
         int w = app.gfx.text_width(label, gfx::FontSize::Small) + 36;
-        app.gfx.fill({cx2, 232, w, 44}, gfx::kSurface);
-        app.gfx.text(label, cx2 + 18, 238, gfx::FontSize::Small, color);
+        app.gfx.fill({cx2, 310, w, 44}, gfx::kSurface);
+        app.gfx.frame({cx2, 310, w, 44}, {43, 104, 94, 145}, 1);
+        app.gfx.text(label, cx2 + 18, 316, gfx::FontSize::Small, color);
         cx2 += w + 20;
     };
-    meta_chip("Xbox Cloud Gaming", gfx::kTextDim);
+    meta_chip(game.available_on_f2p ? "OWNED / FREE" : "GAME PASS",
+              gfx::kTextDim);
     meta_chip(kQualityLabels[app.settings.quality], gfx::kTextDim);
     if (fav) meta_chip("★ Favorite", gfx::kWarn);
 
@@ -2232,17 +2464,20 @@ void draw_detail(App& app) {
     // border+glow (and the primary keeps its accent fill). "Play on…" is
     // drawn only with a linked console (card 1f visibility rule).
     const char* fav_label = fav ? "★ Remove favorite" : "★ Add favorite";
-    SDL_Rect play = {rx, 400, 640, 96};
+    SDL_Rect play = {rx, 430, 860, 94};
     app.gfx.fill(play, gfx::kAccent);
-    app.gfx.text_centered("Play", play.x + 320, play.y + 24,
+    app.gfx.frame(play, {45, 244, 165, 210}, 2);
+    app.gfx.text_centered("Play now", play.x + play.w / 2, play.y + 23,
                           gfx::FontSize::Body, gfx::kText);
-    SDL_Rect favbtn = {rx, 520, 640, 96};
+    SDL_Rect favbtn = {rx, 548, 860, 94};
     app.gfx.fill(favbtn, gfx::kSurface);
-    app.gfx.text_centered(fav_label, favbtn.x + 320, favbtn.y + 24,
+    app.gfx.frame(favbtn, {43, 104, 94, 165}, 2);
+    app.gfx.text_centered(fav_label, favbtn.x + favbtn.w / 2, favbtn.y + 23,
                           gfx::FontSize::Body, gfx::kText);
-    SDL_Rect source = {rx, 640, 640, 96};
+    SDL_Rect source = {rx, 666, 860, 94};
     if (!app.consoles.empty()) {
         app.gfx.fill(source, gfx::kSurface);
+        app.gfx.frame(source, {43, 104, 94, 165}, 2);
         app.gfx.text("Play on…", source.x + 44, source.y + 24,
                      gfx::FontSize::Body, gfx::kText);
         std::string target = app.settings.source == 2   ? console_label(app)
@@ -2251,15 +2486,15 @@ void draw_detail(App& app) {
         app.gfx.text(target,
                      source.x + source.w - 44 -
                          app.gfx.text_width(target, gfx::FontSize::Body),
-                     source.y + 24, gfx::FontSize::Body, gfx::kTextDim);
+                     source.y + 23, gfx::FontSize::Body, gfx::kTextDim);
     }
     SDL_Rect focused = app.detail_cursor == 0   ? play
                        : app.detail_cursor == 1 ? favbtn
                                                 : source;
     draw_focus_frames(app, focused);
 
-    app.gfx.text("Streams in your account's language · change in Settings",
-                 rx, app.consoles.empty() ? 680 : 792, gfx::FontSize::Small,
+    app.gfx.text("Language and stream preferences are available in Settings",
+                 rx, app.consoles.empty() ? 690 : 788, gfx::FontSize::Small,
                  gfx::kFaint);
 
     draw_hints(app, {{"A", "Select", true}, {"B", "Back"}});
@@ -2272,16 +2507,20 @@ void draw_source_picker(App& app) {
     const std::string& game =
         app.launch_game.name.empty() ? app.launch_game.title_id
                                      : app.launch_game.name;
-    app.gfx.text_centered("Play " + game.substr(0, 24) + " on…",
-                          gfx::kWidth / 2, 150, gfx::FontSize::Title,
-                          gfx::kText);
+    draw_header(app);
+    app.gfx.text_centered("CHOOSE A PLAY SOURCE", gfx::kWidth / 2, 142,
+                          gfx::FontSize::Small, gfx::kFocus);
+    draw_library_title_marquee(app, "Play " + game + " on…",
+                               {200, 182, gfx::kWidth - 400, 66},
+                               gfx::FontSize::Title);
 
     int total = 560 * 2 + 56;
     int x0 = (gfx::kWidth - total) / 2;
     for (int i = 0; i < 2; ++i) {
         bool focused = app.pick_cursor == i;
-        SDL_Rect card = {x0 + i * (560 + 56), 300, 560, 440};
+        SDL_Rect card = {x0 + i * (560 + 56), 320, 560, 420};
         app.gfx.fill(card, focused ? gfx::kSurfaceHi : gfx::kSurface);
+        app.gfx.frame(card, {43, 104, 94, 160}, 2);
 
         SDL_Rect icon = {card.x + 48, card.y + 56, 72, 72};
         app.gfx.fill(icon, i == 0 ? gfx::kAccent : gfx::kChip);
@@ -2291,7 +2530,7 @@ void draw_source_picker(App& app) {
                               i == 0 ? gfx::kText : gfx::kTextDim);
 
         if (i == 0) {
-            app.gfx.text("xCloud", card.x + 48, card.y + 164,
+            app.gfx.text("Cloud Play", card.x + 48, card.y + 164,
                          gfx::FontSize::Body, gfx::kText);
             app.gfx.text("Play in the cloud.", card.x + 48, card.y + 224,
                          gfx::FontSize::Note, gfx::kTextDim);
@@ -2387,7 +2626,11 @@ void draw_settings(App& app) {
     // A stream login may have refreshed Xbox's live datacenter list while the
     // menu was not visible. Import it once and persist it for the next launch.
     sync_server_regions(app);
-    app.gfx.text("Settings", kMargin, 48, gfx::FontSize::Title, gfx::kText);
+    draw_header(app);
+    app.gfx.fill(kLibraryPanel, {2, 14, 15, 214});
+    app.gfx.frame(kLibraryPanel, {43, 104, 94, 155}, 2);
+    draw_library_sidebar(app, true);
+    app.gfx.text("SETTINGS", kGridX, 136, gfx::FontSize::Small, gfx::kFocus);
     auto signed_value = [](int value) {
         return std::string(value > 0 ? "+" : "") + std::to_string(value);
     };
@@ -2450,14 +2693,14 @@ void draw_settings(App& app) {
     int pitch = shown <= 6 ? 108 : shown <= 7 ? 92 : 78;
     int row_h = shown <= 7 ? 96 : 70;
     if (first > 0)
-        app.gfx.text("· · ·", 120 + (gfx::kWidth - 240) / 2 - 24, 140,
+        app.gfx.text("· · ·", kGridX + 1560 / 2 - 24, 140,
                      gfx::FontSize::Small, gfx::kFaint);
     if (first + shown < static_cast<int>(rows.size()))
-        app.gfx.text("· · ·", 120 + (gfx::kWidth - 240) / 2 - 24,
+        app.gfx.text("· · ·", kGridX + 1560 / 2 - 24,
                      170 + (shown - 1) * pitch + row_h + 4,
                      gfx::FontSize::Small, gfx::kFaint);
     for (int i = first; i < first + shown; ++i) {
-        SDL_Rect row = {120, 170 + (i - first) * pitch, gfx::kWidth - 240,
+        SDL_Rect row = {kGridX, 170 + (i - first) * pitch, 1560,
                         row_h};
         bool focused = i == app.settings_cursor;
         // Row-focus variant (card 1g): wide elements don't scale — surface
@@ -2601,7 +2844,7 @@ void draw_settings(App& app) {
             line2 = "Wi-Fi or docked LAN is recommended for high bitrate.";
             break;
     }
-    SDL_Rect note = {120, 820, gfx::kWidth - 240, 120};
+    SDL_Rect note = {kGridX, 820, 1560, 120};
     app.gfx.fill(note, gfx::kBar);
     app.gfx.frame(note, gfx::kChip, 2);
     app.gfx.fill({note.x + 28, note.y + 28, 8, 64},
@@ -2616,7 +2859,7 @@ void draw_settings(App& app) {
 
     if (!app.last_exit_step.empty())
         app.gfx.text("debug · last exit reached: " + app.last_exit_step,
-                     kMargin, kFooterY - 36, gfx::FontSize::Small,
+                     kGridX, kFooterY - 36, gfx::FontSize::Small,
                      gfx::kFaint);
     if (app.settings_cursor == signout_row)
         draw_hints(app, {{"A", app.signout_armed ? "Confirm sign out"
@@ -2796,7 +3039,7 @@ int draw_error_card(App& app, const SDL_Rect& card, const char* title,
     if (show_log_path) {
         SDL_Rect log = {card.x + 48, y, card.w - 96, 56};
         app.gfx.fill(log, gfx::kSurface);
-        app.gfx.text("log: /switch/green-nx/stream-log.txt", log.x + 24,
+        app.gfx.text("log: /switch/light-is-green/stream-log.txt", log.x + 24,
                      log.y + 12, gfx::FontSize::Small, gfx::kTextDim);
         y += 76;
     }
@@ -2807,16 +3050,18 @@ int draw_error_card(App& app, const SDL_Rect& card, const char* title,
 // the progress bar (card 1h).
 int stream_phase(const std::string& status) {
     std::string s = lowercase(status);
-    if (s.find("video") != std::string::npos ||
-        s.find("frame") != std::string::npos)
+    if (s.find("xbox sent no video") != std::string::npos ||
+        s.find("1080p unavailable") != std::string::npos)
         return 3;
-    if (s.find("dtls") != std::string::npos ||
-        s.find("handshake") != std::string::npos ||
-        s.find("srtp") != std::string::npos)
+    if (s.find("handshaking") != std::string::npos ||
+        s.find("secure media") != std::string::npos)
         return 2;
-    if (s.find("ice") != std::string::npos ||
-        s.find("candidate") != std::string::npos ||
-        s.find("connect") != std::string::npos)
+    if (s.find("negotiating connection") != std::string::npos ||
+        s.find("no xbox route") != std::string::npos ||
+        s.find("no server route") != std::string::npos ||
+        s.find("webrtc route") != std::string::npos ||
+        s.find("signaling failed") != std::string::npos ||
+        s.find("negotiation timed out") != std::string::npos)
         return 1;
     return 0;
 }
@@ -2824,11 +3069,8 @@ int stream_phase(const std::string& status) {
 void draw_stream(App& app, SDL_Joystick* joystick) {
     stream::EngineState state = app.engine->state();
 
-    // Pure black behind everything: the video arrives over black, so the
-    // SDL->deko3d handoff never flashes a colored frame.
-    app.gfx.fill({0, 0, gfx::kWidth, gfx::kHeight}, {0, 0, 0});
-
     if (state == stream::EngineState::Failed) {
+        draw_header(app);
         SDL_Rect card = {460, 250, 1000, 460};
         draw_error_card(app, card, "Stream failed",
                         app.engine->error(),
@@ -2841,6 +3083,9 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
 
     SDL_Texture* frame = app.engine->pump_video();
     if (frame) {
+        // Pure black behind video: the SDL-to-deko3d handoff never flashes a
+        // coloured frame, while the connecting view can retain the v1 aurora.
+        app.gfx.fill({0, 0, gfx::kWidth, gfx::kHeight}, {0, 0, 0});
         // Letterbox to preserve aspect.
         int width = app.engine->video_width();
         int height = app.engine->video_height();
@@ -2871,33 +3116,70 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
         return;
     }
 
-    // Connecting (card 1h): the cover the user just chose, honest stage
-    // labels for the 4 real engine phases, and a bar that moves per phase.
-    SDL_Rect mini = {gfx::kWidth / 2 - 80, 300, 160, 240};
-    SDL_Texture* cover =
-        app.covers->get(app.launch_game.title_id, app.launch_game.box_art_url);
-    if (cover)
-        app.gfx.draw_texture(cover, mini);
-    else
-        draw_cover_fallback(app, app.launch_game, mini, gfx::FontSize::Title);
+    // Connecting: the selected cover, real engine phases, and the effective
+    // stream region. No synthetic queue, latency, or TLS claims are shown.
+    draw_header(app);
+    SDL_Rect launch_deck = {420, 142, 1080, 790};
+    app.gfx.fill(launch_deck, {2, 15, 16, 196});
+    app.gfx.frame(launch_deck, {43, 104, 94, 175}, 2);
+    app.gfx.text_centered(app.launching_home ? "REMOTE PLAY" : "CLOUD LAUNCH",
+                          gfx::kWidth / 2, 178, gfx::FontSize::Small,
+                          gfx::kFocus);
 
-    const std::string& label =
-        app.launch_game.name.empty() ? app.launch_game.title_id
-                                     : app.launch_game.name;
-    app.gfx.text_centered(label, gfx::kWidth / 2, 584, gfx::FontSize::Title,
-                          gfx::kText);
-    app.gfx.text_centered(app.engine->status(), gfx::kWidth / 2, 650,
-                          gfx::FontSize::Note, gfx::kTextDim);
+    // A console has no game cover. The old generic fallback spelled YX and
+    // looked like a broken title card, so identify Remote Play with the Light
+    // is Green mark. Cloud launches retain the selected game's full artwork.
+    SDL_Rect mini = app.launching_home
+                        ? SDL_Rect{gfx::kWidth / 2 - 92, 300, 184, 184}
+                        : SDL_Rect{gfx::kWidth / 2 - 80, 300, 160, 240};
+    if (app.launching_home) {
+        app.gfx.fill(mini, {5, 34, 33, 238});
+        app.gfx.frame(mini, gfx::kChipEdge, 2);
+        constexpr int kBrandInset = 22;
+        app.gfx.draw_brand_icon({mini.x + kBrandInset, mini.y + kBrandInset,
+                                 mini.w - 2 * kBrandInset,
+                                 mini.h - 2 * kBrandInset});
+    } else {
+        SDL_Texture* cover = app.covers->get(app.launch_game.title_id,
+                                              app.launch_game.box_art_url);
+        if (cover)
+            app.gfx.draw_texture_contain(cover, mini);
+        else
+            draw_cover_fallback(app, app.launch_game, mini,
+                                gfx::FontSize::Title);
+    }
+
+    const std::string label = app.launching_home
+                                  ? "Remote Play"
+                                  : (app.launch_game.name.empty()
+                                         ? app.launch_game.title_id
+                                         : app.launch_game.name);
+    draw_focus_frames(app, mini);
+    const int title_y = app.launching_home ? 548 : 584;
+    const int status_y = app.launching_home ? 614 : 650;
+    const int route_y = app.launching_home ? 664 : 700;
+    const int track_y = app.launching_home ? 720 : 756;
+    const int stage_y = app.launching_home ? 752 : 788;
+    draw_library_title_marquee(
+        app, label,
+        {launch_deck.x + 64, title_y, launch_deck.w - 128, 62},
+                                gfx::FontSize::Title);
+    draw_centered_clipped_text(
+        app, app.engine->status(),
+        {launch_deck.x + 64, status_y - 4, launch_deck.w - 128, 50},
+        status_y, gfx::FontSize::Note, gfx::kTextDim);
 
     std::string route = app.launching_home
                             ? "Route: Xbox Remote Play · xHome"
                             : "Server region: " +
                                   active_stream_region_label(app);
-    app.gfx.text_centered(route, gfx::kWidth / 2, 700,
-                          gfx::FontSize::Small, gfx::kFocus);
+    draw_centered_clipped_text(
+        app, route,
+        {launch_deck.x + 64, route_y - 4, launch_deck.w - 128, 42},
+        route_y, gfx::FontSize::Small, gfx::kFocus);
 
     int phase = stream_phase(app.engine->status());
-    SDL_Rect track = {gfx::kWidth / 2 - 280, 756, 560, 6};
+    SDL_Rect track = {gfx::kWidth / 2 - 280, track_y, 560, 6};
     app.gfx.fill(track, gfx::kChip);
     app.gfx.fill({track.x, track.y, 140 * (phase + 1), 6}, gfx::kFocus);
 
@@ -2910,29 +3192,42 @@ void draw_stream(App& app, SDL_Joystick* joystick) {
         gfx::Color color = i < phase ? gfx::kFocus
                            : i == phase ? gfx::kText
                                         : gfx::kFaint;
-        sx += app.gfx.text(stages[i], sx, 788, gfx::FontSize::Small, color) +
+        sx += app.gfx.text(stages[i], sx, stage_y, gfx::FontSize::Small, color) +
               32;
     }
 
-    // Teach the persistent deko3d overlays before the first video frame.
-    app.gfx.text_centered(
-        "In the stream: tap  ..  for picture controls   |   "
-        "tap the Xbox symbol or press L3 + R3 for the Xbox guide",
-        gfx::kWidth / 2, 920, gfx::FontSize::Small, gfx::kTextDim);
+    // Teach the persistent deko3d overlays before the first video frame. The
+    // two bounded lines replace the old 1500px sentence that escaped both the
+    // right and bottom edges of this deck in Cloud and Remote Play.
+    SDL_Rect stream_help = {launch_deck.x + 48, 838,
+                            launch_deck.w - 96, 78};
+    app.gfx.fill(stream_help, {4, 27, 29, 222});
+    app.gfx.frame(stream_help, {43, 104, 94, 145}, 1);
+    draw_centered_clipped_text(
+        app, "Picture controls: tap the small menu button in the top-right.",
+        stream_help, stream_help.y + 8, gfx::FontSize::Small,
+        gfx::kTextDim);
+    draw_centered_clipped_text(
+        app, "Xbox guide: tap the Xbox icon or press L3 + R3.", stream_help,
+        stream_help.y + 41, gfx::FontSize::Small, gfx::kTextDim);
 
-    // Source/quality chip, top right.
+    // Source/quality chip, aligned under the command header.
     std::string quality =
         app.launching_home
-            ? (app.consoles.empty() || app.consoles[0].name.empty()
-                   ? std::string("Your Xbox")
-                   : app.consoles[0].name)
+            ? (app.launch_game.name.empty() ? std::string("Remote Play")
+                                            : app.launch_game.name)
             : std::string("xCloud · ") +
                   kQualityLabels[app.settings.quality];
-    int qw = app.gfx.text_width(quality, gfx::FontSize::Small) + 40;
-    app.gfx.fill({gfx::kWidth - kMargin - qw, 48, qw, 44},
+    int qw = std::min(460,
+                      app.gfx.text_width(quality, gfx::FontSize::Small) + 40);
+    SDL_Rect quality_chip = {gfx::kWidth - kMargin - qw, 154, qw, 44};
+    app.gfx.fill(quality_chip,
                  {gfx::kSurface.r, gfx::kSurface.g, gfx::kSurface.b, 217});
-    app.gfx.text(quality, gfx::kWidth - kMargin - qw + 20, 54,
-                 gfx::FontSize::Small, gfx::kTextDim);
+    app.gfx.frame(quality_chip, {43, 104, 94, 145}, 1);
+    draw_library_title_marquee(
+        app, quality,
+        {quality_chip.x + 20, quality_chip.y + 6, quality_chip.w - 40, 30},
+        gfx::FontSize::Small, gfx::kTextDim);
 
     draw_hints(app, {{"B", "Cancel"}}, /*with_bar=*/false);
 }
@@ -2975,6 +3270,7 @@ struct Input {
     bool touch = false;            // a finger tapped this frame
     int touch_x = 0, touch_y = 0;  // tap position in 1920x1080 design space
     int swipe_rows = 0;            // vertical swipe -> grid rows to scroll
+    int swipe_start_x = -1;        // rail swipes must not move the game grid
 };
 
 Input poll_input(SDL_Joystick* joystick, bool direct_touch) {
@@ -2999,6 +3295,8 @@ Input poll_input(SDL_Joystick* joystick, bool direct_touch) {
             int ady = dy < 0 ? -dy : dy;
             if (ady > 120 && ady > adx) {  // vertical swipe -> scroll the grid
                 input.swipe_rows = -dy / (kCardH + kGapY);
+                input.swipe_start_x =
+                    static_cast<int>(s_touch_down_x * gfx::kWidth);
                 if (input.swipe_rows == 0) input.swipe_rows = dy < 0 ? 1 : -1;
             } else {  // a tap
                 input.touch = true;
@@ -3069,6 +3367,7 @@ Input poll_input(SDL_Joystick* joystick, bool direct_touch) {
             int ady = dy < 0 ? -dy : dy;
             if (ady > 120 && ady > adx) {
                 input.swipe_rows = -dy / (kCardH + kGapY);
+                input.swipe_start_x = s_hid_down_x;
                 if (input.swipe_rows == 0) input.swipe_rows = dy < 0 ? 1 : -1;
             } else {
                 input.touch = true;
@@ -3127,6 +3426,7 @@ int main(int argc, char** argv) {
     hidInitializeTouchScreen();  // direct reads while SDL video is suspended
     if (R_SUCCEEDED(romfsInit())) Http::set_ca_bundle("romfs:/cacert.pem");
 #endif
+    migrate_legacy_data_if_needed();
     mkdir(kDataDir, 0755);
 
     App app;
@@ -3195,8 +3495,10 @@ int main(int argc, char** argv) {
         // Snapshot navigation state; a menu tick plays below if it moved this
         // frame (grid cursor, tab, console cursor, settings row).
         int nav_cursor = app.cursor, nav_console = app.console_cursor,
-            nav_settings = app.settings_cursor;
+            nav_settings = app.settings_cursor,
+            nav_sidebar = app.library_sidebar_cursor;
         LibraryTab nav_tab = app.tab;
+        bool nav_sidebar_focus = app.library_sidebar_focused;
 
         switch (app.scene) {
             case Scene::Splash:
@@ -3253,11 +3555,16 @@ int main(int argc, char** argv) {
             case Scene::LoadingLibrary:
                 if (app.load_state == 1) {
                     join_worker(app);
+                    if (app.consoles.empty() &&
+                        app.tab == LibraryTab::Consoles)
+                        app.tab = LibraryTab::All;
                     // Preferred source = your Xbox: land on the Consoles tab
                     // (games stay one L-press away).
                     if (app.settings.source == 2 && !app.consoles.empty())
                         app.tab = LibraryTab::Consoles;
                     apply_filter(app);
+                    app.library_sidebar_cursor = static_cast<int>(app.tab);
+                    app.library_sidebar_focused = false;
                     app.scene = Scene::Library;
                     app.library_focus_started = SDL_GetTicks();
                     try {
@@ -3272,50 +3579,53 @@ int main(int argc, char** argv) {
                 break;
 
             case Scene::Library: {
-                int tabs = app.consoles.empty() ? kGameTabCount : kTabCount;
+                int tabs = library_tab_count(app);
+                int sidebar_search = tabs;
+                int sidebar_settings = tabs + 1;
                 bool console_tab = app.tab == LibraryTab::Consoles;
 
-                // Touch: tap a tab to switch, or a card to select + open it,
-                // reusing the A path (input.a) below. Design-space coords.
+                // Touch follows the same persistent rail shown on screen. Card
+                // taps leave rail focus and reuse the controller A path.
                 if (input.touch) {
-                    if (input.touch_x >= kLibrarySettingsTab.x &&
-                        input.touch_x <= kLibrarySettingsTab.x +
-                                             kLibrarySettingsTab.w &&
-                        input.touch_y >= kLibrarySettingsTab.y &&
-                        input.touch_y <= kLibrarySettingsTab.y +
-                                             kLibrarySettingsTab.h) {
-                        input.zl = true;
-                    } else if (input.touch_x >= kMargin &&
-                        input.touch_x <= kMargin + 420 &&
-                        input.touch_y >= 124 && input.touch_y <= 178) {
+                    auto hit = [&input](const SDL_Rect& rect) {
+                        return input.touch_x >= rect.x &&
+                               input.touch_x < rect.x + rect.w &&
+                               input.touch_y >= rect.y &&
+                               input.touch_y < rect.y + rect.h;
+                    };
+                    bool sidebar_hit = false;
+                    for (int t = 0; t < tabs; ++t) {
+                        if (!hit(library_sidebar_tab_rect(t))) continue;
+                        activate_library_tab(app, t);
+                        app.library_sidebar_focused = false;
+                        console_tab = app.tab == LibraryTab::Consoles;
+                        sidebar_hit = true;
+                        break;
+                    }
+                    if (!sidebar_hit &&
+                        hit(library_sidebar_action_rect(sidebar_search, tabs))) {
                         input.y = true;
-                    } else if (input.touch_y >= kFilterTabsY &&
-                               input.touch_y <= kFilterTabsY + 48) {
-                        int tx = kFilterTabsX;
-                        for (int t = 0; t < tabs; ++t) {
-                            int w = app.gfx.text_width(kTabNames[t],
-                                                       gfx::FontSize::Small);
-                            if (input.touch_x >= tx - 16 &&
-                                 input.touch_x <= tx + w + 16) {
-                                app.tab = static_cast<LibraryTab>(t);
-                                app.cursor = 0;
-                                apply_filter(app);
-                                break;
-                            }
-                            tx += w + 50;
-                        }
-                    } else if (console_tab) {
-                        int cx = input.touch_x - kGridX;
-                        int cy = input.touch_y - 270;
-                        if (cx >= 0 && cy >= 0 && cy < 380) {
-                            int i = cx / 620;
+                        sidebar_hit = true;
+                    }
+                    if (!sidebar_hit &&
+                        hit(library_sidebar_action_rect(sidebar_settings, tabs))) {
+                        input.zl = true;
+                        sidebar_hit = true;
+                    }
+                    if (!sidebar_hit && console_tab) {
+                        int cx = input.touch_x - kConsoleGridX;
+                        int cy = input.touch_y - kConsoleGridY;
+                        if (cx >= 0 && cy >= 0 && cy < kConsoleCardH) {
+                            int pitch = kConsoleCardW + kConsoleGapX;
+                            int i = cx / pitch;
                             if (i < static_cast<int>(app.consoles.size()) &&
-                                i < 3 && cx - i * 620 < 560) {
+                                i < 3 && cx - i * pitch < kConsoleCardW) {
                                 app.console_cursor = i;
+                                app.library_sidebar_focused = false;
                                 input.a = true;
                             }
                         }
-                    } else {
+                    } else if (!sidebar_hit) {
                         int gx = input.touch_x - kGridX;
                         int gy = input.touch_y - kGridY;
                         if (gx >= 0 && gy >= 0) {
@@ -3328,9 +3638,10 @@ int main(int argc, char** argv) {
                                     (app.cursor / kPageSize) * kPageSize;
                                 int index = page_start + row * kColumns + col;
                                 if (index >= 0 &&
-                                    index <
-                                        static_cast<int>(app.visible.size())) {
+                                     index <
+                                         static_cast<int>(app.visible.size())) {
                                     app.cursor = index;
+                                    app.library_sidebar_focused = false;
                                     input.a = true;
                                 }
                             }
@@ -3341,17 +3652,65 @@ int main(int argc, char** argv) {
                 if (input.l || input.r) {  // switch tab
                     int t = (static_cast<int>(app.tab) + (input.r ? 1 : -1) +
                              tabs) % tabs;
-                    app.tab = static_cast<LibraryTab>(t);
-                    app.cursor = 0;
-                    apply_filter(app);
+                    activate_library_tab(app, t);
+                    app.library_sidebar_focused = false;
                     break;
                 }
 
-                if (console_tab) {
+                if (input.y) {
+                    if (console_tab) {
+                        activate_library_tab(app, 0);
+                        console_tab = false;
+                    }
+                    app.query = keyboard_input(app.query);
+                    apply_filter(app);
+                    app.library_sidebar_focused = false;
+                    input.y = false;
+                }
+
+                bool sidebar_consumed = false;
+                if (app.library_sidebar_focused) {
+                    const int last_sidebar = sidebar_settings;
+                    if (input.up)
+                        app.library_sidebar_cursor =
+                            std::max(0, app.library_sidebar_cursor - 1);
+                    if (input.down)
+                        app.library_sidebar_cursor =
+                            std::min(last_sidebar,
+                                     app.library_sidebar_cursor + 1);
+                    if (input.b || input.right) {
+                        app.library_sidebar_focused = false;
+                    } else if (input.a) {
+                        const int choice = app.library_sidebar_cursor;
+                        input.a = false;
+                        if (choice < tabs) {
+                            activate_library_tab(app, choice);
+                            console_tab = app.tab == LibraryTab::Consoles;
+                            app.library_sidebar_focused = false;
+                        } else if (choice == sidebar_search) {
+                            app.query = keyboard_input(app.query);
+                            apply_filter(app);
+                        } else {
+                            app.settings_return = Scene::Library;
+                            app.scene = Scene::Settings;
+                        }
+                    }
+                    sidebar_consumed = true;
+                }
+
+                // A sidebar action may have entered Settings. Do not process
+                // the library's remaining shortcuts against the new scene.
+                if (app.scene != Scene::Library) break;
+
+                if (!sidebar_consumed && console_tab) {
                     int last = static_cast<int>(app.consoles.size()) - 1;
-                    if (input.left)
+                    if (input.left && app.console_cursor == 0) {
+                        app.library_sidebar_focused = true;
+                        app.library_sidebar_cursor = static_cast<int>(app.tab);
+                    } else if (input.left) {
                         app.console_cursor =
                             std::max(0, app.console_cursor - 1);
+                    }
                     if (input.right)
                         app.console_cursor =
                             std::min(last, app.console_cursor + 1);
@@ -3364,18 +3723,35 @@ int main(int argc, char** argv) {
                                                    : console.name;
                         launch_stream(app, true);
                     }
-                } else {
-                    int step = 0;
-                    if (input.right) step = 1;
-                    if (input.left) step = -1;
-                    if (input.down) step = kColumns;
-                    if (input.up) step = -kColumns;
-                    if (step != 0 && !app.visible.empty()) {
-                        app.cursor = std::clamp(
-                            app.cursor + step, 0,
-                            static_cast<int>(app.visible.size()) - 1);
+                } else if (!sidebar_consumed) {
+                    if (app.visible.empty() && input.left) {
+                        app.library_sidebar_focused = true;
+                        app.library_sidebar_cursor =
+                            static_cast<int>(app.tab);
+                        sidebar_consumed = true;
                     }
-                    if (input.swipe_rows != 0 && !app.visible.empty()) {
+                    if (!app.visible.empty()) {
+                        const int column = app.cursor % kColumns;
+                        if (input.left && column == 0) {
+                            app.library_sidebar_focused = true;
+                            app.library_sidebar_cursor =
+                                static_cast<int>(app.tab);
+                        } else if (input.left) {
+                            --app.cursor;
+                        }
+                        if (input.right && column < kColumns - 1 &&
+                            app.cursor + 1 <
+                                static_cast<int>(app.visible.size()))
+                            ++app.cursor;
+                        if (input.up && app.cursor >= kColumns)
+                            app.cursor -= kColumns;
+                        if (input.down && app.cursor + kColumns <
+                                              static_cast<int>(app.visible.size()))
+                            app.cursor += kColumns;
+                    }
+                    if (input.swipe_rows != 0 &&
+                        input.swipe_start_x >= kGridX &&
+                        !app.visible.empty()) {
                         app.cursor = std::clamp(
                             app.cursor + input.swipe_rows * kColumns, 0,
                             static_cast<int>(app.visible.size()) - 1);
@@ -3385,20 +3761,20 @@ int main(int argc, char** argv) {
                             app, app.games[app.visible[app.cursor]].title_id);
                         apply_filter(app);  // Favorites tab updates live
                     }
-                    if (input.y) {
-                        app.query = keyboard_input(app.query);
-                        apply_filter(app);
-                    }
                 }
                 if (input.zr) {  // refresh library from Xbox
                     app.scene = Scene::LoadingLibrary;
                     start_library_load(app, true);
+                    break;
                 }
                 if (input.zl) {
+                    app.library_sidebar_focused = false;
+                    app.library_sidebar_cursor = sidebar_settings;
                     app.settings_return = Scene::Library;
                     app.scene = Scene::Settings;
+                    break;
                 }
-                if (input.a && !app.visible.empty()) {
+                if (!console_tab && input.a && !app.visible.empty()) {
                     // Card 1f: A opens the detail screen with Play focused,
                     // so A-A still launches as fast as direct launch did.
                     app.detail_index = app.visible[app.cursor];
@@ -3479,6 +3855,41 @@ int main(int argc, char** argv) {
                 int hud_row = app.consoles.empty() ? 16 : 17;
                 int accounts_row = hud_row + 1;
                 int signout_row = hud_row + 2;
+                // The persistent rail remains touch-navigable in Settings.
+                // Left/right stay reserved for changing the focused value;
+                // controller users return to the rail with B or ZL.
+                if (input.touch) {
+                    auto hit = [&input](const SDL_Rect& rect) {
+                        return input.touch_x >= rect.x &&
+                               input.touch_x < rect.x + rect.w &&
+                               input.touch_y >= rect.y &&
+                               input.touch_y < rect.y + rect.h;
+                    };
+                    const int tabs = library_tab_count(app);
+                    bool rail_action = false;
+                    for (int t = 0; t < tabs; ++t) {
+                        if (!hit(library_sidebar_tab_rect(t))) continue;
+                        activate_library_tab(app, t);
+                        app.library_sidebar_focused = false;
+                        app.scene = Scene::Library;
+                        rail_action = true;
+                        break;
+                    }
+                    if (!rail_action &&
+                        hit(library_sidebar_action_rect(tabs, tabs))) {
+                        app.query = keyboard_input(app.query);
+                        if (app.tab == LibraryTab::Consoles)
+                            activate_library_tab(app, 0);
+                        else
+                            apply_filter(app);
+                        app.scene = Scene::Library;
+                        rail_action = true;
+                    }
+                    if (!rail_action &&
+                        hit(library_sidebar_action_rect(tabs + 1, tabs)))
+                        rail_action = true;  // already on Settings
+                    if (rail_action) break;
+                }
                 if (input.up)
                     app.settings_cursor = std::max(0, app.settings_cursor - 1);
                 if (input.down)
@@ -3756,7 +4167,9 @@ int main(int argc, char** argv) {
         bool navigation_changed =
             app.cursor != nav_cursor || app.tab != nav_tab ||
             app.console_cursor != nav_console ||
-            app.settings_cursor != nav_settings;
+            app.settings_cursor != nav_settings ||
+            app.library_sidebar_cursor != nav_sidebar ||
+            app.library_sidebar_focused != nav_sidebar_focus;
         if (navigation_changed)
             app.ui_sound.play(1.0f);
         if (navigation_changed && app.scene == Scene::Library)
@@ -3788,7 +4201,7 @@ int main(int argc, char** argv) {
     // takeover launch artifact, press HOME).
     auto breadcrumb = [](const char* step) {
 #ifdef __SWITCH__
-        FILE* f = std::fopen("sdmc:/switch/green-nx/exit-log.txt", "a");
+        FILE* f = std::fopen("sdmc:/switch/light-is-green/exit-log.txt", "a");
         if (f) { std::fprintf(f, "%s\n", step); std::fclose(f); }
 #else
         (void)step;
