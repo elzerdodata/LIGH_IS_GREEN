@@ -1750,19 +1750,19 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
                 }
             } else if (row == stream::QuickBrightness) {
                 app.settings.brightness = std::clamp(
-                    app.settings.brightness + direction * 1, -20, 20);
+                    app.settings.brightness + direction * 5, -20, 20);
                 app.settings.picture_profile = stream::PictureCustom;
             } else if (row == stream::QuickContrast) {
                 app.settings.contrast = std::clamp(
-                    app.settings.contrast + direction * 1, 70, 130);
+                    app.settings.contrast + direction * 10, 70, 130);
                 app.settings.picture_profile = stream::PictureCustom;
             } else if (row == stream::QuickSaturation) {
                 app.settings.saturation = std::clamp(
-                    app.settings.saturation + direction * 1, 0, 150);
+                    app.settings.saturation + direction * 10, 0, 150);
                 app.settings.picture_profile = stream::PictureCustom;
             } else if (row == stream::QuickGamma) {
                 app.settings.gamma = std::clamp(
-                    app.settings.gamma + direction * 1, 50, 200);
+                    app.settings.gamma + direction * 5, 50, 200);
                 app.settings.picture_profile = stream::PictureCustom;
             } else if (row == stream::QuickSharpness) {
                 app.settings.sharpness =
@@ -1770,7 +1770,7 @@ bool handle_quick_menu_touch(App& app, int x, int y) {
                 app.settings.picture_profile = stream::PictureCustom;
             } else if (row == stream::QuickTemperature) {
                 app.settings.temperature = std::clamp(
-                    app.settings.temperature + direction * 1, -20, 20);
+                    app.settings.temperature + direction * 2, -20, 20);
                 app.settings.picture_profile = stream::PictureCustom;
             }
             changed = true;

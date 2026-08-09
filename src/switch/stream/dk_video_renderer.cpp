@@ -146,7 +146,8 @@ void DkVideoRenderer::set_quick_menu_state(const QuickMenuState& state) {
         next.contrast != quick_state_.contrast ||
         next.saturation != quick_state_.saturation ||
         next.gamma != quick_state_.gamma ||
-        next.sharpness != quick_state_.sharpness;
+        next.sharpness != quick_state_.sharpness ||
+        next.temperature != quick_state_.temperature;
     bool menu_changed =
         next.open != quick_state_.open ||
         next.performance != quick_state_.performance ||
