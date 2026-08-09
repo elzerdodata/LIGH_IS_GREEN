@@ -6,6 +6,7 @@
 > *Special thanks to @Djihads80 for the new custom icon and background! / ¡Un agradecimiento especial a @Djihads80 por el nuevo ícono y fondo personalizados!* 🎉
 
 <p align="center">
+  <img src="docs/showcase_0.png" width="48%">
   <img src="docs/showcase_1.jpg" width="48%">
   <img src="docs/showcase_2.jpg" width="48%">
   <img src="docs/showcase_3.jpg" width="48%">
