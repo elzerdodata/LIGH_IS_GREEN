@@ -1,6 +1,8 @@
 # Light is Green
 
-![Light is Green mark](romfs/ui/v1/lig_mark_128.png)
+<p align="center">
+  <img src="icon.jpg" width="180" alt="Light is Green Icon" />
+</p>
 
 > **Official v1.0.6 / Versión oficial v1.0.6**
 
@@ -13,7 +15,6 @@
 ![v1.0.6 Clean 5x2 Grid](docs/showcase_v1.0.6.png)
 
 <p floating="left">
-  <img src="docs/showcase_0.png" width="48%" />
   <img src="docs/showcase_1.jpg" width="48%" />
   <img src="docs/showcase_2.jpg" width="48%" />
   <img src="docs/showcase_3.jpg" width="48%" />
