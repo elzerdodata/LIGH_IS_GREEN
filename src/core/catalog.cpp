@@ -191,14 +191,24 @@ void fetch_names(Http& http, std::vector<Game>& games,
             const json& properties = localized.front();
             const std::string name = properties.value("ProductTitle", "");
 
-            std::string poster, box_art;
+            std::string poster, box_art, promotional_square;
             for (const json& image :
                  properties.value("Images", json::array())) {
                 std::string purpose = image.value("ImagePurpose", "");
                 if (purpose == "Poster") poster = image.value("Uri", "");
                 else if (purpose == "BoxArt") box_art = image.value("Uri", "");
+                else if (purpose == "FeaturePromotionalSquareArt")
+                    promotional_square = image.value("Uri", "");
             }
-            const std::string& uri = !poster.empty() ? poster : box_art;
+            // The library is a square, console-style grid. Xbox normally
+            // supplies native 1:1 BoxArt (2160x2160), while Poster is 2:3 and
+            // forces either cropping or letterbox bands. Prefer genuine square
+            // assets and retain Poster only as a compatibility fallback.
+            const std::string& uri = !box_art.empty()
+                                         ? box_art
+                                     : !promotional_square.empty()
+                                         ? promotional_square
+                                         : poster;
             const std::string image = cover_url(uri);
             for (Game* game : found->second) {
                 game->name = name;

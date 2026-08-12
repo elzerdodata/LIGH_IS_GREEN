@@ -2,16 +2,7 @@
 
 ![Light is Green mark](romfs/ui/v1/lig_mark_128.png)
 
-> **Official v1.0.4 / Versión oficial v1.0.4**
-> *Special thanks to @Djihads80 for the new custom icon and background! / ¡Un agradecimiento especial a @Djihads80 por el nuevo ícono y fondo personalizados!* 🎉
-
-<p align="center">
-  <img src="docs/showcase_0.png" width="48%">
-  <img src="docs/showcase_1.jpg" width="48%">
-  <img src="docs/showcase_2.jpg" width="48%">
-  <img src="docs/showcase_3.jpg" width="48%">
-  <img src="docs/showcase_4.jpg" width="48%">
-</p>
+> **Official v1.0.0 / Versión oficial v1.0.0**
 
 [English](#english) · [Español](#español)
 
@@ -62,7 +53,7 @@ offering that granted access.
 1. Use a Nintendo Switch with [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere)
    custom firmware, a Microsoft/Xbox account, and preferably 5 GHz Wi-Fi or
    docked Ethernet.
-2. Copy `Light_is_Green-v1.0.4.nro` to `sdmc:/switch/`.
+2. Copy `Light_is_Green-v1.0.0.nro` to `sdmc:/switch/`.
 3. Launch in **title mode** by holding **R** while opening an installed game.
    Applet mode does not provide enough memory for hardware video decoding.
 4. Enter the displayed device code at `microsoft.com/link`.
@@ -82,7 +73,7 @@ bash deps/build-switch.sh
 docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 ```
 
-The output is `Light_is_Green-v1.0.4.nro`. The desktop core harness builds with
+The output is `Light_is_Green-v1.0.0.nro`. The desktop core harness builds with
 `make -f Makefile.pc`.
 
 ### License and third-party notices
@@ -143,7 +134,7 @@ se abre con la oferta que concede el acceso.
 1. Usa una Nintendo Switch con firmware personalizado
    [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere), una cuenta
    Microsoft/Xbox y preferiblemente Wi-Fi de 5 GHz o Ethernet por dock.
-2. Copia `Light_is_Green-v1.0.4.nro` a `sdmc:/switch/`.
+2. Copia `Light_is_Green-v1.0.0.nro` a `sdmc:/switch/`.
 3. Ábrelo en **modo título**, manteniendo **R** al abrir un juego instalado.
    El modo applet no tiene memoria suficiente para video por hardware.
 4. Ingresa el código mostrado en `microsoft.com/link`.
@@ -163,7 +154,7 @@ bash deps/build-switch.sh
 docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 ```
 
-El resultado es `Light_is_Green-v1.0.4.nro`. El entorno de pruebas del núcleo
+El resultado es `Light_is_Green-v1.0.0.nro`. El entorno de pruebas del núcleo
 para PC se compila con `make -f Makefile.pc`.
 
 ### Licencia y avisos de terceros

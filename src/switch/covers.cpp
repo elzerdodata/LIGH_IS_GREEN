@@ -12,7 +12,7 @@ namespace gnx {
 namespace {
 // A decoded cover is commonly several hundred KiB. Keeping every page ever
 // visited alive can consume tens or hundreds of MiB before a stream starts.
-constexpr size_t kMaxTextureCache = 36;  // two complete 3x6 library pages
+constexpr size_t kMaxTextureCache = 30;  // three complete 2x5 library pages
 constexpr size_t kMaxQueuedJobs = 36;
 constexpr size_t kMaxCompletedJobs = 36;
 }

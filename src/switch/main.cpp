@@ -851,8 +851,10 @@ void cycle_server_region(App& app, int direction) {
 
 // ---- persistence ----------------------------------------------------------
 
-// v5 records alternative-catalog membership for the Owned & Free tab.
-constexpr int kGamesCacheVersion = 5;
+// v6 keeps the alternative-catalog membership fields introduced in v5 and
+// refreshes metadata once so native square BoxArt replaces the vertical Poster
+// URLs cached by earlier releases.
+constexpr int kGamesCacheVersion = 6;
 
 void save_games_cache(const std::vector<Game>& games) {
     json list = json::array();
@@ -1469,17 +1471,17 @@ void draw_signin(App& app) {
     draw_hints(app, {{"ZL", "Settings · region bypass"}, {"B", "Exit"}});
 }
 
-// v1.0.3 sidebar preview: the persistent controller-first rail replaces both
-// top navigation rows. The content deck keeps three complete rows and six
-// full-bleed cards per row without crowding the focus glow or touch targets.
-constexpr int kColumns = 6;
-constexpr int kCardW = 250;
-constexpr int kCardH = 214;
+// v1.0.6 clean-grid revision: the persistent controller-first rail stays in
+// place, while five larger native-square covers form each row. The selected
+// title is already shown in the command deck, so catalog tiles are pure art.
+constexpr int kColumns = 5;
+constexpr int kCardW = 302;
+constexpr int kCardH = 302;
 constexpr int kGapX = 12;
-constexpr int kGapY = 12;
+constexpr int kGapY = 16;
 constexpr int kGridX = 292;
 constexpr int kGridY = 280;
-constexpr int kRowsVisible = 3;
+constexpr int kRowsVisible = 2;
 constexpr int kPageSize = kColumns * kRowsVisible;
 constexpr SDL_Rect kLibraryHero{60, 196, 1800, 450};
 constexpr SDL_Rect kLibraryPanel{276, 124, 1584, 840};
@@ -1838,9 +1840,10 @@ void draw_loading(App& app) {
     for (int slot = 0; slot < kPageSize; ++slot) {
         int column = slot % kColumns;
         int row = slot / kColumns;
-        app.gfx.fill({kGridX + column * (kCardW + kGapX),
-                      kGridY + row * (kCardH + kGapY), kCardW, kCardH},
-                     kSkeleton[slot % 6]);
+        SDL_Rect card = {kGridX + column * (kCardW + kGapX),
+                         kGridY + row * (kCardH + kGapY), kCardW, kCardH};
+        app.gfx.fill(card, kSkeleton[slot % 6]);
+        app.gfx.frame(card, {43, 104, 94, 96}, 1);
     }
     app.gfx.spinner(status_deck.x + status_deck.w - 32,
                     status_deck.y + status_deck.h / 2, SDL_GetTicks());
@@ -1852,64 +1855,6 @@ void draw_loading(App& app) {
 
 // Remove one complete UTF-8 code point from the end. This prevents a title
 // ellipsis from leaving a broken continuation byte on screen.
-void utf8_pop_back(std::string& value) {
-    if (value.empty()) return;
-    size_t start = value.size() - 1;
-    while (start > 0 &&
-           (static_cast<unsigned char>(value[start]) & 0xC0) == 0x80)
-        --start;
-    value.erase(start);
-}
-
-std::string ellipsize_library_title(App& app, std::string value,
-                                    int max_width) {
-    const std::string ellipsis = "…";
-    if (app.gfx.text_width(value, gfx::FontSize::Small) <= max_width)
-        return value;
-    while (!value.empty() &&
-           app.gfx.text_width(value + ellipsis, gfx::FontSize::Small) >
-               max_width)
-        utf8_pop_back(value);
-    return value + ellipsis;
-}
-
-// Word-wrap a card title into at most two measured lines. The second line may
-// use a UTF-8-safe ellipsis, while the selected-title marquee above the grid
-// always exposes the complete unmodified title.
-std::vector<std::string> wrap_library_title(App& app,
-                                            const std::string& title,
-                                            int max_width) {
-    std::istringstream input(title);
-    std::vector<std::string> words;
-    std::string word;
-    while (input >> word) words.push_back(word);
-    if (words.empty()) return {title};
-
-    std::string first;
-    size_t index = 0;
-    for (; index < words.size(); ++index) {
-        std::string candidate = first.empty() ? words[index]
-                                              : first + " " + words[index];
-        if (app.gfx.text_width(candidate, gfx::FontSize::Small) <= max_width)
-            first = std::move(candidate);
-        else
-            break;
-    }
-    if (first.empty()) {
-        first = ellipsize_library_title(app, words.front(), max_width);
-        index = 1;
-    }
-    if (index >= words.size()) return {first};
-
-    std::string second;
-    for (; index < words.size(); ++index) {
-        if (!second.empty()) second += " ";
-        second += words[index];
-    }
-    second = ellipsize_library_title(app, second, max_width);
-    return {first, second};
-}
-
 void draw_library_title_marquee(App& app, const std::string& title,
                                  const SDL_Rect& box,
                                  gfx::FontSize size = gfx::FontSize::Small,
@@ -1948,11 +1893,10 @@ void draw_centered_clipped_text(App& app, const std::string& text,
     SDL_RenderSetClipRect(renderer, nullptr);
 }
 
-// Professional full-bleed library card. Portrait covers are intentionally
-// cropped only in this teaser grid; the detail screen still uses aspect-
-// contain so the complete source image remains available. A dark title scrim
-// keeps two measured lines readable without recreating the large black bars
-// produced by letterboxing.
+// Clean console-style catalog tile: one native square BoxArt texture, one copy,
+// no title duplication, scrim, ambient layer, or letterbox bands. A rare title
+// without square Xbox art uses center-crop as a last-resort fallback so the
+// grid remains visually clean.
 void draw_card(App& app, const Game& game, const SDL_Rect& card,
                bool focused) {
     SDL_Rect dst = card;
@@ -1967,30 +1911,7 @@ void draw_card(App& app, const Game& game, const SDL_Rect& card,
     else
         draw_cover_fallback(app, game, dst, gfx::FontSize::Title);
 
-    // Two inexpensive translucent bands create a readable gradient transition
-    // without blur textures or render targets. The opaque part is deliberately
-    // shallow: the cover still occupies the whole visual card.
-    SDL_Rect title_fade = {dst.x, dst.y + dst.h - 80, dst.w, 16};
-    SDL_Rect title_area = {dst.x, dst.y + dst.h - 64, dst.w, 64};
-    app.gfx.fill(title_fade, focused ? gfx::Color{2, 28, 27, 118}
-                                     : gfx::Color{1, 10, 13, 104});
-    app.gfx.fill(title_area, focused ? gfx::Color{3, 31, 29, 240}
-                                     : gfx::Color{2, 14, 17, 232});
-    app.gfx.fill({title_area.x + 10, title_area.y,
-                  title_area.w - 20, 2},
-                 focused ? gfx::kFocus : gfx::Color{43, 104, 94, 174});
-    const std::string& label = game.name.empty() ? game.title_id : game.name;
-    const std::vector<std::string> lines =
-        wrap_library_title(app, label, std::max(1, dst.w - 24));
-    int line_y = title_area.y + 6;
-    for (size_t i = 0; i < lines.size() && i < 2; ++i) {
-        app.gfx.text(lines[i], dst.x + 12, line_y, gfx::FontSize::Small,
-                     gfx::kText);
-        line_y += 25;
-    }
-
-    // Draw the edge after the artwork and scrim so it cannot disappear below
-    // a full-bleed texture.
+    // Draw the edge after the artwork so the selected state stays crisp.
     app.gfx.frame(dst, focused ? gfx::kFocus : gfx::Color{43, 104, 94, 150},
                   focused ? 2 : 1);
 
@@ -3433,7 +3354,10 @@ int main(int argc, char** argv) {
     if (!app.gfx.init()) return 1;
     app.ui_sound.init();  // menu navigation ticks (best-effort; ignored on fail)
     SDL_Joystick* joystick = SDL_JoystickOpen(0);
-    app.covers = std::make_unique<Covers>(app.gfx, data_path("covers"));
+    // A new namespace avoids reusing vertical Poster bytes saved by previous
+    // releases under the same title-id filename.
+    app.covers =
+        std::make_unique<Covers>(app.gfx, data_path("covers-square"));
     load_accounts();  // registry + migration; sets the active account
     app.auth = std::make_unique<XboxAuth>(user_path("tokens.json"));
     app.auth->set_abort_flag(&app.abort_http);
